@@ -1,0 +1,818 @@
+/**
+ * Controller: all per-frame state of one PixelLife instance, in pure TypeScript (no DOM, no GL).
+ *
+ * It owns the config layers (base -> tweened -> modulated), the palette LUT, the phase clock,
+ * influences, pulses, lifts, grid geometry and the adaptive quality state, and turns them into
+ * FrameInputs for the engine. Every buffer is preallocated: update() allocates nothing.
+ */
+
+import {
+  deepMerge,
+  diffConfigs,
+  getField,
+  getPath,
+  type ModulatablePath,
+  normalizeConfig,
+  normalizePatch,
+  type ParamPath,
+  type PixelLifeConfig,
+  type PixelLifeConfigInput,
+} from '../../schema';
+import {
+  FRAME_FLOATS,
+  OFF_CLOCK,
+  OFF_COUNTS,
+  OFF_GRID,
+  OFF_HOST,
+  OFF_MISC,
+  OFF_ORIGIN,
+  OFF_PHASE_A,
+  OFF_PHASE_B,
+  OFF_SPACE,
+} from '../engine/frame-block';
+import type { FrameInputs } from '../engine/types';
+import { Clock, type ClockRates } from './clock';
+import { computeGeometry, createGeometry, type Geometry, type GeometryInput } from './geometry';
+import {
+  type Influence,
+  type InfluenceContext,
+  type InfluenceInit,
+  InfluenceRegistry,
+  SPACE_CELLS,
+  SPACE_CLIENT,
+  SPACE_CODE,
+  SPACE_HOST,
+  SPACE_NORM,
+  type SpaceName,
+} from './influences';
+import { createParamLayout, type ParamLayout } from './layout';
+import { createLiftParams, type LiftParams, LiftScheduler } from './lifts';
+import { PaletteLut } from './lut';
+import { clamp, hexToLinearInto, mulberry32 } from './math';
+import type { ModBlend, ModSource } from './modulators';
+import { type PerfChange, PerfController, type QualityMode } from './perf';
+import { type PulseInit, PulseList } from './pulses';
+import { ParamStore, ScalarTween } from './tween';
+
+export interface ControllerOptions {
+  config?: PixelLifeConfigInput;
+  /** Deterministic randomness for tests. */
+  random?: () => number;
+  /** Reuse a layout (it is pure and identical for every instance). */
+  layout?: ParamLayout;
+  onWarn?: (code: string, message: string) => void;
+}
+
+export interface ConfigChangeOptions {
+  transition?: number;
+}
+
+/** What the DOM layer measured. */
+export interface ViewportInput {
+  hostCssW: number;
+  hostCssH: number;
+  dpr: number;
+  /** Exact canvas device px (devicePixelContentBoxSize) or 0. */
+  deviceW: number;
+  deviceH: number;
+}
+
+export interface ControllerModulator {
+  set(value: number): void;
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+export interface ControllerInfluenceHandle {
+  readonly id: number;
+  readonly active: boolean;
+  update(patch: InfluenceInit): void;
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+export interface PulseRequest {
+  x: number;
+  y: number;
+  space?: SpaceName;
+  strength?: number;
+  speed?: number;
+  width?: number;
+  color?: string;
+  colorMix?: number;
+  duration?: number;
+}
+
+export interface LiftRequest {
+  x: number;
+  y: number;
+  space?: SpaceName;
+  count?: number;
+  radius?: number;
+}
+
+const FORCED_QUEUE = 32;
+
+let sharedLayout: ParamLayout | null = null;
+/** The layout depends only on the schema: build it once per page (lazily, SSR-safe). */
+export function getSharedLayout(): ParamLayout {
+  if (!sharedLayout) sharedLayout = createParamLayout();
+  return sharedLayout;
+}
+
+export class Controller {
+  readonly layout: ParamLayout;
+  readonly store: ParamStore;
+  readonly lut: PaletteLut;
+  readonly clock = new Clock();
+  readonly influences = new InfluenceRegistry();
+  readonly pulses = new PulseList();
+  readonly lifts: LiftScheduler;
+  readonly perf = new PerfController();
+  readonly geo: Geometry = createGeometry();
+  readonly frame: FrameInputs;
+  /** Set when the geometry changed; the facade clears it after emitting 'resize'. */
+  geometryChanged = true;
+  destroyed = false;
+
+  private config: PixelLifeConfig;
+  private readonly random: () => number;
+  private readonly onWarn: ((code: string, message: string) => void) | undefined;
+  private readonly sizingMix: ScalarTween;
+  private readonly rates: ClockRates = {
+    speed: 1,
+    flow: 0,
+    sphereRotation: 0,
+    sphereBreathe: 0,
+    pulse: 0,
+    wave: 0,
+    vortex: 0,
+    rain: 0,
+    drift: 0,
+    lifeRate: 0,
+  };
+  private readonly liftParams: LiftParams = createLiftParams();
+  private readonly geoIn: GeometryInput = {
+    hostCssW: 300,
+    hostCssH: 150,
+    overflowCss: 0,
+    dpr: 1,
+    deviceW: 0,
+    deviceH: 0,
+    maxDpr: 2,
+    maxPixels: 4.2,
+    scale: 1,
+    cssPitch: 10,
+  };
+  private readonly infCtx: InfluenceContext;
+  private readonly forced = new Float64Array(FORCED_QUEUE * 5);
+  private forcedCount = 0;
+  private readonly pulseInit: PulseInit = {
+    space: 0,
+    x: 0,
+    y: 0,
+    strength: 0,
+    speed: 0,
+    width: 0,
+    r: 1,
+    g: 1,
+    b: 1,
+    colorMix: 0,
+    duration: 1,
+    minor: false,
+  };
+  private readonly tmp = new Float64Array(3);
+  private pixelCap = Number.POSITIVE_INFINITY;
+  private reducedMotion = false;
+  private software = false;
+  private clientX = 0;
+  private clientY = 0;
+  private hasViewport = false;
+
+  // Resolved entry ids of the parameters read every frame.
+  private readonly ids: ParamIds;
+
+  constructor(opts: ControllerOptions = {}) {
+    this.random = opts.random ?? mulberry32((Math.random() * 4294967296) >>> 0);
+    this.onWarn = opts.onWarn;
+    this.layout = opts.layout ?? getSharedLayout();
+    this.config = normalizeConfig(opts.config ?? {}).config;
+    this.store = new ParamStore(this.layout, this.config);
+    this.lut = new PaletteLut(this.config.color.palette, this.config.color.interpolation);
+    this.lifts = new LiftScheduler(this.random, this.pulses);
+    this.sizingMix = new ScalarTween(this.config.grid.sizing === 'pitch' ? 1 : 0);
+    this.perf.setMode(this.config.render.quality);
+    this.influences.onOverflow = (alive) =>
+      this.warn(
+        'influence-overflow',
+        `[pixel-life] ${alive} influences are alive but only 64 fit on the GPU; lower-priority ones fade out.`,
+      );
+    this.infCtx = {
+      geo: this.geo,
+      clientX: 0,
+      clientY: 0,
+      defaultStrength: 0.8,
+      defaultFalloff: 2,
+    };
+
+    this.ids = resolveIds(this.store);
+
+    this.frame = {
+      canvasWidth: 1,
+      canvasHeight: 1,
+      cols: 1,
+      rows: 1,
+      pad: 2,
+      pitchPx: 8,
+      params: this.store.params,
+      paramsDirty: true,
+      frame: new Float32Array(FRAME_FLOATS),
+      lut: this.lut.bytes,
+      lutDirty: true,
+      lifeStep: false,
+      lifeReset: true,
+      lifeSeed: (this.random() * 4294967296) >>> 0,
+      lifeRule: 0,
+      lifeBirth: 0,
+      lifeSeedDensity: 0.3,
+      lifts: this.lifts.instances,
+      liftCount: 0,
+      bloomSigma: 1.2,
+      hazeSigma: 6,
+      quality: 'high',
+      opaque: true,
+      debugView: 0,
+    };
+    this.updateGeometry();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Config
+
+  getConfig(): Readonly<PixelLifeConfig> {
+    return this.config;
+  }
+
+  /** Merges a partial config; returns the changed leaf paths (schema order). */
+  setConfig(patch: PixelLifeConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
+    if (this.destroyed) return [];
+    const { patch: clean } = normalizePatch(patch);
+    return this.commit(normalizeConfig(deepMerge(this.config, clean)).config, opts);
+  }
+
+  /** Replaces the whole config (missing keys fall back to defaults / `extends`). */
+  replaceConfig(input: PixelLifeConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
+    if (this.destroyed) return [];
+    return this.commit(normalizeConfig(input).config, opts);
+  }
+
+  getEffective(path: ModulatablePath): number {
+    const v = this.store.getEffective(path);
+    return Number.isNaN(v) ? (getPath(this.config, path) as number) : v;
+  }
+
+  modulate(
+    path: ModulatablePath,
+    source: ModSource,
+    opts: { blend?: ModBlend; smoothingMs?: number; signal?: AbortSignal } = {},
+  ): ControllerModulator {
+    const store = this.store;
+    const m = this.destroyed
+      ? null
+      : store.addModulator(path, source, opts.blend, opts.smoothingMs);
+    let disposed = !m;
+    const dispose = () => {
+      if (disposed || !m) return;
+      disposed = true;
+      opts.signal?.removeEventListener('abort', dispose);
+      if (!this.destroyed) store.removeModulator(path, m);
+    };
+    if (m && opts.signal) {
+      if (opts.signal.aborted) dispose();
+      else opts.signal.addEventListener('abort', dispose, { once: true });
+    }
+    return {
+      set: (v: number) => {
+        if (!disposed && m) m.setSource(v);
+      },
+      dispose,
+      [Symbol.dispose]: dispose,
+    };
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Influences, pulses, lifts
+
+  /** Raw registry entry (the DOM trackers move it without allocating). */
+  createInfluence(init: InfluenceInit): Influence {
+    return this.influences.add(init);
+  }
+
+  /** Public handle for an entry; `onDispose` runs once when the handle is disposed. */
+  influenceHandle(
+    e: Influence,
+    signal?: AbortSignal,
+    onDispose?: () => void,
+  ): ControllerInfluenceHandle {
+    const reg = this.influences;
+    let done = false;
+    const dispose = () => {
+      if (done) return;
+      done = true;
+      signal?.removeEventListener('abort', dispose);
+      reg.dispose(e);
+      onDispose?.();
+    };
+    if (signal) {
+      if (signal.aborted) dispose();
+      else signal.addEventListener('abort', dispose, { once: true });
+    }
+    return {
+      id: e.id,
+      get active() {
+        return e.slot && !e.removed;
+      },
+      update: (patch: InfluenceInit) => {
+        if (!done) reg.update(e, patch);
+      },
+      dispose,
+      [Symbol.dispose]: dispose,
+    };
+  }
+
+  addInfluence(init: InfluenceInit, signal?: AbortSignal): ControllerInfluenceHandle {
+    if (this.destroyed) return deadInfluence();
+    return this.influenceHandle(this.createInfluence(init), signal);
+  }
+
+  pulse(req: PulseRequest): void {
+    if (this.destroyed) return;
+    const s = this.store;
+    const ids = this.ids;
+    const p = this.pulseInit;
+    p.space = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
+    p.x = req.x;
+    p.y = req.y;
+    p.strength = req.strength ?? s.num(ids.rippleStrength);
+    p.speed = Math.max(0.01, req.speed ?? s.num(ids.rippleSpeed));
+    p.width = Math.max(0.05, req.width ?? s.num(ids.rippleWidth));
+    if (req.color) {
+      hexToLinearInto(req.color, this.tmp);
+      p.r = this.tmp[0] as number;
+      p.g = this.tmp[1] as number;
+      p.b = this.tmp[2] as number;
+      p.colorMix = req.colorMix ?? 0.5;
+    } else {
+      p.r = 1;
+      p.g = 1;
+      p.b = 1;
+      p.colorMix = req.colorMix ?? 0;
+    }
+    // Default life: long enough for the ring to cross the host.
+    const g = this.geo;
+    const halfDiagCells = Math.hypot(g.hostW, g.hostH) / 2 / g.pitchPx;
+    p.duration = req.duration ?? clamp((1.2 * halfDiagCells) / p.speed, 0.8, 4);
+    p.minor = false;
+    this.pulses.add(p);
+  }
+
+  /** Queues a forced lift (resolved to cells at the next update, when geometry is current). */
+  lift(req: LiftRequest): void {
+    if (this.destroyed || this.forcedCount >= FORCED_QUEUE) return;
+    const o = this.forcedCount++ * 5;
+    this.forced[o] = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
+    this.forced[o + 1] = req.x;
+    this.forced[o + 2] = req.y;
+    this.forced[o + 3] = Math.max(1, Math.min(32, Math.floor(req.count ?? 1)));
+    this.forced[o + 4] = req.radius ?? Number.NaN;
+  }
+
+  /** Cell (relative to the center cell) under a point, written into `out` [ci, cj]. */
+  cellAt(space: number, x: number, y: number, out: Float64Array | number[]): void {
+    const g = this.geo;
+    let px: number;
+    let py: number;
+    switch (space) {
+      case SPACE_NORM:
+        px = g.hostX + x * g.hostW;
+        py = g.hostY + y * g.hostH;
+        break;
+      case SPACE_CELLS:
+        out[0] = Math.round(x) - (g.cols - 1) / 2;
+        out[1] = Math.round(y) - (g.rows - 1) / 2;
+        return;
+      case SPACE_CLIENT:
+        px = g.hostX + (x - this.clientX) * g.sx;
+        py = g.hostY + (y - this.clientY) * g.sy;
+        break;
+      default:
+        px = g.hostX + x * g.sx;
+        py = g.hostY + y * g.sy;
+    }
+    out[0] = Math.floor((px - g.originX) / g.pitchPx) - g.pad - (g.cols - 1) / 2;
+    out[1] = Math.floor((py - g.originY) / g.pitchPx) - g.pad - (g.rows - 1) / 2;
+  }
+
+  /** Something lives in `client` space: the DOM layer must report the host's client origin. */
+  get needsClientOrigin(): boolean {
+    if (this.influences.needsClientOrigin || this.pulses.needsClientOrigin) return true;
+    for (let i = 0; i < this.forcedCount; i++) {
+      if (this.forced[i * 5] === SPACE_CLIENT) return true;
+    }
+    return false;
+  }
+
+  /** Cell size in host CSS px (for converting cell-based sizes in DOM code). */
+  get cellCss(): number {
+    return this.geo.pitchPx / this.geo.sx;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Environment
+
+  setViewport(v: ViewportInput): void {
+    const g = this.geoIn;
+    g.hostCssW = Math.max(1, v.hostCssW);
+    g.hostCssH = Math.max(1, v.hostCssH);
+    g.dpr = v.dpr > 0 ? v.dpr : 1;
+    g.deviceW = v.deviceW;
+    g.deviceH = v.deviceH;
+    this.hasViewport = true;
+    this.updateGeometry();
+  }
+
+  /** Host padding-box origin in client px (for `client` space); set in the DOM measure phase. */
+  setClientOrigin(x: number, y: number): void {
+    this.clientX = x;
+    this.clientY = y;
+  }
+
+  /** Extra pixel budget cap in megapixels (coarse pointer 2.4, software GL 0.5). */
+  setPixelCap(mpx: number): void {
+    this.pixelCap = mpx > 0 ? mpx : Number.POSITIVE_INFINITY;
+    this.updateGeometry();
+  }
+
+  setReducedMotion(on: boolean): void {
+    this.reducedMotion = on;
+  }
+
+  get isReducedMotion(): boolean {
+    return this.reducedMotion;
+  }
+
+  /** Software GL: lowest tier, no adaptation. */
+  setSoftwareFallback(on: boolean): void {
+    this.software = on;
+    this.perf.setMode(on ? 'low' : this.config.render.quality);
+    this.updateGeometry();
+  }
+
+  setDebugView(v: number): void {
+    this.frame.debugView = v | 0;
+  }
+
+  /** Feeds frame timing to the adaptive quality controller. */
+  samplePerf(deltaMs: number, cpuMs: number, gpuMs: number | null, now: number): PerfChange | null {
+    const ch = this.perf.sample(deltaMs, cpuMs, gpuMs, now);
+    if (ch) this.updateGeometry();
+    return ch;
+  }
+
+  /** The engine was recreated (context restore): everything must be uploaded again. */
+  invalidateGpu(): void {
+    this.frame.paramsDirty = true;
+    this.frame.lutDirty = true;
+    this.frame.lifeReset = true;
+  }
+
+  /** The engine drew the last FrameInputs: one-shot flags are consumed. */
+  commitFrame(): void {
+    const f = this.frame;
+    f.paramsDirty = false;
+    f.lutDirty = false;
+    f.lifeReset = false;
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.influences.clear();
+    this.pulses.clear();
+    this.lifts.clear();
+    this.forcedCount = 0;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Frame
+
+  /** Advances everything by `dt` seconds and fills the preallocated FrameInputs. */
+  update(dt: number, _now = 0): FrameInputs {
+    const f = this.frame;
+    const fr = f.frame;
+    if (this.destroyed) return f;
+    const step = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0;
+    const s = this.store;
+    const ids = this.ids;
+
+    s.update(step);
+    if (s.dirty) {
+      f.paramsDirty = true;
+      s.dirty = false;
+    }
+    this.lut.update(step);
+    if (this.lut.dirty) {
+      f.lutDirty = true;
+      this.lut.dirty = false;
+    }
+    // Geometry depends on a few values only; recompute while they move (not every frame).
+    const sizing = this.sizingMix.step(step);
+    if (
+      sizing ||
+      s.isLive(ids.count) ||
+      s.isLive(ids.pitch) ||
+      s.isLive(ids.maxDpr) ||
+      s.isLive(ids.maxPixels)
+    ) {
+      this.updateGeometry();
+    }
+    const g = this.geo;
+
+    // Clock
+    const r = this.rates;
+    const rm = this.reducedMotion;
+    r.speed = Math.max(0, s.num(ids.speed)) * (rm ? 0.15 : 1);
+    r.flow = s.num(ids.flowSpeed);
+    r.sphereRotation = s.num(ids.rotation);
+    r.sphereBreathe = s.num(ids.breathe);
+    r.pulse = s.num(ids.pulseSpeed);
+    r.wave = s.num(ids.waveSpeed);
+    r.vortex = s.num(ids.vortexSpeed);
+    r.rain = s.num(ids.rainSpeed);
+    r.drift = s.num(ids.drift);
+    r.lifeRate = s.num(ids.lifeWeight) > 0.001 ? s.num(ids.lifeRate) : 0;
+    const c = this.clock;
+    c.advance(step, r);
+
+    // Life
+    f.lifeStep = c.lifeSteps > 0;
+    if (f.lifeStep) f.lifeSeed = (f.lifeSeed + c.lifeSteps) >>> 0;
+    f.lifeRule = s.num(ids.lifeRule);
+    f.lifeBirth = s.num(ids.lifeBirth);
+    f.lifeSeedDensity = s.num(ids.lifeDensity);
+
+    // Influences
+    const ic = this.infCtx;
+    ic.clientX = this.clientX;
+    ic.clientY = this.clientY;
+    ic.defaultStrength = s.num(ids.infStrength);
+    ic.defaultFalloff = s.num(ids.infFalloff);
+    const nInf = this.influences.step(step, ic, fr);
+
+    // Lifts (forced first, then the random process), then pulses so landings show this frame.
+    const lp = this.fillLiftParams();
+    this.drainForced(lp);
+    const nLift = this.lifts.step(step, lp, g, fr);
+    const nPulse = this.pulses.step(step, g, this.clientX, this.clientY, fr);
+
+    // Header
+    fr[OFF_PHASE_A] = c.flow;
+    fr[OFF_PHASE_A + 1] = c.sphereRotation;
+    fr[OFF_PHASE_A + 2] = c.sphereBreathe;
+    fr[OFF_PHASE_A + 3] = c.pulse;
+    fr[OFF_PHASE_B] = c.wave;
+    fr[OFF_PHASE_B + 1] = c.vortex;
+    fr[OFF_PHASE_B + 2] = c.rain;
+    fr[OFF_PHASE_B + 3] = c.drift;
+    fr[OFF_CLOCK] = c.seconds;
+    fr[OFF_CLOCK + 1] = c.lifeAcc;
+    fr[OFF_CLOCK + 2] = s.num(ids.energy);
+    fr[OFF_CLOCK + 3] = rm ? 1 : 0;
+    fr[OFF_GRID] = g.cols;
+    fr[OFF_GRID + 1] = g.rows;
+    fr[OFF_GRID + 2] = g.pitchPx;
+    fr[OFF_GRID + 3] = g.pad;
+    fr[OFF_ORIGIN] = g.originX;
+    fr[OFF_ORIGIN + 1] = g.originY;
+    fr[OFF_ORIGIN + 2] = g.canvasW;
+    fr[OFF_ORIGIN + 3] = g.canvasH;
+    fr[OFF_HOST] = g.hostX;
+    fr[OFF_HOST + 1] = g.hostY;
+    fr[OFF_HOST + 2] = g.hostW;
+    fr[OFF_HOST + 3] = g.hostH;
+    fr[OFF_SPACE] = g.centerX;
+    fr[OFF_SPACE + 1] = g.centerY;
+    fr[OFF_SPACE + 2] = 1 / g.halfMin;
+    fr[OFF_SPACE + 3] = g.pitchPx / g.halfMin;
+    fr[OFF_COUNTS] = nInf;
+    fr[OFF_COUNTS + 1] = nPulse;
+    fr[OFF_COUNTS + 2] = nLift;
+    fr[OFF_COUNTS + 3] = f.debugView;
+    fr[OFF_MISC] = s.crossfadePrev(ids.mapping);
+    fr[OFF_MISC + 1] = s.crossfadeMix(ids.mapping);
+    fr[OFF_MISC + 2] = this.software ? 1 : 0;
+    fr[OFF_MISC + 3] = 0;
+
+    f.canvasWidth = g.canvasW;
+    f.canvasHeight = g.canvasH;
+    f.cols = g.cols;
+    f.rows = g.rows;
+    f.pad = g.pad;
+    f.pitchPx = g.pitchPx;
+    f.liftCount = nLift;
+    f.bloomSigma = s.num(ids.bloomSigma);
+    f.hazeSigma = s.num(ids.hazeSigma);
+    f.quality = this.perf.quality;
+    f.opaque = this.config.render.overflow <= 0;
+    return f;
+  }
+
+  /** Whether anything still moves without new input (tweens, LUT, pulses, lifts). */
+  get settling(): boolean {
+    return (
+      this.store.animating ||
+      this.lut.transitioning ||
+      this.pulses.count > 0 ||
+      this.lifts.count > 0
+    );
+  }
+
+  // -------------------------------------------------------------------------------------------
+
+  private warn(code: string, message: string): void {
+    this.onWarn?.(code, message);
+  }
+
+  private commit(next: PixelLifeConfig, opts: ConfigChangeOptions): ParamPath[] {
+    const changed = diffConfigs(this.config, next);
+    if (changed.length === 0) return changed;
+    this.config = next;
+    const dur = Math.max(0, opts.transition ?? next.transition);
+    let lut = false;
+    for (const path of changed) {
+      const field = getField(path);
+      if (!field) continue;
+      const value = getPath(next, path);
+      switch (field.live) {
+        case 'lut':
+          lut = true;
+          break;
+        case 'restart':
+          this.store.setTarget(path, value, 0);
+          this.frame.lifeReset = true;
+          break;
+        case 'static':
+          this.store.setTarget(path, value, 0);
+          if (path === 'render.quality' && !this.software) {
+            this.perf.setMode(value as QualityMode);
+          }
+          break;
+        default:
+          this.store.setTarget(path, value, dur);
+          if (path === 'grid.sizing') this.sizingMix.set(value === 'pitch' ? 1 : 0, dur);
+      }
+    }
+    if (lut) this.lut.setTarget(next.color.palette, next.color.interpolation, dur);
+    this.updateGeometry();
+    return changed;
+  }
+
+  private fillLiftParams(): LiftParams {
+    const s = this.store;
+    const ids = this.ids;
+    const p = this.liftParams;
+    const lift = this.config.lift;
+    p.enabled = lift.enabled && !this.reducedMotion;
+    p.style = lift.style === 'float' ? 1 : 0;
+    p.amount = s.num(ids.liftAmount);
+    p.max = s.num(ids.liftMax);
+    p.scale = s.num(ids.liftScale);
+    p.height = s.num(ids.liftHeight);
+    p.parallax = s.num(ids.liftParallax);
+    p.tilt = s.num(ids.liftTilt);
+    p.holdMin = s.num(ids.liftHoldMin);
+    p.holdMax = s.num(ids.liftHoldMax);
+    p.rise = s.num(ids.liftRise);
+    p.fall = s.num(ids.liftFall);
+    p.bokeh = s.num(ids.liftBokeh);
+    p.socket = s.num(ids.liftSocket);
+    p.outerBias = s.num(ids.liftOuterBias);
+    p.cluster = s.num(ids.liftCluster);
+    p.landing = s.num(ids.liftLanding);
+    p.floatSpeed = s.num(ids.liftFloatSpeed);
+    p.floatDrift = s.num(ids.liftFloatDrift);
+    p.sceneX = s.comp(ids.center, 0);
+    p.sceneY = s.comp(ids.center, 1);
+    p.zoom = s.num(ids.zoom);
+    return p;
+  }
+
+  private drainForced(p: LiftParams): void {
+    const n = this.forcedCount;
+    if (n === 0) return;
+    this.forcedCount = 0;
+    const q = this.forced;
+    const cell = this.tmp;
+    for (let i = 0; i < n; i++) {
+      const o = i * 5;
+      this.cellAt(q[o] as number, q[o + 1] as number, q[o + 2] as number, cell);
+      const count = q[o + 3] as number;
+      const radius = q[o + 4] as number;
+      this.lifts.force(
+        cell[0] as number,
+        cell[1] as number,
+        count,
+        Number.isNaN(radius) ? Math.max(1, Math.sqrt(count)) : radius,
+        p,
+        this.geo,
+      );
+    }
+  }
+
+  private updateGeometry(): void {
+    const s = this.store;
+    const ids = this.ids;
+    const gi = this.geoIn;
+    const cfg = this.config;
+    gi.overflowCss = cfg.render.overflow;
+    gi.maxDpr = s.num(ids.maxDpr);
+    gi.maxPixels = Math.min(s.num(ids.maxPixels), this.pixelCap);
+    gi.scale = this.perf.scale;
+    // Sizing blends between "N cells across the shorter side" and "fixed pitch" in log space,
+    // so switching the mode mid-session is a smooth zoom rather than a jump.
+    const countPitch = Math.min(gi.hostCssW, gi.hostCssH) / Math.max(1, s.num(ids.count));
+    const fixedPitch = Math.max(1, s.num(ids.pitch));
+    const m = this.sizingMix.cur;
+    gi.cssPitch =
+      m <= 0
+        ? countPitch
+        : m >= 1
+          ? fixedPitch
+          : Math.exp(Math.log(countPitch) * (1 - m) + Math.log(fixedPitch) * m);
+    if (computeGeometry(gi, this.geo)) this.geometryChanged = true;
+  }
+
+  /** Has the DOM layer reported a size yet? */
+  get measured(): boolean {
+    return this.hasViewport;
+  }
+}
+
+/** Store ids of the parameters read every frame (resolved once per instance). */
+function resolveIds(s: ParamStore) {
+  return {
+    speed: s.id('animation.speed'),
+    energy: s.id('animation.energy'),
+    flowSpeed: s.id('modes.flow.speed'),
+    rotation: s.id('modes.sphere.rotationSpeed'),
+    breathe: s.id('modes.sphere.breatheSpeed'),
+    pulseSpeed: s.id('modes.pulse.speed'),
+    waveSpeed: s.id('modes.wave.speed'),
+    vortexSpeed: s.id('modes.vortex.speed'),
+    rainSpeed: s.id('modes.rain.speed'),
+    drift: s.id('color.drift'),
+    lifeWeight: s.id('modes.life.weight'),
+    lifeRate: s.id('modes.life.stepRate'),
+    lifeBirth: s.id('modes.life.birthRate'),
+    lifeDensity: s.id('modes.life.seedDensity'),
+    lifeRule: s.id('modes.life.rule'),
+    mapping: s.id('color.mapping'),
+    bloomSigma: s.id('glow.bloom.radius'),
+    hazeSigma: s.id('glow.haze.radius'),
+    pitch: s.id('grid.pitch'),
+    count: s.id('grid.count'),
+    maxDpr: s.id('render.maxDpr'),
+    maxPixels: s.id('render.maxPixels'),
+    center: s.id('scene.center'),
+    zoom: s.id('scene.zoom'),
+    infStrength: s.id('interaction.influenceStrength'),
+    infFalloff: s.id('interaction.influenceFalloff'),
+    rippleStrength: s.id('interaction.rippleStrength'),
+    rippleSpeed: s.id('interaction.rippleSpeed'),
+    rippleWidth: s.id('interaction.rippleWidth'),
+    liftAmount: s.id('lift.amount'),
+    liftMax: s.id('lift.max'),
+    liftScale: s.id('lift.scale'),
+    liftHeight: s.id('lift.height'),
+    liftParallax: s.id('lift.parallax'),
+    liftTilt: s.id('lift.tilt'),
+    liftHoldMin: s.id('lift.holdMin'),
+    liftHoldMax: s.id('lift.holdMax'),
+    liftRise: s.id('lift.rise'),
+    liftFall: s.id('lift.fall'),
+    liftBokeh: s.id('lift.bokeh'),
+    liftSocket: s.id('lift.socket'),
+    liftOuterBias: s.id('lift.outerBias'),
+    liftCluster: s.id('lift.cluster'),
+    liftLanding: s.id('lift.landing'),
+    liftFloatSpeed: s.id('lift.floatSpeed'),
+    liftFloatDrift: s.id('lift.floatDrift'),
+  };
+}
+
+type ParamIds = ReturnType<typeof resolveIds>;
+
+function deadInfluence(): ControllerInfluenceHandle {
+  const noop = () => {};
+  return { id: -1, active: false, update: noop, dispose: noop, [Symbol.dispose]: noop };
+}

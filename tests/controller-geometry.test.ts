@@ -1,0 +1,195 @@
+import { describe, expect, it } from 'vitest';
+import { Controller } from '../src/core/controller/controller';
+import {
+  computeGeometry,
+  createGeometry,
+  effectiveDpr,
+  type GeometryInput,
+  MAX_PAD,
+} from '../src/core/controller/geometry';
+import { mulberry32 } from '../src/core/controller/math';
+import { OFF_GRID, OFF_HOST, OFF_ORIGIN, OFF_SPACE } from '../src/core/engine/frame-block';
+
+function input(p: Partial<GeometryInput> = {}): GeometryInput {
+  return {
+    hostCssW: 1000,
+    hostCssH: 600,
+    overflowCss: 0,
+    dpr: 1,
+    deviceW: 0,
+    deviceH: 0,
+    maxDpr: 2,
+    maxPixels: 4.2,
+    scale: 1,
+    cssPitch: 19.35,
+    ...p,
+  };
+}
+
+function geo(p: Partial<GeometryInput> = {}) {
+  const g = createGeometry();
+  computeGeometry(input(p), g);
+  return g;
+}
+
+describe('grid geometry', () => {
+  it('snaps the pitch to whole device px', () => {
+    expect(geo({ cssPitch: 19.35, dpr: 1 }).pitchPx).toBe(19);
+    expect(geo({ cssPitch: 19.35, dpr: 1.5 }).pitchPx).toBe(29);
+    expect(geo({ cssPitch: 7.3, dpr: 2 }).pitchPx).toBe(15);
+    expect(geo({ cssPitch: 1, dpr: 1 }).pitchPx).toBe(3); // floor of 3 device px
+  });
+
+  it('odd cell counts covering the host, grid centered on it', () => {
+    for (const [w, h, pitch] of [
+      [1000, 600, 19.35],
+      [345, 345, 11.13],
+      [1920, 1080, 24],
+      [390, 844, 12.6],
+    ] as const) {
+      const g = geo({ hostCssW: w, hostCssH: h, cssPitch: pitch });
+      expect(g.cols % 2).toBe(1);
+      expect(g.rows % 2).toBe(1);
+      expect(g.cols * g.pitchPx).toBeGreaterThanOrEqual(g.hostW);
+      expect(g.rows * g.pitchPx).toBeGreaterThanOrEqual(g.hostH);
+      expect(Number.isInteger(g.originX)).toBe(true);
+      expect(Number.isInteger(g.originY)).toBe(true);
+      // The middle cell's center sits on the host center (within half a device px).
+      const midX = g.originX + (g.pad + (g.cols - 1) / 2 + 0.5) * g.pitchPx;
+      const midY = g.originY + (g.pad + (g.rows - 1) / 2 + 0.5) * g.pitchPx;
+      expect(Math.abs(midX - g.centerX)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(midY - g.centerY)).toBeLessThanOrEqual(0.5);
+      // The visible grid (without pad) covers the host rect.
+      expect(g.originX + g.pad * g.pitchPx).toBeLessThanOrEqual(g.hostX);
+      expect(g.originX + (g.pad + g.cols) * g.pitchPx).toBeGreaterThanOrEqual(g.hostX + g.hostW);
+    }
+  });
+
+  it('pad = 2 + margin in cells (capped); host rect inset by the overflow', () => {
+    const g0 = geo();
+    expect(g0.pad).toBe(2);
+    expect(g0.hostX).toBe(0);
+    const g = geo({ overflowCss: 60, dpr: 2, cssPitch: 10, maxPixels: 12 });
+    expect(g.sx).toBe(2);
+    expect(g.hostX).toBe(120);
+    expect(g.hostW).toBe(2000);
+    expect(g.canvasW).toBe(2240);
+    expect(g.pad).toBe(2 + Math.ceil(120 / 20));
+    expect(geo({ overflowCss: 300, cssPitch: 4 }).pad).toBe(MAX_PAD);
+  });
+
+  it('DPR cap, pixel budget and adaptive scale', () => {
+    expect(effectiveDpr(3, 2, 100, 1000, 1000, 1)).toBe(2);
+    // 4.2 Mpx over a 2000 x 1500 CSS canvas: sqrt(4.2e6 / 3e6).
+    expect(effectiveDpr(2, 2, 4.2, 2000, 1500, 1)).toBeCloseTo(Math.sqrt(1.4), 6);
+    expect(effectiveDpr(2, 2, 100, 100, 100, 0.5)).toBe(1);
+    const g = geo({ hostCssW: 2000, hostCssH: 1500, dpr: 2 });
+    expect(g.canvasW * g.canvasH).toBeLessThanOrEqual(4.2e6 * 1.01);
+  });
+
+  it('uses the exact device-pixel box when no cap applies', () => {
+    const g = geo({ hostCssW: 333.33, hostCssH: 200, dpr: 1.5, deviceW: 500, deviceH: 300 });
+    expect(g.canvasW).toBe(500);
+    expect(g.canvasH).toBe(300);
+    // A device box that does not match css x dpr (emulation quirks) is ignored.
+    const bogus = geo({
+      hostCssW: 1280,
+      hostCssH: 800,
+      dpr: 2,
+      deviceW: 1280,
+      deviceH: 800,
+      maxPixels: 12,
+    });
+    expect(bogus.canvasW).toBe(2560);
+    const capped = geo({
+      hostCssW: 333.33,
+      hostCssH: 200,
+      dpr: 3,
+      maxDpr: 2,
+      deviceW: 1000,
+      deviceH: 600,
+    });
+    expect(capped.canvasW).toBe(667);
+  });
+
+  it('reports changes only when something changed', () => {
+    const g = createGeometry();
+    expect(computeGeometry(input(), g)).toBe(true);
+    expect(computeGeometry(input(), g)).toBe(false);
+    expect(computeGeometry(input({ hostCssW: 1001 }), g)).toBe(true);
+  });
+});
+
+describe('controller geometry', () => {
+  function controller(cfg = {}) {
+    const c = new Controller({ random: mulberry32(1), config: cfg });
+    c.setViewport({ hostCssW: 1000, hostCssH: 600, dpr: 1, deviceW: 0, deviceH: 0 });
+    return c;
+  }
+
+  it("grid.count = cells across the host's shorter side", () => {
+    const c = controller({ grid: { sizing: 'count', count: 30 } });
+    expect(c.geo.pitchPx).toBe(20); // 600 / 30
+    const f = c.update(1 / 60);
+    expect(f.pitchPx).toBe(20);
+    expect(f.frame[OFF_GRID + 2]).toBe(20);
+    expect(f.frame[OFF_GRID]).toBe(c.geo.cols);
+    expect(f.frame[OFF_GRID + 3]).toBe(c.geo.pad);
+  });
+
+  it('pitch sizing uses CSS px', () => {
+    const c = controller({ grid: { sizing: 'pitch', pitch: 12 } });
+    expect(c.geo.pitchPx).toBe(12);
+  });
+
+  it('count changes tween the pitch continuously', () => {
+    const c = controller({ grid: { count: 30 } });
+    c.setConfig({ grid: { count: 60 } }, { transition: 600 });
+    const seen = new Set<number>();
+    for (let i = 0; i < 90; i++) seen.add(c.update(1 / 60).pitchPx);
+    expect(seen.size).toBeGreaterThan(5);
+    expect(c.geo.pitchPx).toBe(10);
+  });
+
+  it('switching sizing mode is a smooth (log-space) zoom, not a jump', () => {
+    const c = controller({ grid: { sizing: 'count', count: 30, pitch: 10 } });
+    c.setConfig({ grid: { sizing: 'pitch' } }, { transition: 600 });
+    const p: number[] = [];
+    for (let i = 0; i < 90; i++) p.push(c.update(1 / 60).pitchPx);
+    for (let i = 1; i < p.length; i++)
+      expect(Math.abs((p[i] as number) - (p[i - 1] as number))).toBeLessThanOrEqual(2);
+    expect(p[p.length - 1]).toBe(10);
+  });
+
+  it('fills the frame header: origin, host rect, mode space', () => {
+    const c = controller({ render: { overflow: 20 } });
+    const f = c.update(1 / 60);
+    const g = c.geo;
+    const fr = f.frame;
+    expect([fr[OFF_ORIGIN], fr[OFF_ORIGIN + 1], fr[OFF_ORIGIN + 2], fr[OFF_ORIGIN + 3]]).toEqual([
+      g.originX,
+      g.originY,
+      g.canvasW,
+      g.canvasH,
+    ]);
+    expect([fr[OFF_HOST], fr[OFF_HOST + 1], fr[OFF_HOST + 2], fr[OFF_HOST + 3]]).toEqual([
+      20, 20, 1000, 600,
+    ]);
+    expect(fr[OFF_SPACE]).toBe(520);
+    expect(fr[OFF_SPACE + 1]).toBe(320);
+    expect(fr[OFF_SPACE + 2]).toBeCloseTo(1 / 300, 8);
+    expect(fr[OFF_SPACE + 3]).toBeCloseTo(g.pitchPx / 300, 6);
+    expect(f.opaque).toBe(false);
+    expect(f.canvasWidth).toBe(1040);
+  });
+
+  it('pixel cap (coarse pointer / software GL) lowers the effective DPR', () => {
+    const c = new Controller({ random: mulberry32(1) });
+    c.setViewport({ hostCssW: 1600, hostCssH: 1000, dpr: 2, deviceW: 0, deviceH: 0 });
+    const full = c.geo.canvasW * c.geo.canvasH;
+    c.setPixelCap(0.5);
+    expect(c.geo.canvasW * c.geo.canvasH).toBeLessThanOrEqual(0.5e6 * 1.01);
+    expect(c.geo.canvasW * c.geo.canvasH).toBeLessThan(full);
+    expect(c.geometryChanged).toBe(true);
+  });
+});
