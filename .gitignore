@@ -21,3 +21,6 @@ playwright-report/
 .DS_Store
 Thumbs.db
 *.log
+
+# Browser automation artifacts
+.playwright-mcp/
