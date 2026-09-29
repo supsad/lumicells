@@ -9,5 +9,5 @@
     "rootDir": "src",
     "types": []
   },
-  "include": ["src/core", "src/react", "src/element"]
+  "include": ["src/core", "src/schema", "src/react", "src/element"]
 }

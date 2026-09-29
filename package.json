@@ -5,22 +5,60 @@
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
+  "main": "./dist/lib/pixel-life.js",
+  "module": "./dist/lib/pixel-life.js",
+  "types": "./dist/types/core/index.d.ts",
+  "unpkg": "./dist/lib/pixel-life-element.iife.js",
+  "jsdelivr": "./dist/lib/pixel-life-element.iife.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/core/index.d.ts",
+      "import": "./dist/lib/pixel-life.js",
+      "default": "./dist/lib/pixel-life.js"
+    },
+    "./schema": {
+      "types": "./dist/types/schema/index.d.ts",
+      "import": "./dist/lib/pixel-life-schema.js",
+      "default": "./dist/lib/pixel-life-schema.js"
+    },
+    "./react": {
+      "types": "./dist/types/react/index.d.ts",
+      "import": "./dist/lib/pixel-life-react.js",
+      "default": "./dist/lib/pixel-life-react.js"
+    },
+    "./element": {
+      "types": "./dist/types/element/index.d.ts",
+      "import": "./dist/lib/pixel-life-element.js",
+      "default": "./dist/lib/pixel-life-element.js"
+    },
+    "./element/define": {
+      "types": "./dist/types/element/define.d.ts",
+      "import": "./dist/lib/pixel-life-element-define.js",
+      "default": "./dist/lib/pixel-life-element-define.js"
+    },
+    "./schema.json": "./dist/lib/pixel-life.schema.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/lib",
+    "dist/types"
+  ],
   "sideEffects": [
     "./src/element/define.ts",
-    "./dist/lib/pixel-life-element.js",
+    "./src/element/iife.ts",
+    "./dist/lib/pixel-life-element-define.js",
     "./dist/lib/pixel-life-element.iife.js"
   ],
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:lib": "vite build --config vite.lib.config.ts && vite build --config vite.element.config.ts && tsc -p tsconfig.lib.json",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "schema": "node scripts/gen-json-schema.mjs"
+    "lint:fix": "biome check --write ."
   },
   "peerDependencies": {
     "react": ">=18"
