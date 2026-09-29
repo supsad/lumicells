@@ -1,0 +1,122 @@
+/* Layout of the scene preview page only. Not part of the scene itself. */
+
+.pl-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+}
+
+.pl-preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.pl-preview-bar button {
+  font: inherit;
+  color: #e8ebff;
+  background: #1c2038;
+  border: 1px solid #343a63;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.pl-preview-count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.pl-preview-frame {
+  position: relative;
+  width: 690px;
+  height: 690px;
+  max-width: 100%;
+  container-type: size;
+  overflow: hidden;
+  background: #000032;
+}
+
+.pl-preview-frame.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  width: auto;
+  height: auto;
+  max-width: none;
+}
+
+.pl-preview-exit {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 5;
+  font: inherit;
+  font-size: 12px;
+  color: #e8ebff;
+  background: rgba(20, 24, 50, 0.7);
+  border: 1px solid #343a63;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.pl-preview-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  width: 690px;
+  max-width: 100%;
+  min-height: 7.5em;
+  font:
+    12px / 1.4 ui-monospace,
+    Consolas,
+    monospace;
+  opacity: 0.75;
+}
+
+/* ---- static approximation of the reference background (a centered square, like the scene stage) ---- */
+
+.pl-preview-bg {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100cqmin;
+  height: 100cqmin;
+}
+
+.pl-preview-art {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 49% 49%, #1d0a39 0, #1d0a39 21%, rgba(29, 10, 57, 0) 35%),
+    radial-gradient(ellipse 30% 26% at 24% 30%, rgba(242, 18, 57, 0.85), transparent),
+    radial-gradient(ellipse 26% 30% at 13% 55%, rgba(200, 50, 140, 0.75), transparent),
+    radial-gradient(ellipse 34% 20% at 42% 14%, rgba(106, 60, 200, 0.6), transparent),
+    radial-gradient(ellipse 13% 22% at 66% 47%, rgba(2, 188, 210, 0.55), transparent),
+    radial-gradient(
+      circle at 49% 49%,
+      transparent 0 30%,
+      #0b5ad3 42%,
+      #0a45be 58%,
+      #083692 76%,
+      #041557 92%,
+      transparent 100%
+    ),
+    radial-gradient(ellipse 55% 55% at -15% 40%, rgba(106, 31, 110, 0.9), transparent 70%),
+    radial-gradient(ellipse 45% 40% at 10% 105%, #16207e, transparent), #000032;
+}
+
+/* 31 x 31 cell grid: the gap is 27% of the pitch */
+.pl-preview-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, transparent 73%, rgba(0, 0, 50, 0.7) 73%),
+    linear-gradient(to bottom, transparent 73%, rgba(0, 0, 50, 0.7) 73%);
+  background-size: calc(100% / 31) calc(100% / 31);
+  background-position: 0 0;
+}

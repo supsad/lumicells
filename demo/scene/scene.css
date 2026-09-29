@@ -1,0 +1,281 @@
+/*
+ * Demo scene: the UI layer of the reference composition.
+ * Everything is sized in `--s` = 1/345 of the shorter container side, so the layout scales like the
+ * 345 px reference does in any container. Motion is transform/translate/opacity only.
+ */
+
+.pl-scene {
+  --pl-scene-font: "Inter", "Manrope", "Segoe UI", system-ui, sans-serif;
+  --pl-scene-red: #ee2848;
+  --pl-scene-blue: #0481f5;
+  --pl-scene-red-fill: linear-gradient(135deg, #ee2848 0%, #d83a6c 55%, #d9447a 100%);
+  --pl-scene-blue-fill: linear-gradient(135deg, #0a62dc 0%, #0481f5 60%, #1a8cff 100%);
+
+  position: absolute;
+  inset: 0;
+  container-type: size;
+  overflow: clip;
+  pointer-events: none;
+  font-family: var(--pl-scene-font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The composition is a centered square: fractions in the layout refer to this stage. */
+.pl-scene-stage {
+  --s: calc(100cqmin / 345);
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100cqmin;
+  height: 100cqmin;
+}
+
+/* ---------- title ---------- */
+
+.pl-scene-title {
+  position: absolute;
+  translate: -50% -50%;
+  width: max-content;
+  max-width: calc(80 * var(--s));
+  text-align: center;
+  font: 500 calc(10 * var(--s)) / 1.25 var(--pl-scene-font);
+  letter-spacing: 0.02em;
+  color: #e4d6f6;
+  text-shadow: 0 0 calc(6 * var(--s)) rgba(10, 0, 40, 0.8);
+  opacity: 0;
+  transition: opacity 0.35s ease-in;
+}
+
+.pl-scene[data-phase="entering"] .pl-scene-title,
+.pl-scene[data-phase="idle"] .pl-scene-title {
+  opacity: 1;
+  transition: opacity 0.7s ease-out 0.25s;
+}
+
+.pl-scene-title-line {
+  display: block;
+  white-space: nowrap;
+}
+
+.pl-scene-title-hl {
+  color: #a9c4ff;
+}
+
+/* ---------- bubbles ---------- */
+
+/* Zero-size anchor at the item center; the bubble sits centered on it. */
+.pl-scene-slot {
+  position: absolute;
+  width: max-content;
+  translate: -50% -50%;
+  pointer-events: none;
+}
+
+.pl-scene-bubble {
+  --g-c: transparent;
+  --g-r: 0;
+  --g2-c: transparent;
+  --g2-r: 4;
+
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: calc(var(--w) * var(--s));
+  height: calc(var(--h) * var(--s));
+
+  /* hidden until the entrance flight reveals it; enabled once it has landed */
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    scale 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.25),
+    box-shadow 0.3s ease,
+    color 0.35s ease;
+}
+
+.pl-scene-bubble[data-shown] {
+  opacity: 1;
+}
+
+.pl-scene-bubble[data-live] {
+  pointer-events: auto;
+}
+
+.pl-scene-bubble[data-hover],
+.pl-scene-bubble:focus-visible {
+  scale: 1.07;
+}
+
+.pl-scene-bubble:focus-visible {
+  outline: calc(1.5 * var(--s)) solid rgba(190, 225, 255, 0.9);
+  outline-offset: calc(2 * var(--s));
+}
+
+/* ---------- pills ---------- */
+
+.pl-scene-pill {
+  --g-c: rgba(236, 40, 90, 0.3);
+  --g-r: 10;
+
+  border-radius: calc(3.5 * var(--s));
+  font: 500 calc(7 * var(--s)) / 1 var(--pl-scene-font);
+  letter-spacing: 0.01em;
+  color: #ffe3f1;
+  white-space: nowrap;
+  background: var(--pl-scene-red-fill);
+  box-shadow:
+    0 calc(3 * var(--s)) calc(10 * var(--s)) rgba(8, 0, 40, 0.45),
+    0 0 calc(var(--g-r) * var(--s)) var(--g-c),
+    0 0 calc(var(--g2-r) * var(--s)) var(--g2-c);
+}
+
+/* blue look fades in over the red one when selected */
+.pl-scene-pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--pl-scene-blue-fill);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.pl-scene-pill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.pl-scene-pill[data-selected]::before,
+.pl-scene-pill[data-kind="secondary"]::before {
+  opacity: 1;
+}
+
+.pl-scene-pill[data-selected],
+.pl-scene-pill[data-kind="secondary"] {
+  --g-c: rgba(20, 120, 255, 0.35);
+  color: #d6ecff;
+}
+
+.pl-scene-pill[data-hover] {
+  --g-c: rgba(236, 40, 90, 0.6);
+  --g-r: 16;
+}
+
+.pl-scene-pill[data-selected][data-hover],
+.pl-scene-pill[data-kind="secondary"][data-hover] {
+  --g-c: rgba(20, 140, 255, 0.65);
+  --g-r: 18;
+}
+
+/* primary ('наука'): larger, with the clear soft blue glow */
+.pl-scene-pill[data-kind="primary"] {
+  border-radius: calc(5 * var(--s));
+  font-size: calc(11.5 * var(--s));
+  font-weight: 600;
+  --g-r: 14;
+}
+
+.pl-scene-pill[data-kind="primary"][data-selected] {
+  --g-c: rgba(20, 140, 255, 0.55);
+  --g-r: 16;
+  --g2-c: rgba(120, 200, 255, 0.35);
+}
+
+.pl-scene-pill[data-kind="primary"][data-selected][data-hover] {
+  --g-c: rgba(30, 150, 255, 0.85);
+  --g-r: 24;
+}
+
+/* small red caption pill overlapping the bottom-right corner of the primary bubble */
+.pl-scene-caption {
+  position: absolute;
+  right: calc(-22 * var(--s));
+  top: calc(32 * var(--s));
+  z-index: 1;
+  height: calc(9 * var(--s));
+  padding: 0 calc(4.5 * var(--s));
+  border-radius: calc(2 * var(--s));
+  font: 500 calc(4 * var(--s)) / calc(9 * var(--s)) var(--pl-scene-font);
+  letter-spacing: 0.02em;
+  color: #ffe3f1;
+  white-space: nowrap;
+  background: var(--pl-scene-red-fill);
+  box-shadow: 0 calc(1 * var(--s)) calc(4 * var(--s)) rgba(8, 0, 40, 0.4);
+  pointer-events: none;
+}
+
+/* ---------- music card ---------- */
+
+.pl-scene-card {
+  --g-c: rgba(20, 110, 255, 0.25);
+  --g-r: 12;
+
+  border-radius: calc(5 * var(--s));
+  background: linear-gradient(160deg, #2f7be6, #0a62d6);
+  box-shadow:
+    0 calc(6 * var(--s)) calc(18 * var(--s)) rgba(0, 0, 40, 0.5),
+    0 0 calc(var(--g-r) * var(--s)) var(--g-c),
+    0 0 calc(var(--g2-r) * var(--s)) var(--g2-c);
+}
+
+.pl-scene-card[data-hover] {
+  --g-c: rgba(40, 150, 255, 0.6);
+  --g-r: 20;
+}
+
+.pl-scene-card-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.pl-scene-card-tag {
+  position: absolute;
+  left: calc(42 * var(--s));
+  top: calc(10 * var(--s));
+  width: calc(24 * var(--s));
+  height: calc(10 * var(--s));
+  border-radius: calc(2 * var(--s));
+  font: 500 calc(4 * var(--s)) / calc(10 * var(--s)) var(--pl-scene-font);
+  letter-spacing: 0.02em;
+  text-align: center;
+  color: #ffe3f1;
+  background: var(--pl-scene-red-fill);
+  box-shadow: 0 calc(1 * var(--s)) calc(4 * var(--s)) rgba(8, 0, 40, 0.4);
+  pointer-events: none;
+}
+
+/* ---------- reduced motion: fades only ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-scene-bubble {
+    transition:
+      box-shadow 0.3s ease,
+      color 0.35s ease;
+  }
+
+  .pl-scene-bubble[data-hover],
+  .pl-scene-bubble:focus-visible {
+    scale: 1;
+  }
+}
