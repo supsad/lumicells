@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pixel Life — Web Component</title>
+    <style>
+      :root {
+        --red: #ee2848;
+        --blue: #0481f5;
+        --ink: #eceeff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #050512;
+        color: var(--ink);
+        font: 15px/1.5 Inter, ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+      }
+      main {
+        display: grid;
+        gap: 40px;
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1,
+      h2 {
+        margin: 0 0 8px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 12px;
+        color: #aab0d8;
+      }
+      code {
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #d7dcff;
+        font: 13px ui-monospace, 'Cascadia Code', Consolas, monospace;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: flex-start;
+      }
+
+      /* ---- 1. The element hosts a scene of plain HTML bubbles --------------------------- */
+      #hero {
+        flex: 1 1 420px;
+        max-width: 640px;
+        aspect-ratio: 1;
+        border-radius: 20px;
+        overflow: clip;
+      }
+      .bubble {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        padding: 10px 20px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--red);
+        color: #fff;
+        font: 600 15px/1 inherit;
+        cursor: pointer;
+        transition:
+          transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.4),
+          background-color 0.25s;
+      }
+      .bubble:hover {
+        transform: translate(-50%, -50%) scale(1.06);
+      }
+      .bubble.blue {
+        background: var(--blue);
+      }
+      .bubble.big {
+        padding: 14px 28px;
+        font-size: 18px;
+      }
+      .title {
+        position: absolute;
+        left: 50%;
+        top: 46%;
+        transform: translate(-50%, -50%);
+        margin: 0;
+        color: var(--ink);
+        font-size: clamp(16px, 3.2vw, 22px);
+        font-weight: 600;
+        text-align: center;
+        pointer-events: none;
+      }
+      .title mark {
+        padding: 0 6px;
+        border-radius: 6px;
+        background: var(--red);
+        color: #fff;
+      }
+
+      /* ---- 2. A card with its own animation ------------------------------------------------ */
+      #card {
+        flex: 1 1 280px;
+        min-height: 240px;
+        border-radius: 20px;
+        overflow: clip;
+      }
+      #card .inner {
+        display: grid;
+        gap: 12px;
+        place-content: center;
+        justify-items: start;
+        height: 100%;
+        min-height: 240px;
+        padding: 28px;
+      }
+      .controls button,
+      .controls select,
+      #card button {
+        padding: 8px 14px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 10px;
+        background: rgba(0, 0, 20, 0.55);
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      /* ---- 3. Config from a file ----------------------------------------------------------- */
+      #from-file {
+        flex: 1 1 100%;
+        height: 200px;
+        border-radius: 20px;
+        overflow: clip;
+      }
+      #from-file .inner {
+        display: grid;
+        place-content: center;
+        height: 100%;
+        text-align: center;
+      }
+
+      /* A portal: lives outside <pixel-life>, bound through data-pl-for="hero". */
+      .portal {
+        display: inline-block;
+        padding: 10px 18px;
+        border: 1px dashed rgba(255, 255, 255, 0.35);
+        border-radius: 12px;
+        color: var(--ink);
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      #log {
+        height: 140px;
+        margin: 0;
+        padding: 10px 12px;
+        overflow: auto;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #b8c0ff;
+        font: 12px/1.5 ui-monospace, 'Cascadia Code', Consolas, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>&lt;pixel-life&gt; без фреймворка</h1>
+        <p>
+          Обычный HTML: тег, атрибуты <code>preset</code>, <code>interactive</code>,
+          <code>src</code> и декларативная привязка элементов через <code>data-pl-*</code>.
+        </p>
+      </header>
+
+      <section>
+        <h2>1. Сцена из HTML-пузырей</h2>
+        <p>
+          Каждый пузырь с <code>data-pl-influence</code> подсвечивает сетку под собой,
+          <code>data-pl-pulse="click"</code> запускает круг по клику,
+          <code>data-pl-lift="hover"</code> поднимает пиксели при наведении.
+        </p>
+        <div class="row">
+          <pixel-life id="hero" preset="reference" interactive>
+            <p class="title">выбери, что тебе <mark>интересно</mark></p>
+
+            <button type="button"
+              class="bubble big blue"
+              style="left: 68%; top: 68%"
+              data-pl-influence
+              data-pl-color="#0481f5"
+              data-pl-strength="1.2"
+              data-pl-pulse="click"
+              data-pl-lift="hover"
+            >
+              наука
+            </button>
+            <button type="button"
+              class="bubble"
+              style="left: 68%; top: 26%"
+              data-pl-influence
+              data-pl-pulse="click"
+              data-pl-lift="hover"
+            >
+              путешествия
+            </button>
+            <button type="button"
+              class="bubble"
+              style="left: 28%; top: 30%"
+              data-pl-influence
+              data-pl-pulse="click"
+              data-pl-lift="hover"
+            >
+              музыка
+            </button>
+            <button type="button"
+              class="bubble"
+              style="left: 22%; top: 60%"
+              data-pl-influence="shadow"
+              data-pl-falloff="3"
+              data-pl-pulse="click"
+            >
+              тишина
+            </button>
+            <button type="button"
+              class="bubble blue"
+              style="left: 40%; top: 80%"
+              data-pl-influence
+              data-pl-color="#0481f5"
+              data-pl-pulse="click"
+              data-pl-lift="hover"
+            >
+              назад
+            </button>
+          </pixel-life>
+
+          <div class="portal" data-pl-for="hero" data-pl-influence data-pl-pulse="click">
+            Я вне тега: <code>data-pl-for="hero"</code>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Второй экземпляр и конфиг из файла</h2>
+        <div class="row">
+          <pixel-life id="card" preset="pulse">
+            <div class="inner">
+              <strong>Пульсация</strong>
+              <span>Пресет <code>pulse</code> — круги расходятся от центра.</span>
+              <button type="button" data-pl-pulse="click" data-pl-color="#c43db2">Запустить круг</button>
+            </div>
+          </pixel-life>
+
+          <!-- src is fetched next to the page; the file only lists what differs from the preset. -->
+          <pixel-life id="from-file" src="./pixel-life.config.json">
+            <div class="inner">
+              <div>
+                <strong>Конфиг из файла</strong>
+                <p><code>&lt;pixel-life src="./pixel-life.config.json"&gt;</code></p>
+              </div>
+            </div>
+          </pixel-life>
+        </div>
+      </section>
+
+      <section>
+        <h2>3. Свойства и события</h2>
+        <div class="controls">
+          <label>
+            Пресет
+            <select id="preset">
+              <option value="reference">reference</option>
+              <option value="orb">orb</option>
+              <option value="pulse">pulse</option>
+              <option value="life">life</option>
+              <option value="vortex">vortex</option>
+              <option value="waves">waves</option>
+              <option value="ripples">ripples</option>
+              <option value="rain">rain</option>
+              <option value="minimal">minimal</option>
+            </select>
+          </label>
+          <button id="pause" type="button">Пауза</button>
+          <button id="speed" type="button">config.animation.speed = 2</button>
+        </div>
+        <pre id="log" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <script type="module">
+      import 'pixel-life/element/define';
+
+      const hero = document.getElementById('hero');
+      const log = document.getElementById('log');
+      const write = (text) => {
+        log.textContent += `${text}\n`;
+        log.scrollTop = log.scrollHeight;
+      };
+
+      // Events are plain CustomEvents and bubble, so one listener on the document sees them all.
+      for (const type of ['pl-ready', 'pl-config', 'pl-error', 'pl-fallback']) {
+        document.addEventListener(type, (e) => {
+          const detail = e.detail;
+          const extra =
+            type === 'pl-config'
+              ? `${detail.source}: ${detail.changed.length} параметров`
+              : type === 'pl-error'
+                ? detail.message
+                : type === 'pl-fallback'
+                  ? detail.reason
+                  : '';
+          write(`${type} #${e.target.id} ${extra}`);
+        });
+      }
+
+      document.getElementById('preset').addEventListener('change', (e) => {
+        hero.preset = e.target.value;
+      });
+
+      document.getElementById('pause').addEventListener('click', (e) => {
+        hero.paused = !hero.paused;
+        e.target.textContent = hero.paused ? 'Продолжить' : 'Пауза';
+      });
+
+      let fast = false;
+      document.getElementById('speed').addEventListener('click', () => {
+        fast = !fast;
+        // Properties are the source of truth: assigning `config` re-applies with a transition.
+        hero.config = { animation: { speed: fast ? 2 : 1 } };
+      });
+    </script>
+  </body>
+</html>

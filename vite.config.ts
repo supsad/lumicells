@@ -12,8 +12,13 @@ export default defineConfig({
     // The demo imports the library by its package name, exactly like a consumer would.
     alias: [
       { find: /^pixel-life$/, replacement: resolve(root, 'src/core/index.ts') },
+      { find: /^pixel-life\/schema$/, replacement: resolve(root, 'src/schema/index.ts') },
       { find: /^pixel-life\/react$/, replacement: resolve(root, 'src/react/index.ts') },
       { find: /^pixel-life\/element$/, replacement: resolve(root, 'src/element/index.ts') },
+      {
+        find: /^pixel-life\/element\/define$/,
+        replacement: resolve(root, 'src/element/define.ts'),
+      },
     ],
   },
   build: {
