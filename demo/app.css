@@ -1,0 +1,499 @@
+/*
+ * Stand layout and chrome. Colors, radii and fonts come from the UI kit tokens (--plui-*);
+ * this file only places things: toolbar row, stage, dock with the panel, modal content.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  color: var(--plui-text);
+  font-family: var(--plui-font);
+  font-size: var(--plui-fs);
+  background:
+    radial-gradient(60vmax 50vmax at 0% 0%, rgba(106, 31, 110, 0.32), transparent 60%),
+    radial-gradient(50vmax 50vmax at 100% 100%, rgba(4, 118, 255, 0.16), transparent 60%),
+    var(--plui-bg-0);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.stand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+}
+@supports (height: 100dvh) {
+  .stand {
+    height: 100dvh;
+  }
+}
+
+.stand__bar {
+  flex: none;
+  padding: 12px 12px 0;
+}
+
+.stand__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  padding: 10px 0 12px 12px;
+}
+
+.stand__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+.stand__dock {
+  flex: none;
+  height: 100%;
+  padding: 0 12px;
+}
+
+/* On narrow screens the panel floats over the stage (below the toolbar) instead of taking width. */
+@media (max-width: 1180px) {
+  .stand__body {
+    padding-right: 12px;
+  }
+  .stand__dock {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 20;
+    max-width: calc(100% - 24px);
+    padding: 0;
+  }
+  .stand__dock .plui-panel {
+    box-shadow:
+      -24px 0 60px rgba(0, 0, 12, 0.5),
+      var(--plui-shadow);
+  }
+}
+
+/* ---------------------------------------------------------------- toolbar */
+
+.stand-toolbar {
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+}
+
+.stand-tb-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+.stand-tb-group + .stand-tb-group {
+  border-left: 1px solid var(--plui-border);
+  padding-left: 10px;
+}
+.stand-tb-group--end {
+  margin-left: auto;
+}
+
+.stand-tb-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stand-tb-label {
+  display: none;
+  color: var(--plui-text-mute);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stand-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 26px;
+  max-width: 200px;
+  padding: 0 24px 0 9px;
+  border-radius: var(--plui-radius);
+  border: 1px solid var(--plui-border-strong);
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 6l4.5 4.5L12.5 6' fill='none' stroke='%23b0b5e6' stroke-width='1.8'/%3E%3C/svg%3E")
+    no-repeat right 8px center / 10px,
+    var(--plui-raise-2);
+  color: var(--plui-text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.stand-select:hover {
+  border-color: rgba(170, 180, 255, 0.55);
+}
+.stand-select:focus-visible {
+  outline: 2px solid var(--plui-focus);
+  outline-offset: 1px;
+}
+.stand-select option {
+  background: var(--plui-surface-solid);
+  color: var(--plui-text);
+}
+.stand-select--preset {
+  min-width: 120px;
+}
+
+.stand-dims {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--plui-text-mute);
+}
+.stand-dim {
+  width: 62px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--plui-radius);
+  border: 1px solid var(--plui-border-strong);
+  background: var(--plui-well);
+  color: var(--plui-text);
+  font: inherit;
+  font-family: var(--plui-mono);
+  text-align: right;
+}
+.stand-dim:focus-visible {
+  outline: 2px solid var(--plui-focus);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ stage */
+
+.stand-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--plui-border);
+  background: #000032;
+}
+
+.stand-stage__scroll {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* A framed stage sits on neutral grey, so canvas overflow past the frame edge stays visible. */
+.stand-stage:not([data-size="full"]) {
+  background-color: #2a2b30;
+  background-image:
+    linear-gradient(45deg, #303137 25%, transparent 25%, transparent 75%, #303137 75%),
+    linear-gradient(45deg, #303137 25%, transparent 25%, transparent 75%, #303137 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    12px 12px;
+}
+.stand-stage:not([data-size="full"]) .stand-stage__scroll {
+  overflow: auto;
+  padding: 96px;
+}
+
+.stand-frame {
+  position: relative;
+  flex: none;
+}
+.stand-frame[data-fullscreen] {
+  position: absolute;
+  inset: 0;
+}
+.stand-stage:not([data-size="full"]) .stand-frame {
+  /* Safe centering: stays reachable by scrolling when the frame is larger than the area. */
+  margin: auto;
+}
+
+.stand-host {
+  width: 100%;
+  height: 100%;
+  background-color: #000032;
+}
+
+.stand-frame:not([data-fullscreen])::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px dashed rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.stand-frame__size {
+  position: absolute;
+  left: 0;
+  top: -22px;
+  color: #a7abc4;
+  font-family: var(--plui-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.stand-frame__handle {
+  position: absolute;
+  right: -11px;
+  bottom: -11px;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--plui-border-strong);
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 46%,
+      var(--plui-text-dim) 46% 54%,
+      transparent 54% 68%,
+      var(--plui-text-dim) 68% 76%,
+      transparent 76%
+    ),
+    var(--plui-surface-solid);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.stand-frame__handle:hover {
+  border-color: var(--plui-azure);
+}
+
+.stand-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--plui-border-strong);
+  background: var(--plui-surface-solid);
+  box-shadow: var(--plui-shadow);
+  color: var(--plui-text);
+  font-size: 12px;
+  transform: translateX(-50%);
+}
+.stand-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--plui-raise-2);
+  color: var(--plui-cyan);
+  font-family: var(--plui-mono);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------ panel */
+
+.stand-topfield {
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--plui-border);
+}
+
+.stand-mode-weight {
+  padding: 0 12px 2px;
+}
+
+.stand-section-note {
+  margin: 0 0 6px;
+  color: var(--plui-text-mute);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.stand-adv-note {
+  margin: 10px 12px 14px;
+  color: var(--plui-text-mute);
+  font-size: 11px;
+}
+
+.stand-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stand-adv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--plui-text-dim);
+  font-size: 12px;
+}
+.stand-adv label {
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ stats */
+
+.stand-stats {
+  border-top: 1px solid var(--plui-border);
+}
+
+.stand-stats__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--plui-text-dim);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.stand-stats__head:hover {
+  color: var(--plui-text);
+}
+.stand-stats__head:focus-visible {
+  outline: 2px solid var(--plui-focus);
+  outline-offset: -2px;
+}
+.stand-stats__chev {
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.stand-stats[data-open="true"] .stand-stats__chev {
+  transform: none;
+}
+.stand-stats__summary {
+  margin-left: auto;
+  color: var(--plui-text-mute);
+  font-family: var(--plui-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+.stand-stats__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+.stand-stats__grid {
+  gap: 6px 8px;
+}
+.stand-stats__grid .plui-readout {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+/* ------------------------------------------------------------ modal content */
+
+.stand-export,
+.stand-import {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.stand-textarea {
+  width: 100%;
+  min-height: 130px;
+  padding: 8px 10px;
+  border-radius: var(--plui-radius);
+  border: 1px solid var(--plui-border-strong);
+  background: var(--plui-well);
+  color: var(--plui-text);
+  font-family: var(--plui-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.stand-textarea:focus-visible {
+  outline: 2px solid var(--plui-focus);
+  outline-offset: 1px;
+}
+
+.stand-import__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--plui-radius);
+  border: 1px solid rgba(242, 18, 57, 0.5);
+  background: rgba(242, 18, 57, 0.12);
+  color: #ff9db0;
+  font-size: 12px;
+}
+
+.stand-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.stand-issues__head {
+  display: flex;
+  gap: 6px;
+}
+.stand-issues__table {
+  display: block;
+  max-height: 220px;
+  overflow: auto;
+  border-collapse: collapse;
+  border: 1px solid var(--plui-border);
+  border-radius: var(--plui-radius);
+  font-size: 12px;
+}
+.stand-issues__table th,
+.stand-issues__table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--plui-border);
+  text-align: left;
+  vertical-align: top;
+}
+.stand-issues__table th {
+  position: sticky;
+  top: 0;
+  background: var(--plui-surface-solid);
+  color: var(--plui-text-mute);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.stand-issues__table code {
+  font-family: var(--plui-mono);
+  color: var(--plui-cyan);
+  white-space: nowrap;
+}
+
+@media (min-width: 1760px) {
+  .stand-toolbar .stand-tb-label {
+    display: inline;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stand-stats__chev {
+    transition: none;
+  }
+}
