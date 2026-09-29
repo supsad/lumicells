@@ -1,0 +1,122 @@
+import { type ReactNode, useId } from 'react';
+import { Icon } from './Icon';
+import { copyText, cx, useFlash } from './utils';
+
+/** Props shared by every labelled control. */
+export interface FieldBaseProps {
+  label: ReactNode;
+  /** Description shown in the hover / keyboard-focus popover. */
+  hint?: ReactNode;
+  /** Config key, shown in monospace inside the popover; click copies it. */
+  path?: string;
+  disabled?: boolean;
+  /** Puts a small note next to the label, e.g. a "modulated" badge. */
+  badge?: ReactNode;
+  className?: string;
+}
+
+export interface FieldProps extends FieldBaseProps {
+  /** Id of the labelled control (for <label htmlFor>). */
+  htmlFor?: string;
+  labelId?: string;
+  /** Shows the "changed" marker and enables the reset button. */
+  changed?: boolean;
+  onReset?(): void;
+  /** `row`: label left, control right. `stack`: label above a full-width control. */
+  layout?: 'row' | 'stack';
+  children?: ReactNode;
+}
+
+/**
+ * Layout shell of all controls: label + reset + control, plus a popover under the row
+ * with the hint and the copyable config path. The popover is absolutely positioned,
+ * so hovering never shifts the layout of a dense panel.
+ */
+export function Field({
+  label,
+  hint,
+  path,
+  disabled,
+  badge,
+  className,
+  htmlFor,
+  labelId,
+  changed,
+  onReset,
+  layout = 'row',
+  children,
+}: FieldProps) {
+  const title = typeof label === 'string' ? label : undefined;
+  return (
+    <div
+      className={cx('plui-field', `plui-field--${layout}`, className)}
+      data-disabled={disabled || undefined}
+      data-changed={changed || undefined}
+    >
+      <div className="plui-field__row">
+        <div className="plui-field__labelwrap">
+          <label
+            id={labelId}
+            htmlFor={htmlFor}
+            className="plui-field__label"
+            title={onReset ? `${title ?? ''}${title ? ' — ' : ''}двойной клик: сбросить` : title}
+            onDoubleClick={() => !disabled && changed && onReset?.()}
+          >
+            {label}
+          </label>
+          {badge}
+          {onReset && (
+            <button
+              type="button"
+              className="plui-field__reset"
+              onClick={onReset}
+              disabled={disabled || !changed}
+              tabIndex={changed && !disabled ? 0 : -1}
+              aria-label={`Сбросить: ${title ?? 'значение'}`}
+              title="Сбросить к значению по умолчанию"
+            >
+              <Icon name="reset" size={11} />
+            </button>
+          )}
+        </div>
+        <div className="plui-field__control">{children}</div>
+      </div>
+      {(hint || path) && <FieldPop hint={hint} path={path} />}
+    </div>
+  );
+}
+
+function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
+  const id = useId();
+  const [copied, flash] = useFlash();
+  return (
+    <div className="plui-field__pop" id={id}>
+      {hint && <div className="plui-field__hint">{hint}</div>}
+      {path && (
+        <button
+          type="button"
+          className={cx('plui-path', copied && 'is-done')}
+          onClick={async () => {
+            if (await copyText(path)) flash();
+          }}
+          title="Скопировать путь"
+        >
+          <code>{path}</code>
+          <Icon name={copied ? 'check' : 'copy'} size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Tiny "modulated by animation" badge used next to labels. */
+export function ModulatedBadge({ effective, decimals }: { effective: number; decimals: number }) {
+  return (
+    <span
+      className="plui-modbadge"
+      title={`Значение изменяется модуляцией. Эффективное: ${effective.toFixed(decimals)}`}
+    >
+      мод.
+    </span>
+  );
+}
