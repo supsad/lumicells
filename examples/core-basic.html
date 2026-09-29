@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pixel Life — ядро без фреймворков</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000032;
+        overflow: hidden;
+      }
+      /* Fullscreen background host; its children sit above the canvas (positioned, later in DOM). */
+      #bg {
+        position: fixed;
+        inset: 0;
+      }
+      .bubble {
+        position: absolute;
+        left: 0;
+        top: 0;
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 999px;
+        font: 600 15px/1.2 inherit;
+        color: #fff;
+        background: #ee2848;
+        box-shadow: 0 0 24px rgba(238, 40, 72, 0.45);
+        cursor: pointer;
+        will-change: transform;
+        white-space: nowrap;
+      }
+      .bubble.blue {
+        background: #0481f5;
+        box-shadow: 0 0 24px rgba(4, 129, 245, 0.45);
+      }
+      .bubble:hover {
+        filter: brightness(1.15);
+      }
+      .title {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        margin: 0;
+        padding: 6px 14px;
+        color: #fff;
+        font: 700 clamp(22px, 4vmin, 40px) / 1.15 inherit;
+        text-align: center;
+        letter-spacing: 0.01em;
+        pointer-events: none;
+        border-radius: 12px;
+      }
+      .title em {
+        font-style: normal;
+        color: #6fb6ff;
+      }
+      /* Small card with its own instance; the glow and floating pixels leave its bounds. */
+      .card {
+        position: fixed;
+        left: 96px;
+        bottom: 96px;
+        width: 320px;
+        height: 200px;
+        border-radius: 18px;
+        overflow: visible;
+        z-index: 2;
+      }
+      .card-body {
+        position: relative;
+        z-index: 1;
+        padding: 18px 20px;
+        color: #fff;
+        font: 500 14px/1.4 inherit;
+        pointer-events: none;
+      }
+      .card-body b {
+        display: block;
+        font-size: 20px;
+        margin-bottom: 6px;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        z-index: 10;
+        min-width: 280px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(4, 8, 40, 0.78);
+        border: 1px solid rgba(120, 150, 255, 0.25);
+        color: #cfe0ff;
+        font: 12px/1.45 ui-monospace, Consolas, monospace;
+        white-space: pre;
+        backdrop-filter: blur(6px);
+      }
+      #hud .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+        white-space: normal;
+      }
+      #hud button {
+        font: 12px/1 inherit;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(120, 150, 255, 0.35);
+        background: rgba(30, 50, 140, 0.5);
+        color: #fff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bg">
+      <h1 class="title" id="title">Живые пиксели<br /><em>без фреймворков</em></h1>
+    </div>
+    <div class="card" id="card">
+      <div class="card-body">
+        <b>Карточка 320×200</b>
+        overflow: 60px, пиксели всплывают за край
+      </div>
+    </div>
+    <div id="hud">
+      <div id="hud-text">загрузка…</div>
+      <div class="row">
+        <button type="button" id="btn-lose">Потеря контекста</button>
+        <button type="button" id="btn-recreate">Пересоздать ×20</button>
+        <button type="button" id="btn-radius">Радиус сферы 0.3 ↔ 0.66</button>
+        <button type="button" id="btn-pointer">Свет курсора</button>
+      </div>
+    </div>
+    <script type="module" src="./core-basic/main.ts"></script>
+  </body>
+</html>
