@@ -35,7 +35,8 @@ export interface InfluenceInit {
   w?: number;
   h?: number;
   radius?: number;
-  cornerRadius?: number;
+  /** null resets it to unset (circle radius / no rounding). */
+  cornerRadius?: number | null;
   type?: InfluenceTypeName;
   strength?: number;
   /** Soft edge in cells. */
@@ -159,10 +160,18 @@ export class InfluenceRegistry {
     e.hidden = hidden;
   }
 
-  /** Fades out, then frees. Idempotent. */
+  /**
+   * Fades out, then frees. Idempotent. An entry without a GPU slot has nothing to fade and is
+   * freed right away, so disposals never pile up while the instance is not rendering (stopped,
+   * paused, offscreen); only slot holders (at most MAX_INFLUENCES) wait for the next frames.
+   */
   dispose(e: Influence): void {
     if (e.removed) return;
     e.disposing = true;
+    if (e.slot) return;
+    e.removed = true;
+    const i = this.list.indexOf(e);
+    if (i >= 0) this.list.splice(i, 1);
   }
 
   /** Drops everything immediately (instance destroyed). */
@@ -275,7 +284,7 @@ export class InfluenceRegistry {
     if (p.w !== undefined) e.w = p.w;
     if (p.h !== undefined) e.h = p.h;
     if (p.radius !== undefined) e.radius = p.radius;
-    if (p.cornerRadius !== undefined) e.corner = p.cornerRadius;
+    if (p.cornerRadius !== undefined) e.corner = p.cornerRadius ?? Number.NaN;
     if (p.type !== undefined) e.type = INFLUENCE_TYPE[p.type] ?? 0;
     if (p.strength !== undefined) e.strength = p.strength;
     if (p.falloff !== undefined) e.falloff = p.falloff;

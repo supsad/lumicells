@@ -49,7 +49,10 @@ export class Modulator {
     }
   }
 
-  /** Reads the source (non-finite readings keep the previous value) and smooths into `value`. */
+  /**
+   * Reads the source (non-finite readings keep the previous value) and smooths into `value`.
+   * Until the first finite reading the modulator is not `primed` and composes as the identity.
+   */
   sample(dtSec: number): void {
     let raw: number;
     if (this.kind === SRC_NUMBER) raw = this.num;
@@ -74,13 +77,17 @@ export class Modulator {
   }
 }
 
-/** Composes modulators over `base` in insertion order (disposed ones are skipped). */
+/**
+ * Composes modulators over `base` in insertion order. Disposed ones are skipped, and so are
+ * unprimed ones (no finite reading yet): they must not multiply by / override with 0.
+ */
 export function composeModulators(base: number, mods: readonly Modulator[], dtSec: number): number {
   let v = base;
   for (let i = 0; i < mods.length; i++) {
     const m = mods[i] as Modulator;
     if (m.disposed) continue;
     m.sample(dtSec);
+    if (!m.primed) continue;
     const s = m.value;
     switch (m.blend) {
       case 1:

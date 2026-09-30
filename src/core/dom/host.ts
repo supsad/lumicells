@@ -6,6 +6,9 @@
  * - Size from a ResizeObserver on the canvas: devicePixelContentBoxSize where supported (exact
  *   physical pixels), contentRect * devicePixelRatio otherwise (Safari). Sizes are only recorded
  *   here and applied by the owner in the next measure phase (throttled during live resizes).
+ * - The first size is not read at mount: takeSize() reads it in the ticker's measure phase unless
+ *   the observer reported first, so mounting N instances in one task costs one layout, not N
+ *   (a synchronous clientWidth read after each insert would force a layout per instance).
  * - DPR changes (window dragged to another monitor, zoom) re-arm a resolution media query.
  * - The poster (static CSS gradient) sits on the host's background until the first frame.
  */
@@ -40,6 +43,8 @@ export class HostView {
   private savedBg: { v: string; p: string }[] | null = null;
   private posterCss = '';
   private pending = false;
+  /** Mounted, but neither the observer nor a measure-phase read has reported a size yet. */
+  private needsInitialRead = false;
   private everApplied = false;
   private lastApply = Number.NEGATIVE_INFINITY;
   private readonly size: HostSize = { hostCssW: 0, hostCssH: 0, deviceW: 0, deviceH: 0, dpr: 1 };
@@ -53,8 +58,11 @@ export class HostView {
     private readonly signal: AbortSignal,
   ) {
     const win = host.ownerDocument.defaultView;
-    // The canvas is absolutely positioned against the host.
-    const pos = win?.getComputedStyle(host).position;
+    // The canvas is absolutely positioned against the host. An inline non-static position needs
+    // no computed-style read (that read forces a style recalc when several instances mount in
+    // one task; the size read, which forces layout, is deferred to the measure phase).
+    const inline = host.style.position;
+    const pos = inline && inline !== 'static' ? inline : win?.getComputedStyle(host).position;
     if (win && (!pos || pos === 'static')) {
       this.savedPosition = host.style.position;
       host.style.position = 'relative';
@@ -93,6 +101,7 @@ export class HostView {
   }
 
   unmount(): void {
+    this.needsInitialRead = false;
     this.mountCtl?.abort();
     this.mountCtl = null;
     this.ro?.disconnect();
@@ -115,6 +124,11 @@ export class HostView {
    */
   takeSize(now: number, throttleMs = 100): HostSize | null {
     if (!this.pending || !this.canvas) return null;
+    if (this.needsInitialRead) {
+      // Measure phase: every instance reads here, after all of them wrote their mounts.
+      const c = this.canvas;
+      this.record(c.clientWidth, c.clientHeight, 0, 0);
+    }
     if (this.everApplied && now - this.lastApply < throttleMs) return null;
     this.pending = false;
     this.everApplied = true;
@@ -189,6 +203,7 @@ export class HostView {
   }
 
   private record(cssW: number, cssH: number, devW: number, devH: number): void {
+    this.needsInitialRead = false;
     const o = this.overflow;
     const s = this.size;
     s.hostCssW = Math.max(1, cssW - 2 * o);
@@ -224,10 +239,11 @@ export class HostView {
       // No ResizeObserver: poll on window resizes.
       const read = () => this.record(canvas.clientWidth, canvas.clientHeight, 0, 0);
       win.addEventListener('resize', read, { signal });
-      read();
     }
-    // First size synchronously (the observer reports after this frame's rAF callbacks).
-    if (!this.pending) this.record(canvas.clientWidth, canvas.clientHeight, 0, 0);
+    // The observer reports after this frame's rAF callbacks: the first size is read in the next
+    // measure phase instead (deferred, not synchronously here, see takeSize()).
+    this.needsInitialRead = true;
+    this.markPending();
   }
 
   private armDpr(): void {

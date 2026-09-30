@@ -7,7 +7,9 @@
  *
  * Lifecycle: the engine is created lazily in start() when WebGL2 is available; programs compile
  * in parallel and 'ready' fires after the first drawn frame (a CSS poster covers the gap). A lost
- * context shows the poster and is rebuilt on restore with a new Engine on the same canvas.
+ * context shows the poster and is rebuilt on restore with a new Engine on the same canvas. An
+ * engine that fails (compile/link or resource error) is disposed and its context released at
+ * once: browsers cap live contexts at ~16, so a failed instance must not hold one.
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -42,6 +44,7 @@ import type {
   DebugView,
   InfluenceHandle,
   InfluenceOptions,
+  InfluenceUpdate,
   LiftOptions,
   ModulatablePath,
   ModulateOptions,
@@ -64,6 +67,14 @@ const COARSE_MAX_PIXELS = 2.4;
 const SOFTWARE_MAX_PIXELS = 0.5;
 const STATS_INTERVAL = 250;
 const RESIZE_THROTTLE = 100;
+/** IntersectionObserver margin around the canvas (host + overflow), CSS px. */
+const IO_MARGIN = 64;
+
+/** Config changes of one source, coalesced until the next flush (frame or microtask). */
+interface ConfigBatch {
+  source: ConfigSource;
+  paths: Set<ParamPath>;
+}
 
 export class PixelLife {
   /** Whether WebGL2 is available. Memoized; always false on the server. */
@@ -91,6 +102,10 @@ export class PixelLife {
   /** Context alpha attribute of the current canvas (null before the first engine). */
   #engineOpaque: boolean | null = null;
   #hookedCanvas: HTMLCanvasElement | null = null;
+  /** Lifetime of the context listeners of #hookedCanvas (aborted when that canvas is dropped). */
+  #canvasCtl: AbortController | null = null;
+  #io: IntersectionObserver | null = null;
+  #ioMargin = -1;
   #destroyed = false;
   #running = false;
   #unsub: (() => void) | null = null;
@@ -102,8 +117,8 @@ export class PixelLife {
   #readyEmitted = false;
   #drawnSinceMount = false;
   #listeners = new Map<keyof PixelLifeEvents, Set<Listener<never>>>();
-  #pendingChanged = new Set<ParamPath>();
-  #pendingSource: ConfigSource = 'api';
+  /** Ordered per-source batches: consecutive calls of one source merge, another starts anew. */
+  #pending: ConfigBatch[] = [];
   #flushQueued = false;
   #lastNow = -1;
   #skip = 0;
@@ -274,10 +289,20 @@ export class PixelLife {
       get active() {
         return inner.active;
       },
-      update(patch: Partial<InfluenceOptions>) {
+      update(patch: InfluenceUpdate) {
         if (entry.removed) return;
-        const { signal: _s, ...p } = patch;
+        const { signal: _s, cornerRadius, ...p } = patch;
         inner.update(p as InfluenceInit);
+        if (cornerRadius === null) {
+          // Follow the element's border-radius again (re-read on the next measure).
+          binding.autoCorner = true;
+          binding.radiusDirty = true;
+          binding.dirty = true;
+        } else if (cornerRadius !== undefined) {
+          // An explicit radius sticks: auto tracking must not overwrite it on the next read.
+          binding.autoCorner = false;
+          inner.update({ cornerRadius });
+        }
         if (p.x !== undefined || p.y !== undefined) entry.hidden = false;
       },
       dispose: inner.dispose,
@@ -290,6 +315,11 @@ export class PixelLife {
     this.#controller.pulse(opts);
   }
 
+  /**
+   * Lifts cells around a point. Respects the user's accessibility preference: with
+   * `render.reducedMotion: 'respect'` and the OS "reduce motion" setting on, every lift is off
+   * (random ones, pointer hover and explicit lift() calls alike), so this is a no-op then.
+   */
   lift(opts: LiftOptions): void {
     if (this.#destroyed) return;
     this.#controller.lift(opts);
@@ -357,8 +387,10 @@ export class PixelLife {
     this.#unsub = null;
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
-    // Every listener and observer was registered with this signal.
+    // Every listener and observer was registered with this signal (or a per-canvas one).
     this.#ctl.abort();
+    this.#releaseCanvas();
+    this.#io = null;
     this.#tracker.clear();
     this.#pointer.dispose();
     this.#controller.destroy();
@@ -368,7 +400,7 @@ export class PixelLife {
     liveInstances = Math.max(0, liveInstances - 1);
     this.#emit('destroy', undefined);
     this.#listeners.clear();
-    this.#pendingChanged.clear();
+    this.#pending.length = 0;
   }
 
   /** Simulates a context loss (and the browser's restore ~0.5 s later) to test recovery. */
@@ -407,14 +439,26 @@ export class PixelLife {
       this.#sendFallback(
         err instanceof EngineError && err.code !== 'no-webgl2' ? 'compile' : 'no-webgl2',
       );
+      this.#dropFailedCanvas();
+      return;
+    }
+    if (this.#failed || engine.error) {
+      // Failed synchronously inside the constructor (resource creation): #onEngineError already
+      // reported it; do not keep the dead engine (nor its context) around.
+      disposeAndRelease(engine);
+      this.#dropFailedCanvas();
       return;
     }
     this.#engine = engine;
     this.#engineOpaque = cfg.render.overflow <= 0;
     this.#drawnSinceMount = false;
-    const signal = this.#ctl.signal;
+    this.#controller.setMaxDrawableSize(engine.caps.maxDrawableSize);
     if (this.#hookedCanvas !== canvas) {
+      this.#releaseCanvas();
       this.#hookedCanvas = canvas;
+      const ctl = new AbortController();
+      this.#canvasCtl = ctl;
+      const signal = ctl.signal;
       canvas.addEventListener('webglcontextlost', (e) => this.#onContextLost(e, canvas), {
         signal,
       });
@@ -439,19 +483,31 @@ export class PixelLife {
   #disposeEngine(): void {
     const e = this.#engine;
     this.#engine = null;
-    if (!e) return;
-    e.dispose();
-    // Release the context now instead of waiting for GC (browsers cap live contexts at ~16).
-    try {
-      e.loseContextForTesting();
-    } catch {
-      // Already lost.
-    }
+    if (e) disposeAndRelease(e);
+  }
+
+  /** Stops listening to the current canvas (it is being dropped or the instance destroyed). */
+  #releaseCanvas(): void {
+    this.#canvasCtl?.abort();
+    this.#canvasCtl = null;
+    this.#hookedCanvas = null;
+  }
+
+  /** After a failure: no engine, no canvas, only the poster (which follows the config). */
+  #dropFailedCanvas(): void {
+    this.#releaseCanvas();
+    this.#view.unmount();
+    this.#drawnSinceMount = false;
+    this.#view.showPoster(posterCss(this.#controller.getConfig()));
   }
 
   #onEngineError(err: Error): void {
-    if (this.#destroyed) return;
+    if (this.#destroyed || this.#failed) return;
     this.#failed = true;
+    // Release the GPU objects and the context right away (null while still constructing: then
+    // #ensureEngine disposes the engine when the constructor returns).
+    this.#disposeEngine();
+    if (this.#view.canvas) this.#dropFailedCanvas();
     this.#updateSubscription();
     this.#emit('error', err);
     this.#sendFallback('compile');
@@ -470,7 +526,7 @@ export class PixelLife {
   }
 
   #onContextRestored(canvas: HTMLCanvasElement): void {
-    if (this.#destroyed || canvas !== this.#view.canvas) return;
+    if (this.#destroyed || this.#failed || canvas !== this.#view.canvas) return;
     this.#lost = false;
     // The old engine's objects died with the context: rebuild from the controller's state.
     this.#engine?.dispose();
@@ -487,6 +543,9 @@ export class PixelLife {
     this.#unsub?.();
     this.#unsub = null;
     this.#disposeEngine();
+    // The old canvas is dropped: its context listeners must not keep it (and its context
+    // wrapper) reachable from this instance.
+    this.#releaseCanvas();
     this.#view.unmount();
     this.#view.showPoster(posterCss(this.#controller.getConfig()));
     this.#lost = false;
@@ -516,7 +575,7 @@ export class PixelLife {
       this.#unsub();
       this.#unsub = null;
       // Config events must not wait for a frame that will not come.
-      if (this.#pendingChanged.size > 0) this.#queueFlush();
+      if (this.#pending.length > 0) this.#queueFlush();
     }
   }
 
@@ -526,13 +585,20 @@ export class PixelLife {
     let overflow = false;
     let render = false;
     let interaction = false;
+    // One event per source, in call order: an echo filter (`source === mine`) must never drop
+    // another source's changes. Consecutive calls of one source still coalesce.
+    const pending = this.#pending;
+    let batch = pending[pending.length - 1];
+    if (!batch || batch.source !== source) {
+      batch = { source, paths: new Set() };
+      pending.push(batch);
+    }
     for (const p of changed) {
-      this.#pendingChanged.add(p);
+      batch.paths.add(p);
       if (p === 'render.overflow') overflow = true;
       else if (p.startsWith('render.')) render = true;
       else if (p.startsWith('interaction.')) interaction = true;
     }
-    this.#pendingSource = source;
     if (overflow) {
       const opaque = cfg.render.overflow <= 0;
       if (this.#view.canvas && this.#engineOpaque !== null && this.#engineOpaque !== opaque) {
@@ -540,6 +606,7 @@ export class PixelLife {
       } else {
         this.#view.setOverflow(cfg.render.overflow);
       }
+      this.#observeInView();
     }
     if (render) {
       this.#applyReducedMotion();
@@ -560,14 +627,14 @@ export class PixelLife {
   }
 
   #flushConfig(): void {
-    if (this.#pendingChanged.size === 0 || this.#destroyed) return;
-    const changed = [...this.#pendingChanged];
-    this.#pendingChanged.clear();
-    this.#emit('config', {
-      config: this.#controller.getConfig(),
-      changed,
-      source: this.#pendingSource,
-    });
+    if (this.#pending.length === 0 || this.#destroyed) return;
+    const batches = this.#pending;
+    this.#pending = [];
+    const config = this.#controller.getConfig();
+    for (const b of batches) {
+      if (this.#destroyed) return;
+      this.#emit('config', { config, changed: [...b.paths], source: b.source });
+    }
   }
 
   #measure(now: number): void {
@@ -607,8 +674,10 @@ export class PixelLife {
       });
     }
 
-    // maxFps: render every k-th vsync (integer divisor of the refresh rate, even cadence).
-    const vsync = perf.vsyncMs;
+    // maxFps: render every k-th vsync (integer divisor of the refresh rate, even cadence). The
+    // divisor uses the observed cadence, not the sticky refresh estimate: after a drop to a
+    // slower display/OS rate, k must follow it (a 60 Hz cap with maxFps 60 is k = 1, not 2).
+    const vsync = perf.cadenceMs;
     const maxFps = c.getConfig().render.maxFps;
     let k = 1;
     let deltaMs = raw;
@@ -629,6 +698,8 @@ export class PixelLife {
     const t0 = performance.now();
     const inputs = c.update(dt, now);
     const drawn = engine.render(inputs);
+    // A failure inside render() disposed the engine and dropped the canvas.
+    if (this.#engine !== engine) return;
     if (drawn) {
       c.commitFrame();
       if (!this.#drawnSinceMount) {
@@ -717,7 +788,11 @@ export class PixelLife {
     doc.addEventListener(
       'visibilitychange',
       () => {
+        const wasHidden = this.#hidden;
         this.#hidden = doc.visibilityState === 'hidden';
+        // OS power modes (low-power, energy saver) and displays may have changed meanwhile:
+        // re-learn the refresh rate instead of trusting the sticky estimate.
+        if (wasHidden && !this.#hidden) this.#controller.perf.resetVsync();
         this.#updateSubscription();
       },
       { signal },
@@ -727,19 +802,35 @@ export class PixelLife {
       this.#reducedMql.addEventListener('change', () => this.#applyReducedMotion(), { signal });
       this.#applyReducedMotion();
     }
-    if (typeof win.IntersectionObserver === 'function') {
-      const io = new win.IntersectionObserver(
-        (entries) => {
-          const e = entries[entries.length - 1];
-          if (!e) return;
-          this.#inView = e.isIntersecting;
-          this.#updateSubscription();
-        },
-        { rootMargin: '64px' },
-      );
-      io.observe(this.host);
-      signal.addEventListener('abort', () => io.disconnect(), { once: true });
-    }
+    signal.addEventListener('abort', () => this.#io?.disconnect(), { once: true });
+    this.#observeInView();
+  }
+
+  /**
+   * Offscreen pause. The canvas reaches `render.overflow` px beyond the host on every side, so
+   * the margin grows with it: a visible strip of canvas must never freeze. Rebuilt when the
+   * overflow changes.
+   */
+  #observeInView(): void {
+    if (this.#destroyed) return;
+    const win = this.host.ownerDocument.defaultView;
+    if (!win || typeof win.IntersectionObserver !== 'function') return;
+    const margin = IO_MARGIN + Math.max(0, this.#controller.getConfig().render.overflow);
+    if (margin === this.#ioMargin && this.#io) return;
+    this.#ioMargin = margin;
+    this.#io?.disconnect();
+    const io = new win.IntersectionObserver(
+      (entries) => {
+        if (io !== this.#io) return;
+        const e = entries[entries.length - 1];
+        if (!e) return;
+        this.#inView = e.isIntersecting;
+        this.#updateSubscription();
+      },
+      { rootMargin: `${margin}px` },
+    );
+    this.#io = io;
+    io.observe(this.host);
   }
 
   #sendFallback(reason: PixelLifeEvents['fallback']['reason']): void {
@@ -761,6 +852,16 @@ export class PixelLife {
         console.error(err);
       }
     }
+  }
+}
+
+/** Frees an engine's GPU objects and releases its context now instead of waiting for GC. */
+function disposeAndRelease(e: Engine): void {
+  e.dispose();
+  try {
+    e.loseContextForTesting();
+  } catch {
+    // Already lost.
   }
 }
 

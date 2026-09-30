@@ -163,6 +163,7 @@ export class Controller {
     maxPixels: 4.2,
     scale: 1,
     cssPitch: 10,
+    maxDim: 0,
   };
   private readonly infCtx: InfluenceContext;
   private readonly forced = new Float64Array(FORCED_QUEUE * 5);
@@ -376,9 +377,12 @@ export class Controller {
     this.pulses.add(p);
   }
 
-  /** Queues a forced lift (resolved to cells at the next update, when geometry is current). */
+  /**
+   * Queues a forced lift (resolved to cells at the next update, when geometry is current).
+   * Ignored under reduced motion: the user's accessibility preference wins over the caller.
+   */
   lift(req: LiftRequest): void {
-    if (this.destroyed || this.forcedCount >= FORCED_QUEUE) return;
+    if (this.destroyed || this.reducedMotion || this.forcedCount >= FORCED_QUEUE) return;
     const o = this.forcedCount++ * 5;
     this.forced[o] = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
     this.forced[o + 1] = req.x;
@@ -453,8 +457,24 @@ export class Controller {
     this.updateGeometry();
   }
 
+  /**
+   * Largest drawing-buffer side the GL context supports (device px, 0 = unknown). The canvas is
+   * scaled down proportionally so neither side exceeds it.
+   */
+  setMaxDrawableSize(px: number): void {
+    const v = px > 0 && Number.isFinite(px) ? Math.floor(px) : 0;
+    if (v === this.geoIn.maxDim) return;
+    this.geoIn.maxDim = v;
+    this.updateGeometry();
+  }
+
+  /**
+   * Reduced motion (render.reducedMotion 'respect' + the OS setting): the clock slows down and
+   * every lift is off, random ones and forced ones (lift() calls, pointer hover) alike.
+   */
   setReducedMotion(on: boolean): void {
     this.reducedMotion = on;
+    if (on) this.forcedCount = 0;
   }
 
   get isReducedMotion(): boolean {
@@ -571,7 +591,9 @@ export class Controller {
 
     // Lifts (forced first, then the random process), then pulses so landings show this frame.
     const lp = this.fillLiftParams();
-    this.drainForced(lp);
+    // Reduced motion: lifts off, forced ones included (queued before it was switched on).
+    if (rm) this.forcedCount = 0;
+    else this.drainForced(lp);
     const nLift = this.lifts.step(step, lp, g, fr);
     const nPulse = this.pulses.step(step, g, this.clientX, this.clientY, fr);
 

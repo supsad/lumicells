@@ -210,6 +210,30 @@ describe('enum crossfade (color.mapping)', () => {
     expect(f.frame[OFF_MISC + 1]).toBe(1);
   });
 
+  it('reversing mid-transition is continuous (no pop back)', () => {
+    const s = store();
+    const id = s.id('color.mapping');
+    const a = s.num(id);
+    /** Share of enum value `v` on screen: (1 - mix) * prev + mix * index. */
+    const share = (v: number) =>
+      (s.crossfadePrev(id) === v ? 1 - s.crossfadeMix(id) : 0) +
+      (s.num(id) === v ? s.crossfadeMix(id) : 0);
+    for (const frames of [4, 20]) {
+      s.setTarget('color.mapping', 'angular', 600);
+      for (let i = 0; i < frames; i++) s.update(1 / 60);
+      const before = share(a);
+      expect(before).toBeGreaterThan(0);
+      expect(before).toBeLessThan(1);
+      s.setTarget('color.mapping', getDefaults().color.mapping, 600);
+      expect(share(a)).toBeCloseTo(before, 9);
+      // And it keeps fading back toward A from there.
+      s.update(1 / 60);
+      expect(share(a)).toBeGreaterThan(before);
+      run(s, 3);
+      expect(share(a)).toBe(1);
+    }
+  });
+
   it('instant enums (blend) switch without crossfade', () => {
     const c = new Controller({ random: mulberry32(1) });
     c.setConfig({ animation: { blend: 'max' } });

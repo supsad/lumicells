@@ -2,6 +2,12 @@
  * Pointer interaction on the host (config.interaction): a light that follows the pointer, lifts
  * under a hovering pointer and a ripple on click. Events only record client coordinates; the
  * conversion to host space happens in the measure phase with that frame's host rect.
+ *
+ * Click ripples: a mouse press ripples at once (pointerdown). A touch or pen contact ripples on
+ * pointerup of the same pointer, only if no pointercancel arrived and it moved less than
+ * TAP_SLOP px: pointerdown fires before the browser knows the gesture is a pan or a pinch, so
+ * scrolling over an interactive background must not ripple on every swipe.
+ * Hover lifts are off under reduced motion.
  */
 
 import type { Controller, LiftRequest, PulseRequest } from '../controller/controller';
@@ -11,6 +17,8 @@ import type { PixelLifeConfig } from '../types';
 const MAX_CLICKS = 8;
 /** Minimum time between hover lifts, ms. */
 const HOVER_LIFT_MS = 90;
+/** Movement (CSS px) after which a touch/pen contact is a drag, not a tap. */
+const TAP_SLOP = 10;
 
 export class PointerInteraction {
   private ctl: AbortController | null = null;
@@ -26,6 +34,10 @@ export class PointerInteraction {
   private lastLiftAt = Number.NEGATIVE_INFINITY;
   private lastCellX = Number.NaN;
   private lastCellY = Number.NaN;
+  /** Touch/pen contact that may become a tap (pointerId, -1 = none) and where it went down. */
+  private tapId = -1;
+  private tapX = 0;
+  private tapY = 0;
   private readonly cell = new Float64Array(2);
   private readonly pulseReq: PulseRequest = { x: 0, y: 0, space: 'host' };
   private readonly liftReq: LiftRequest = { x: 0, y: 0, space: 'host', count: 1, radius: 0 };
@@ -50,6 +62,13 @@ export class PointerInteraction {
     this.clickOn = click;
     this.ctl?.abort();
     this.ctl = null;
+    // The listeners that tracked these are gone, so their values can no longer be trusted: a
+    // pointer that left meanwhile must not bring the light back at a stale position.
+    this.inside = false;
+    this.lastCellX = Number.NaN;
+    this.lastCellY = Number.NaN;
+    this.tapId = -1;
+    if (this.light) this.light.hidden = true;
     if (!pointer && this.light) {
       this.controller.influences.dispose(this.light);
       this.light = null;
@@ -82,14 +101,50 @@ export class PointerInteraction {
       h.addEventListener(
         'pointerdown',
         (e: PointerEvent) => {
-          if (!e.isPrimary || e.button !== 0 || this.clickCount >= MAX_CLICKS) return;
-          const o = this.clickCount++ * 2;
-          this.clicks[o] = e.clientX;
-          this.clicks[o + 1] = e.clientY;
+          if (!e.isPrimary || e.button !== 0) return;
+          if (e.pointerType === 'mouse' || !e.pointerType) {
+            this.queueClick(e.clientX, e.clientY);
+          } else {
+            this.tapId = e.pointerId;
+            this.tapX = e.clientX;
+            this.tapY = e.clientY;
+          }
+        },
+        opts,
+      );
+      h.addEventListener(
+        'pointermove',
+        (e: PointerEvent) => {
+          if (e.pointerId !== this.tapId) return;
+          if (Math.hypot(e.clientX - this.tapX, e.clientY - this.tapY) > TAP_SLOP) this.tapId = -1;
+        },
+        opts,
+      );
+      h.addEventListener(
+        'pointerup',
+        (e: PointerEvent) => {
+          if (e.pointerId !== this.tapId) return;
+          this.tapId = -1;
+          if (Math.hypot(e.clientX - this.tapX, e.clientY - this.tapY) > TAP_SLOP) return;
+          this.queueClick(this.tapX, this.tapY);
+        },
+        opts,
+      );
+      h.addEventListener(
+        'pointercancel',
+        (e: PointerEvent) => {
+          if (e.pointerId === this.tapId) this.tapId = -1;
         },
         opts,
       );
     }
+  }
+
+  private queueClick(x: number, y: number): void {
+    if (this.clickCount >= MAX_CLICKS) return;
+    const o = this.clickCount++ * 2;
+    this.clicks[o] = x;
+    this.clicks[o + 1] = y;
   }
 
   /** Measure phase: host padding-box origin in client px (NaN when not read). */
@@ -118,7 +173,7 @@ export class PointerInteraction {
     light.falloff = c.getEffective('interaction.pointerRadius') * 0.5;
     light.strength = c.getEffective('interaction.pointerStrength');
     light.hidden = false;
-    if (this.liftOn && now - this.lastLiftAt >= HOVER_LIFT_MS) {
+    if (this.liftOn && !c.isReducedMotion && now - this.lastLiftAt >= HOVER_LIFT_MS) {
       c.cellAt(SPACE_HOST, x, y, this.cell);
       const cx = this.cell[0] as number;
       const cy = this.cell[1] as number;

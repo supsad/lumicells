@@ -95,6 +95,28 @@ describe('PixelLife without WebGL2', () => {
     pl.destroy();
   });
 
+  it('changes from different sources are never attributed to one another', async () => {
+    const pl = new PixelLife(host(), { autoStart: false });
+    const events: PixelLifeEvents['config'][] = [];
+    pl.on('config', (e) => events.push(e));
+    pl.set('grid.count', 40, { source: 'api' });
+    pl.set('background.color', '#ff0000', { source: 'attribute' });
+    pl.setConfig({ grid: { gap: 0.3 } }, { source: 'attribute' });
+    pl.set('glow.bloom.strength', 1.2);
+    // Never synchronously inside the setters.
+    expect(events.length).toBe(0);
+    await tick();
+    expect(events.map((e) => [e.source, e.changed])).toEqual([
+      ['api', ['grid.count']],
+      ['attribute', ['background.color', 'grid.gap']],
+      ['api', ['glow.bloom.strength']],
+    ]);
+    // An echo filter drops only its own source's changes.
+    const foreign = events.filter((e) => e.source !== 'attribute').flatMap((e) => e.changed);
+    expect(foreign).toEqual(['grid.count', 'glow.bloom.strength']);
+    pl.destroy();
+  });
+
   it('replaceConfig resets to defaults plus the given config; exportConfig diffs', () => {
     const pl = new PixelLife(host(), { config: { grid: { gap: 0.4 } }, autoStart: false });
     pl.replaceConfig({ extends: 'rain' });

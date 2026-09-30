@@ -215,10 +215,20 @@ export class ParamStore {
       case K_XFADE: {
         const idx = this.enumIndex(e, value);
         if (idx === e.index) return;
-        // Crossfade from whatever dominates the screen right now.
-        e.prev = (this.cur[o] ?? 1) >= 0.5 ? e.index : e.prev;
-        e.index = idx;
-        this.cur[o] = 0;
+        const mix = this.cur[o] ?? 1;
+        if (idx === e.prev && mix < 1) {
+          // Reversal mid-transition: swap the slots and mirror the mix so the blend on screen
+          // stays exactly where it is and fades back from there.
+          e.prev = e.index;
+          e.index = idx;
+          this.cur[o] = 1 - mix;
+        } else {
+          // A third value: crossfade from whatever dominates the screen right now (two slots
+          // cannot hold a three-way blend).
+          e.prev = mix >= 0.5 ? e.index : e.prev;
+          e.index = idx;
+          this.cur[o] = 0;
+        }
         this.tgt[o] = 1;
         this.refresh(e);
         break;
@@ -255,6 +265,7 @@ export class ParamStore {
         const m = mods[j] as Modulator;
         if (m.disposed) continue;
         m.sample(dt);
+        if (!m.primed) continue;
         const sv = m.value;
         if (m.blend === 1) v *= sv;
         else if (m.blend === 2) v = sv;

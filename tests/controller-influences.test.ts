@@ -152,6 +152,23 @@ describe('influence lifetimes', () => {
     expect(c.influences.size).toBe(0);
   });
 
+  it('disposing an entry without a GPU slot frees it at once (no growth while not rendering)', () => {
+    const { c } = controller();
+    // Never stepped, as while the instance is stopped, paused or offscreen.
+    for (let i = 0; i < 1000; i++) c.addInfluence({ x: i, y: 0, space: 'client' }).dispose();
+    const list = (c.influences as unknown as { list: unknown[] }).list;
+    expect(list.length).toBe(0);
+    expect(c.influences.needsClientOrigin).toBe(false);
+    // A slot holder still fades out first.
+    const h = c.addInfluence({ x: 1, y: 1, fadeOutMs: 100 });
+    c.update(1 / 60);
+    expect(h.active).toBe(true);
+    h.dispose();
+    expect(list.length).toBe(1);
+    for (let i = 0; i < 10; i++) c.update(1 / 60);
+    expect(list.length).toBe(0);
+  });
+
   it('an AbortSignal disposes the influence', () => {
     const { c } = controller();
     const ac = new AbortController();

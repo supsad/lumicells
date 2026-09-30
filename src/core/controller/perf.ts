@@ -7,10 +7,16 @@
  * - the metric is the GPU timer (budget 0.75 x vsync) when available, else the share of missed
  *   vsyncs, and only when our own CPU work is small (otherwise it is jank, not GPU load);
  * - the refresh estimate is sticky (fastest rate seen), so a GPU that halves the frame rate for
- *   good still counts as missing vsyncs instead of looking like a 30 Hz display;
+ *   good still counts as missing vsyncs instead of looking like a 30 Hz display. It rises again
+ *   only on clear evidence that the display/OS sets the slower pace: most of a full window at
+ *   one slower rate while our own cost is small (GPU timer), or while locked (no GPU timer);
+ *   resetVsync() (display change, resume from a hidden tab) forgets it;
  * - two consecutive steps down that do not reduce misses mean the OS/display caps the rate:
- *   revert and lock (one step alone may simply not be enough for a heavy load);
- * - a step up that brings misses back is reverted and that level is blacklisted for 30 s.
+ *   revert and lock (one step alone may simply not be enough for a heavy load). The lock
+ *   expires after a few minutes (and on resetVsync) so later GPU overload is still handled;
+ * - a step up that brings misses back is reverted and that level is blacklisted, with an
+ *   exponential backoff per level (30 s, 60 s, ... capped at 5 min) that resets once the level
+ *   holds.
  */
 
 import type { RenderQuality } from '../engine/types';
@@ -41,6 +47,11 @@ const STEP_UP_AFTER = 5000;
 const MIN_INTERVAL = 2000;
 const VERIFY_AFTER = 2000;
 const BLACKLIST_MS = 30000;
+const MAX_BLACKLIST_MS = 300000;
+/** How long a 'locked' decision stands before adaptation probes again, ms. */
+export const LOCK_MS = 180000;
+/** Share of a full window at one slower rate that counts as a display/OS cap. */
+const RISE_SHARE = 0.8;
 
 export type PerfReason = 'slow' | 'recovered' | 'locked';
 
@@ -72,6 +83,11 @@ export class PerfController {
   level = 0;
   locked = false;
   vsyncMs = 16.67;
+  /**
+   * Dominant rAF cadence in the window (ms): the interval frames actually arrive at. Unlike the
+   * sticky vsyncMs it follows a display that got slower, so frame pacing (maxFps) uses it.
+   */
+  cadenceMs = 16.67;
   missRatio = 0;
   frameMs = 16.67;
   fps = 60;
@@ -81,6 +97,9 @@ export class PerfController {
   private readonly cand = new Int8Array(PERF_WINDOW);
   private readonly counts = new Int32Array(VSYNC_CANDIDATES.length);
   private readonly blacklist = new Float64Array(QUALITY_LEVELS.length);
+  /** Failed step-ups per level (exponential blacklist backoff), reset when the level holds. */
+  private readonly fails = new Uint8Array(QUALITY_LEVELS.length);
+  private lockedUntil = 0;
   private head = 0;
   private n = 0;
   private sum = 0;
@@ -125,14 +144,23 @@ export class PerfController {
       this.verify = VERIFY_NONE;
       this.noGain = 0;
       this.blacklist.fill(0);
+      this.fails.fill(0);
       this.resetWindow();
     }
     return q !== this.quality || s !== this.scale;
   }
 
-  /** Forgets the sticky refresh estimate (e.g. the window moved to another display). */
+  /**
+   * Forgets the sticky refresh estimate and every conclusion drawn from it: the lock, the
+   * no-gain streak and the step-up backoff (the window moved to another display, the DPR
+   * changed, or the page resumes from a hidden tab where OS power modes may have changed).
+   */
   resetVsync(): void {
     this.bestVsync = Number.POSITIVE_INFINITY;
+    this.locked = false;
+    this.noGain = 0;
+    this.blacklist.fill(0);
+    this.fails.fill(0);
     this.resetWindow();
   }
 
@@ -167,6 +195,10 @@ export class PerfController {
     this.head = (this.head + 1) % PERF_WINDOW;
 
     const n = this.n;
+    this.cpuMs += (Math.max(0, cpuMs) - this.cpuMs) * 0.1;
+    if (gpuMs !== null && Number.isFinite(gpuMs)) {
+      this.gpuMs = this.gpuMs === null ? gpuMs : this.gpuMs + (gpuMs - this.gpuMs) * 0.1;
+    }
     if (n >= 20) {
       // The fastest rate that a fair share of frames hit is the display refresh; slower
       // clusters are missed vsyncs (a 120 Hz panel running at 60 still reports 8.33 frames).
@@ -182,11 +214,13 @@ export class PerfController {
         }
       }
       if (vs < 0) vs = maxI;
+      if (maxI >= 0) this.cadenceMs = VSYNC_CANDIDATES[maxI] as number;
       if (vs >= 0) {
         const est = VSYNC_CANDIDATES[vs] as number;
         if (n >= 30 && est < this.bestVsync) this.bestVsync = est;
         this.vsyncMs = Math.min(est, this.bestVsync);
       }
+      if (n === PERF_WINDOW && maxI >= 0 && maxC >= RISE_SHARE * n) this.maybeRise(maxI);
     }
     const limit = 1.5 * this.vsyncMs;
     let miss = 0;
@@ -194,21 +228,23 @@ export class PerfController {
     this.missRatio = n > 0 ? miss / n : 0;
     this.frameMs = n > 0 ? this.sum / n : d;
     this.fps = 1000 / this.frameMs;
-    this.cpuMs += (Math.max(0, cpuMs) - this.cpuMs) * 0.1;
-    if (gpuMs !== null && Number.isFinite(gpuMs)) {
-      this.gpuMs = this.gpuMs === null ? gpuMs : this.gpuMs + (gpuMs - this.gpuMs) * 0.1;
-    }
 
+    if (this.locked && now >= this.lockedUntil) this.locked = false;
     if (this.mode !== 'auto' || this.locked) return null;
     const vsync = this.vsyncMs;
     const gpu = this.gpuMs;
 
     if (this.verify === VERIFY_UP) {
-      if (now - this.verifyAt >= VERIFY_AFTER) this.verify = VERIFY_NONE;
-      else if (n >= 30) {
+      if (now - this.verifyAt >= VERIFY_AFTER) {
+        // The step up held: forget this level's failures.
+        this.verify = VERIFY_NONE;
+        this.fails[this.level] = 0;
+      } else if (n >= 30) {
         const slowish = gpu !== null ? gpu > 0.75 * vsync : this.missRatio > 0.15;
         if (slowish) {
-          this.blacklist[this.level] = now + BLACKLIST_MS;
+          const f = this.fails[this.level] as number;
+          this.blacklist[this.level] = now + Math.min(BLACKLIST_MS * 2 ** f, MAX_BLACKLIST_MS);
+          this.fails[this.level] = Math.min(16, f + 1);
           return this.apply(this.verifyFrom, now, 'slow');
         }
       }
@@ -224,8 +260,11 @@ export class PerfController {
         if (this.noGain++ === 0) this.streakFrom = this.verifyFrom;
         if (this.noGain >= 2) {
           // Fewer pixels did not help: something else (display cap, OS throttling) sets the pace.
+          // Re-learn the refresh rate from here on, and probe again after LOCK_MS.
           this.locked = true;
+          this.lockedUntil = now + LOCK_MS;
           this.noGain = 0;
+          this.bestVsync = Number.POSITIVE_INFINITY;
           return this.apply(this.streakFrom, now, 'locked');
         }
       }
@@ -264,6 +303,27 @@ export class PerfController {
       return ch;
     }
     return null;
+  }
+
+  /**
+   * Most of a full window arrives at candidate `i`. If that is slower than the sticky estimate
+   * and our own cost is small, the display or the OS (low-power mode, energy saver, a 60 Hz
+   * monitor) sets the pace, not our GPU: adopt the slower rate.
+   */
+  private maybeRise(i: number): void {
+    const slower = VSYNC_CANDIDATES[i] as number;
+    if (!(slower > this.bestVsync * 1.1)) return;
+    const gpu = this.gpuMs;
+    const small =
+      gpu !== null
+        ? gpu < 0.5 * slower && this.cpuMs < 0.5 * slower
+        : this.locked && this.cpuMs < 0.3 * slower;
+    if (!small) return;
+    this.bestVsync = slower;
+    this.vsyncMs = slower;
+    this.missRatio = 0;
+    this.noGain = 0;
+    this.resetWindow();
   }
 
   private apply(level: number, now: number, reason: PerfReason): PerfChange {

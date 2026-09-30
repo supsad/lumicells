@@ -82,11 +82,19 @@ export interface Handle {
   [Symbol.dispose](): void;
 }
 
+/**
+ * Patch for `InfluenceHandle.update()`. `cornerRadius: null` resets the corner radius: for a
+ * bound element it follows the element's border-radius again; an explicit number sticks.
+ */
+export type InfluenceUpdate = Omit<Partial<InfluenceOptions>, 'cornerRadius'> & {
+  cornerRadius?: number | null;
+};
+
 export interface InfluenceHandle extends Handle {
   readonly id: number;
   /** True while the influence occupies a GPU slot. */
   readonly active: boolean;
-  update(patch: Partial<InfluenceOptions>): void;
+  update(patch: InfluenceUpdate): void;
 }
 
 export interface BindElementOptions
@@ -118,6 +126,11 @@ export interface PulseOptions {
   duration?: number;
 }
 
+/**
+ * A forced lift. Like the random ones, forced lifts respect the user's accessibility
+ * preference: with `render.reducedMotion: 'respect'` and the OS "reduce motion" setting on,
+ * `lift()` is a no-op (and pointer hover lifts are off).
+ */
 export interface LiftOptions {
   x: number;
   y: number;
@@ -171,7 +184,12 @@ export interface PixelLifeEvents {
   /** Emitted about 4 times per second. */
   stats: Stats;
   resize: { width: number; height: number; cols: number; rows: number; dpr: number; scale: number };
-  /** Coalesced once per frame with the union of changed paths. */
+  /**
+   * Coalesced per frame (or per microtask when not rendering), never synchronously inside the
+   * setter: consecutive changes of one source are merged into one event with the union of
+   * their paths; a change from another source starts a new event, so every event carries only
+   * its own source's paths (listeners can safely ignore their own echoes by `source`).
+   */
   config: { config: Readonly<PixelLifeConfig>; changed: ParamPath[]; source: ConfigSource };
   quality: { scale: number; quality: QualityTier; reason: 'slow' | 'recovered' | 'locked' };
   warn: { code: string; message: string };

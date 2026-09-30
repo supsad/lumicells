@@ -27,6 +27,15 @@ export interface GLCaps {
   readonly timerQuery: TimerQueryExt | null;
   readonly loseContext: WEBGL_lose_context | null;
   readonly maxTextureSize: number;
+  readonly maxRenderbufferSize: number;
+  /** MAX_VIEWPORT_DIMS [width, height]. */
+  readonly maxViewportDims: readonly [number, number];
+  /**
+   * Largest drawing-buffer side that is safe to request: min of MAX_TEXTURE_SIZE,
+   * MAX_RENDERBUFFER_SIZE and both MAX_VIEWPORT_DIMS. Larger canvases are silently shrunk by
+   * the browser, so the controller clamps the geometry to this instead.
+   */
+  readonly maxDrawableSize: number;
   readonly maxDrawBuffers: number;
   readonly maxUniformBlockSize: number;
   readonly renderer: string;
@@ -81,6 +90,14 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
     gl.getExtension('EXT_color_buffer_float') ?? gl.getExtension('EXT_color_buffer_half_float');
   const hdr = !forceRgba8 && !!floatExt && isRenderable(gl, half);
   const renderer = readRenderer(gl);
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+  const maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
+  const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as ArrayLike<number> | null;
+  const maxViewportDims: [number, number] = [Number(vp?.[0] ?? 0), Number(vp?.[1] ?? 0)];
+  let maxDrawableSize = Number.POSITIVE_INFINITY;
+  for (const v of [maxTextureSize, maxRenderbufferSize, maxViewportDims[0], maxViewportDims[1]]) {
+    if (v > 0 && Number.isFinite(v)) maxDrawableSize = Math.min(maxDrawableSize, v);
+  }
   return {
     hdr,
     hdrFormat: hdr ? half : rgba8,
@@ -88,7 +105,11 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
     parallelCompile: gl.getExtension('KHR_parallel_shader_compile'),
     timerQuery: gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null,
     loseContext: gl.getExtension('WEBGL_lose_context'),
-    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,
+    maxTextureSize,
+    maxRenderbufferSize,
+    maxViewportDims,
+    // 0 = unknown (a driver that reports nothing): no clamp.
+    maxDrawableSize: Number.isFinite(maxDrawableSize) ? maxDrawableSize : 0,
     maxDrawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS) as number,
     maxUniformBlockSize: gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE) as number,
     renderer,

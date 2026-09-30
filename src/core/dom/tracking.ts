@@ -8,7 +8,9 @@
  * - `auto`   reads only while something may have moved it: its ResizeObserver, scroll, window
  *            resize, running CSS transitions/animations, Web Animations, plus a slow safety poll;
  * - `manual` never reads the DOM (the caller moves the handle in host space).
- * A binding whose element stays disconnected for 2 consecutive frames disposes itself.
+ * A binding whose element stays disconnected for 2 consecutive frames disposes itself, and so
+ * does one whose influence left the registry on its own (ttlMs expiry). An element that is not
+ * rendered (display:none, [hidden], closed <details>) hides its influence until it has a box.
  */
 
 import type { Influence, InfluenceRegistry } from '../controller/influences';
@@ -41,8 +43,11 @@ export class Binding {
     readonly entry: Influence,
     readonly mode: number,
     readonly padding: number,
-    /** Corner radius follows the element's border-radius (no explicit cornerRadius given). */
-    readonly autoCorner: boolean,
+    /**
+     * Corner radius follows the element's border-radius (no explicit cornerRadius given).
+     * Mutable: handle.update({ cornerRadius }) turns it off, `cornerRadius: null` back on.
+     */
+    public autoCorner: boolean,
     readonly onLost: () => void,
   ) {
     this.ctl = mode === MODE_AUTO ? new AbortController() : null;
@@ -69,6 +74,8 @@ export class ElementTracker {
     const l = this.list;
     for (let i = 0; i < l.length; i++) {
       const b = l[i] as Binding;
+      // Expired (ttlMs) or fading out: nothing left to place.
+      if (b.entry.removed || b.entry.disposing) continue;
       if (b.mode === MODE_FRAME) return true;
       if (
         b.mode === MODE_AUTO &&
@@ -147,6 +154,13 @@ export class ElementTracker {
     const l = this.list;
     for (let i = l.length - 1; i >= 0; i--) {
       const b = l[i] as Binding;
+      if (b.entry.removed) {
+        // The registry dropped the influence on its own (ttlMs): release the DOM side too.
+        this.remove(b);
+        b.onLost();
+        continue;
+      }
+      if (b.entry.disposing) continue;
       if (!b.el.isConnected) {
         if (++b.lost >= 2) {
           this.remove(b);
@@ -182,9 +196,17 @@ export class ElementTracker {
   // -------------------------------------------------------------------------------------------
 
   private read(b: Binding, hostX: number, hostY: number): void {
-    const r = b.el.getBoundingClientRect();
     b.dirty = false;
     b.sinceRead = 0;
+    if (b.el.getClientRects().length === 0) {
+      // Not rendered (display:none, [hidden], closed <details>): its rect is all zeros, which
+      // would cast the influence at the viewport corner. Hide it; the ResizeObserver or the
+      // safety poll brings it back on the next read that finds a box.
+      b.entry.hidden = true;
+      b.radiusDirty = true;
+      return;
+    }
+    const r = b.el.getBoundingClientRect();
     if (b.radiusDirty) {
       b.radiusDirty = false;
       b.radius = readRadius(b.el, r.width, r.height);
@@ -231,9 +253,20 @@ export class ElementTracker {
   }
 }
 
+/**
+ * Animations that can still move the element. getAnimations() also returns finished ones that
+ * keep applying through fill 'forwards'/'both' (a very common entrance pattern); counting those
+ * would read layout every frame for the rest of the session.
+ */
 function hasAnimations(el: Element): boolean {
   const fn = (el as Element & { getAnimations?: () => Animation[] }).getAnimations;
-  return typeof fn === 'function' ? fn.call(el).length > 0 : false;
+  if (typeof fn !== 'function') return false;
+  const list = fn.call(el);
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i] as Animation;
+    if (a.playState === 'running' || a.pending) return true;
+  }
+  return false;
 }
 
 function readRadius(el: Element, w: number, h: number): number {

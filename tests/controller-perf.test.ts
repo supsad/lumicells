@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type PerfChange, PerfController, QUALITY_LEVELS } from '../src/core/controller/perf';
+import {
+  LOCK_MS,
+  type PerfChange,
+  PerfController,
+  QUALITY_LEVELS,
+} from '../src/core/controller/perf';
 
 /** Feeds `seconds` of frames produced by `delta(level, i)`; returns the changes seen. */
 function drive(
@@ -147,5 +152,85 @@ describe('fixed quality', () => {
     expect(p.scale).toBe(1);
     p.setMode('auto');
     expect(p.quality).toBe('high');
+  });
+});
+
+describe('adaptive quality recovers from stale conclusions', () => {
+  const MISSES = [0.6, 0.5, 0.4, 0.3, 0, 0, 0];
+  const loaded = (level: number, i: number) => pattern(MISSES[level] ?? 0, i);
+
+  it('the lock expires after LOCK_MS and resetVsync() clears it', () => {
+    const p = new PerfController();
+    const capped = (_l: number, i: number) => pattern(0.5, i);
+    const r1 = drive(p, 15, capped);
+    expect(p.locked).toBe(true);
+    // Still locked a while later...
+    const r2 = drive(p, 60, capped, { t0: r1.now });
+    expect(r2.changes.length).toBe(0);
+    // ...but not for the rest of the session: later overload is handled again.
+    const r3 = drive(p, LOCK_MS / 1000, capped, { t0: r2.now });
+    expect(r3.changes.some((c) => c.reason === 'slow')).toBe(true);
+    // A display change (or resume from a hidden tab) forgets the lock at once.
+    const q = new PerfController();
+    const s1 = drive(q, 15, capped);
+    expect(q.locked).toBe(true);
+    q.resetVsync();
+    expect(q.locked).toBe(false);
+    const s2 = drive(q, 5, capped, { t0: s1.now });
+    expect(s2.changes[0]?.reason).toBe('slow');
+  });
+
+  it('failed step-ups back off exponentially per level (no endless 30 s flip-flop)', () => {
+    const p = new PerfController();
+    const r1 = drive(p, 16, loaded);
+    const r2 = drive(p, 260, loaded, { t0: r1.now });
+    const ups = r2.changes.filter((c) => c.reason === 'recovered').map((c) => c.at);
+    expect(ups.length).toBeGreaterThanOrEqual(3);
+    expect(ups.length).toBeLessThanOrEqual(4);
+    const gap1 = (ups[1] ?? 0) - (ups[0] ?? 0);
+    const gap2 = (ups[2] ?? 0) - (ups[1] ?? 0);
+    expect(gap1).toBeGreaterThanOrEqual(30000);
+    expect(gap2).toBeGreaterThanOrEqual(60000);
+    expect(gap2).toBeGreaterThan(gap1 * 1.6);
+  });
+
+  it('a slower display with a small GPU cost raises the refresh estimate (GPU timer)', () => {
+    const p = new PerfController();
+    const r1 = drive(p, 3, (_l, i) => 6.94 + (i % 2 ? 0.2 : -0.2), { gpu: () => 2 });
+    expect(p.vsyncMs).toBe(6.94);
+    // Moved to a 60 Hz monitor at the same DPR.
+    const r2 = drive(p, 5, () => 16.67, { gpu: () => 2, t0: r1.now });
+    expect(p.vsyncMs).toBe(16.67);
+    expect(p.cadenceMs).toBe(16.67);
+    expect(p.missRatio).toBeLessThan(0.05);
+    expect(r2.changes.length).toBe(0);
+    // A GPU that really is too slow for the display does not raise it.
+    const q = new PerfController();
+    const s1 = drive(q, 3, () => 16.67, { gpu: () => 5 });
+    drive(q, 5, () => 33.33, { gpu: () => 24, t0: s1.now });
+    expect(q.vsyncMs).toBe(16.67);
+    expect(q.cadenceMs).toBe(33.33);
+  });
+
+  it('an OS cap without a GPU timer is learned once locked (misses stop)', () => {
+    const p = new PerfController();
+    const r1 = drive(p, 2, () => 16.67);
+    // Energy saver / low-power mode: rAF drops to 30 Hz for good.
+    const r2 = drive(p, 20, () => 33.33, { t0: r1.now });
+    expect(r2.changes.map((c) => c.reason)).toEqual(['slow', 'slow', 'locked']);
+    expect(p.level).toBe(0);
+    expect(p.vsyncMs).toBe(33.33);
+    expect(p.missRatio).toBe(0);
+    // Even after the lock expires nothing flips: the rate is the display's.
+    const r3 = drive(p, LOCK_MS / 1000 + 20, () => 33.33, { t0: r2.now });
+    expect(r3.changes.length).toBe(0);
+  });
+
+  it('cadenceMs follows the dominant rAF interval', () => {
+    const p = new PerfController();
+    drive(p, 2, () => 8.33);
+    expect(p.cadenceMs).toBe(8.33);
+    drive(p, 3, () => 16.67, { t0: 2000 });
+    expect(p.cadenceMs).toBe(16.67);
   });
 });

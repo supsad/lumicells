@@ -112,6 +112,30 @@ describe('grid geometry', () => {
     expect(capped.canvasW).toBe(667);
   });
 
+  it('clamps the drawing buffer to the GL size limit proportionally (tall hosts)', () => {
+    // A 390 x 20000 page background on a DPR 3 phone with the coarse 2.4 Mpx budget.
+    const free = geo({ hostCssW: 390, hostCssH: 20000, dpr: 3, maxDpr: 3, maxPixels: 2.4 });
+    expect(free.canvasH).toBeGreaterThan(8192);
+    const g = geo({
+      hostCssW: 390,
+      hostCssH: 20000,
+      dpr: 3,
+      maxDpr: 3,
+      maxPixels: 2.4,
+      maxDim: 8192,
+    });
+    expect(g.canvasH).toBe(8192);
+    expect(g.canvasW).toBeLessThanOrEqual(8192);
+    // Same scale on both axes: cells stay square and the grid stays centered.
+    expect(g.sx).toBeCloseTo(g.sy, 2);
+    expect(g.effDpr).toBeCloseTo(8192 / 20000, 6);
+    // Wide hosts too, and a limit above the request changes nothing.
+    const wide = geo({ hostCssW: 60000, hostCssH: 1440, dpr: 2, maxPixels: 12, maxDim: 16384 });
+    expect(wide.canvasW).toBe(16384);
+    const roomy = geo({ hostCssW: 1000, hostCssH: 600, maxDim: 16384 });
+    expect(roomy.canvasW).toBe(geo({ hostCssW: 1000, hostCssH: 600 }).canvasW);
+  });
+
   it('reports changes only when something changed', () => {
     const g = createGeometry();
     expect(computeGeometry(input(), g)).toBe(true);
@@ -181,6 +205,16 @@ describe('controller geometry', () => {
     expect(fr[OFF_SPACE + 3]).toBeCloseTo(g.pitchPx / 300, 6);
     expect(f.opaque).toBe(false);
     expect(f.canvasWidth).toBe(1040);
+  });
+
+  it('setMaxDrawableSize clamps the canvas to the GL limit', () => {
+    const c = controller({ render: { maxPixels: 12 } });
+    c.setViewport({ hostCssW: 1440, hostCssH: 60000, dpr: 2, deviceW: 0, deviceH: 0 });
+    expect(c.geo.canvasH).toBeGreaterThan(16384);
+    c.setMaxDrawableSize(16384);
+    expect(c.geo.canvasH).toBe(16384);
+    const f = c.update(1 / 60);
+    expect(f.canvasHeight).toBe(16384);
   });
 
   it('pixel cap (coarse pointer / software GL) lowers the effective DPR', () => {

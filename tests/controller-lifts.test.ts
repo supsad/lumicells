@@ -237,6 +237,22 @@ describe('controller lifts', () => {
     expect(cells.size).toBe(6);
   });
 
+  it('reduced motion turns forced lifts off too (lift() calls, pointer hover)', () => {
+    const c = new Controller({ random: mulberry32(2), config: { lift: { enabled: false } } });
+    c.setViewport({ hostCssW: 620, hostCssH: 620, dpr: 1, deviceW: 0, deviceH: 0 });
+    // Queued before reduced motion was switched on: dropped as well.
+    c.lift({ x: 100, y: 100, count: 3 });
+    c.setReducedMotion(true);
+    c.lift({ x: 200, y: 150, count: 5 });
+    for (let i = 0; i < 20; i++) c.update(1 / 60);
+    expect(c.lifts.count).toBe(0);
+    expect(c.lifts.written).toBe(0);
+    c.setReducedMotion(false);
+    c.lift({ x: 200, y: 150, count: 5 });
+    for (let i = 0; i < 20; i++) c.update(1 / 60);
+    expect(c.lifts.count).toBe(5);
+  });
+
   it('reduced motion stops random lifts; the cap is MAX_LIFTS', () => {
     const c = new Controller({ random: mulberry32(2), config: { lift: { amount: 0.06 } } });
     c.setViewport({ hostCssW: 1200, hostCssH: 800, dpr: 1, deviceW: 0, deviceH: 0 });

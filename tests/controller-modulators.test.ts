@@ -49,6 +49,14 @@ describe('composeModulators', () => {
     expect(composeModulators(0, [fn], 0)).toBe(2);
   });
 
+  it('an unprimed modulator (no finite reading yet) is the identity for every blend', () => {
+    for (const blend of ['add', 'mul', 'override', 'max'] as const) {
+      const m = new Modulator(() => Number.NaN, blend);
+      expect(composeModulators(-2, [m], 0)).toBe(-2);
+      expect(m.primed).toBe(false);
+    }
+  });
+
   it('smooths with the given half-life', () => {
     let target = 0;
     const m = new Modulator(() => target, 'add', 100);
@@ -73,6 +81,19 @@ describe('Controller.modulate', () => {
     h.set(0.4);
     c.update(1 / 60);
     expect(c.getEffective(RADIUS)).toBeCloseTo(1.08, 6);
+  });
+
+  it('skips a source that has not produced a finite value yet (mul/override do not zero it)', () => {
+    const c = controller();
+    let level = Number.NaN;
+    c.modulate(RADIUS, () => level, { blend: 'mul' });
+    c.modulate(RADIUS, () => level, { blend: 'override' });
+    const f = c.update(1 / 60);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.68, 6);
+    expect(f.params[slot(RADIUS)]).toBeCloseTo(0.68, 6);
+    level = 0.5;
+    c.update(1 / 60);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.5, 6);
   });
 
   it('keeps modulating while the base tweens', () => {

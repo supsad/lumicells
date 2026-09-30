@@ -24,6 +24,11 @@ export interface GeometryInput {
   scale: number;
   /** Desired cell pitch in CSS px (grid.pitch or shorter side / grid.count). */
   cssPitch: number;
+  /**
+   * Largest drawing-buffer side the GL context supports, device px (min of MAX_TEXTURE_SIZE,
+   * MAX_RENDERBUFFER_SIZE and MAX_VIEWPORT_DIMS). 0 / undefined: no limit known.
+   */
+  maxDim?: number;
 }
 
 export interface Geometry {
@@ -103,7 +108,14 @@ export function computeGeometry(inp: GeometryInput, out: Geometry): boolean {
   const cssW = Math.max(1, inp.hostCssW + 2 * ov);
   const cssH = Math.max(1, inp.hostCssH + 2 * ov);
   const dpr = inp.dpr > 0 ? inp.dpr : 1;
-  const eff = effectiveDpr(dpr, inp.maxDpr, inp.maxPixels, cssW, cssH, inp.scale);
+  let eff = effectiveDpr(dpr, inp.maxDpr, inp.maxPixels, cssW, cssH, inp.scale);
+  // The pixel budget limits the area only: a tall or extreme-aspect host can still ask for a
+  // side the GPU cannot allocate (the browser would silently shrink the buffer and the grid
+  // would come out cut off and non-square). Scale both sides down proportionally instead.
+  const maxDim = inp.maxDim !== undefined && inp.maxDim > 0 ? inp.maxDim : 0;
+  if (maxDim > 0 && (cssW * eff > maxDim || cssH * eff > maxDim)) {
+    eff = Math.min(eff, maxDim / cssW, maxDim / cssH);
+  }
   let cw: number;
   let ch: number;
   if (
@@ -120,6 +132,10 @@ export function computeGeometry(inp: GeometryInput, out: Geometry): boolean {
   } else {
     cw = Math.max(1, Math.round(cssW * eff));
     ch = Math.max(1, Math.round(cssH * eff));
+    if (maxDim > 0) {
+      cw = Math.min(cw, maxDim);
+      ch = Math.min(ch, maxDim);
+    }
   }
   const sx = cw / cssW;
   const sy = ch / cssH;
