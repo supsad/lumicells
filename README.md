@@ -1,73 +1,115 @@
-# LumiCells
+**English** | [Русский](README.ru.md)
 
-Живой фон из неоновых пикселей на WebGL2 со стендом настройки и конфигурационным файлом.
+<h1 align="center">LumiCells</h1>
 
-Сетка светящихся ячеек складывается в кольца, сферы, волны или «жизнь» Конвея. У пикселей аккуратное свечение, отдельные пиксели всплывают над плоскостью, а фон реагирует на элементы страницы вокруг: баблы подсвечивают сетку своим цветом, клики пускают волны, наведение поднимает пиксели.
+<p align="center">
+  <b>A live neon pixel-grid background for the web.</b><br />
+  WebGL2 · 8 blendable animation modes · reacts to your page · zero runtime dependencies
+</p>
 
-Что входит в проект:
+<p align="center">
+  <a href="https://supsad.github.io/lumicells/"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-open%20the%20playground-e0267a?style=flat-square" /></a>
+  <img alt="WebGL2" src="https://img.shields.io/badge/WebGL2-shaders-0476ff?style=flat-square" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-typed%20API-3178c6?style=flat-square" />
+  <img alt="Zero dependencies" src="https://img.shields.io/badge/runtime%20deps-0-19e6d0?style=flat-square" />
+</p>
 
-- **Ядро** (`lumicells`): класс `LumiCells`, TypeScript, ноль зависимостей.
-- **React-обёртка** (`lumicells/react`): компонент `<LumiCells>` и хуки.
-- **Web Component** (`lumicells/element`): тег `<lumi-cells>` для любого стека, в том числе чистого HTML.
-- **Стенд** на Vite: ручки для всех параметров, пресеты, экспорт и импорт конфига, демо-сцена с баблами.
+<p align="center">
+  <a href="https://supsad.github.io/lumicells/">
+    <img src="docs/media/hero.webp" width="960" alt="LumiCells demo scene: a glowing grid of neon cells forms a rotating sphere behind floating topic bubbles; clicks send rings through the grid and the bubbles fly out and back in" />
+  </a>
+</p>
 
-## Быстрый старт
+A grid of glowing cells forms rings, spheres, waves, spirals, rain or Conway's Life. The glow
+is soft and layered, single pixels pop out of the plane, and the background responds to the page
+around it: buttons tint the grid with their own color, clicks send ripples, hovering lifts pixels.
+Use it from React, as a `<lumi-cells>` Web Component, or with plain TypeScript.
 
-```bash
-npm install
-npm run dev
-```
+## Live demo
 
-Откроется стенд на `http://localhost:5173/`. Другие страницы:
+**[supsad.github.io/lumicells](https://supsad.github.io/lumicells/)** opens the playground (the
+tuning stand) with a demo scene on top of the background. There you can:
 
-| Адрес | Что там |
-| --- | --- |
-| `/` | Стенд с панелью настроек и демо-сценой |
-| `/examples/web-component.html` | Web Component в чистом HTML, декларативная привязка через `data-lc-*` |
-| `/examples/core-basic.html` | Ядро без фреймворков, вылет пикселей за границы карточки |
-| `/examples/engine-harness.html` | Отладка движка: проходы по отдельности, замер времени кадра |
+- switch between the 9 presets and tweak every parameter with live tweening;
+- resize the stage (full screen, 360×360 card, 1200×320 banner, 390×844 phone, custom);
+- toggle the demo scene, pointer interaction and debug layers (field, halo, bloom, haze, cells);
+- watch FPS, CPU and GPU frame time, quality tier and pixel count;
+- export your look as JSON, TypeScript, React or HTML, import a config back, or copy a share link.
 
-## Подключение
+Two plain HTML examples are published next to it:
+[Web Component](https://supsad.github.io/lumicells/examples/web-component.html) and
+[vanilla core](https://supsad.github.io/lumicells/examples/core-basic.html).
+
+<p align="center">
+  <img src="docs/media/playground.png" width="960" alt="The LumiCells playground: toolbar with presets, stage sizes and export, the animated stage with the demo scene, and a settings panel generated from the parameter schema" />
+</p>
+
+## Features
+
+- **8 animation modes** (`sphere`, `flow`, `pulse`, `wave`, `ripple`, `vortex`, `life`, `rain`)
+  that blend as weighted layers and cross-fade when you switch.
+- **Neat 3-layer glow**: a tight halo around each cell, a soft bloom and a wide haze.
+- **Pop-out pixels**: cells spring up, wobble and land with a small ripple. With
+  `render.overflow` they (and their glow) can leave the canvas box.
+- **Any palette**: 1 to 32 color stops, OKLab, linear or stepped interpolation, 5 mapping modes.
+- **Live tweening**: every change animates smoothly, including preset switches.
+- **Binds to the page**: element influences (light, shadow, lift, seed, repel), pulses, lifts and
+  modulators that drive any numeric parameter from your own data.
+- **Built for 60+ FPS**: procedural math runs at cell resolution, the cell shape is a baked stamp,
+  quality adapts to the device, resolution is capped by a pixel budget.
+- **React, Web Component and vanilla** entry points over one core.
+- **SSR-safe**: importing does not touch `window`; the React component renders a static poster
+  on the server.
+- **TypeScript first**: typed config, typed parameter paths for `set()` and `modulate()`.
+- **JSON config with a JSON Schema**: editor autocompletion, `normalizeConfig` and
+  `validateConfig`.
+- **Zero runtime dependencies** (React is an optional peer dependency of `lumicells/react`).
+
+## Quick start
+
+> **The npm package is coming soon.** Until it is published, build it from source (see
+> [Using it before the npm release](#using-it-before-the-npm-release)). The import paths below are
+> the ones the package will have.
 
 ### React
 
 ```tsx
+import type { LumiCellsConfigInput } from 'lumicells';
 import { LumiCells, useInfluence } from 'lumicells/react';
 import { type ReactNode, useRef } from 'react';
-import config from './lumicells.config.json';
+import rawConfig from './lumicells.config.json';
+
+const config = rawConfig as LumiCellsConfigInput;
 
 export function Hero() {
   return (
     <LumiCells config={config} interactive style={{ height: '100vh' }}>
-      <Bubble color="#ee2848">путешествия</Bubble>
+      <Bubble color="#ee2848">Travel</Bubble>
     </LumiCells>
   );
 }
 
 function Bubble({ color, children }: { color: string; children: ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null);
-  // Бабл подсвечивает пиксели под собой своим цветом и следует за своим положением.
+  // The bubble tints the cells under it with its own color and follows its position.
   useInfluence(ref, { type: 'light', color, colorMix: 0.6, strength: 0.8 });
   return <button ref={ref}>{children}</button>;
 }
 ```
 
-Пропсы компонента: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `fallback`, `onReady`, `onError`, `onStats`, `ref`. Порядок слияния: дефолты, затем пресет, затем `config`. Объект `config` можно создавать на каждом рендере: компонент сравнивает содержимое, а не ссылку.
+Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `fallback`,
+`onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
+defaults, then `preset`, then `config`. `config` may be a new object on every render: the
+component compares content, not identity. Requires React 19 (`ref` is a regular prop).
 
-Хуки:
-
-| Хук | Зачем |
+| Hook | Purpose |
 | --- | --- |
-| `useLumiCells()` | Экземпляр `LumiCells` из ближайшего компонента. `null` только на сервере, до монтирования и после размонтирования. Без WebGL2 экземпляр всё равно отдаётся: проверяйте `instance.supported` или используйте проп `fallback` |
-| `useInfluence(ref, opts)` | Превращает элемент в источник света, тени или подъёма пикселей |
-| `useModulator(path, source, opts)` | Ведёт числовой параметр от значения или функции |
-| `usePulse()` | Стабильная функция для запуска волны |
-| `useLumiCellsStats()` | Статистика кадра, обновляется 4 раза в секунду |
-| `useLumiCellsEvent(type, handler)` | Подписка на событие экземпляра |
-
-Компонент рендерится на сервере (SSR) статичным постером, WebGL создаётся только в браузере.
-
-Требуется React 19: `ref` передаётся обычным пропом. Проп `fallback` показывается при `no-webgl2` и `compile`, а при временной потере контекста исчезает сразу после восстановления.
+| `useLumiCells()` | The instance of the nearest `<LumiCells>` (`null` on the server, before mount and after unmount) |
+| `useInfluence(ref, opts)` | Turns an element into a light, shadow or lift source; returns a ref to its handle |
+| `useModulator(path, source, opts)` | Drives a numeric parameter from a value, a function or `{ get() }` |
+| `usePulse()` | Stable function that sends a ripple |
+| `useLumiCellsStats()` | Frame stats, updated about 4 times per second |
+| `useLumiCellsEvent(type, handler)` | Subscribes to an instance event |
 
 ### Web Component
 
@@ -78,55 +120,73 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 
 <lumi-cells id="bg" preset="reference" interactive style="height: 100vh">
   <button data-lc-influence data-lc-color="#0481f5" data-lc-pulse="click" data-lc-lift="hover">
-    наука
+    Science
   </button>
 </lumi-cells>
 
 <script type="module">
-  // Конфиг удобнее задавать свойством, чем JSON в атрибуте.
+  // Set the config as a property, or load a file with the src attribute.
   document.getElementById('bg').config = { modes: { sphere: { radius: 0.7 } } };
 </script>
 ```
 
-Без сборщика подключается одним файлом `dist/lib/lumicells-element.iife.js`, он регистрирует тег и кладёт API в глобальный `LumiCells`.
+Without a bundler, load the single file `dist/lib/lumicells-element.iife.js` with a plain
+`<script>`: it registers the tag and exposes the API as the global `LumiCells`.
 
-Атрибуты элемента: `preset`, `src` (URL файла конфига), `interactive`, `overflow`, `paused`, `transition`. Свойства: `config`, `preset`, `paused`, `interactive`, `overflow`, `transition`, `instance` (только чтение).
+Attributes: `preset`, `src` (URL of a config file), `interactive`, `overflow`, `paused`,
+`transition`. Properties: `config`, `preset`, `src`, `paused`, `interactive`, `overflow`,
+`transition` and the read-only `instance`.
 
-Декларативная привязка дочерних элементов:
+Declarative binding of child elements:
 
-| Атрибут | Значение |
+| Attribute | Meaning |
 | --- | --- |
-| `data-lc-influence` | Элемент влияет на фон. Значение задаёт тип: `light` (по умолчанию), `shadow`, `lift`, `seed`, `repel` |
-| `data-lc-color`, `data-lc-color-mix` | Цвет подсветки и доля его смешения с палитрой |
-| `data-lc-strength`, `data-lc-falloff`, `data-lc-padding`, `data-lc-priority` | Сила, мягкость края в клетках, отступ в px, приоритет |
-| `data-lc-track` | `auto` или `frame`: как часто перечитывать положение |
-| `data-lc-pulse` | `click` или `hover`: волна от элемента |
-| `data-lc-lift` | `hover` или `click`: подъём пикселей у элемента |
-| `data-lc-for="bg"` | Привязать элемент вне тега (например, из портала) к `<lumi-cells id="bg">` |
+| `data-lc-influence` | The element affects the background. The value (or `data-lc-type`) sets the type: `light` (default), `shadow`, `lift`, `seed`, `repel` |
+| `data-lc-color`, `data-lc-color-mix` | Tint color and how much of it is mixed into the palette |
+| `data-lc-strength`, `data-lc-falloff`, `data-lc-padding`, `data-lc-priority` | Strength, soft edge in cells, padding in px, priority |
+| `data-lc-track` | `auto` or `frame`: how often the position is re-read |
+| `data-lc-pulse` | `click` or `hover`: send a ripple from the element |
+| `data-lc-lift` | `hover` or `click`: lift pixels at the element |
+| `data-lc-for="bg"` | Bind an element outside the tag (a portal, for example) to `<lumi-cells id="bg">` |
 
-События: `lc-ready`, `lc-config`, `lc-stats`, `lc-error`, `lc-fallback`.
-
-### Без фреймворков
+### Vanilla TypeScript
 
 ```ts
 import { LumiCells } from 'lumicells';
 
-const pl = new LumiCells(document.querySelector('#hero')!, { preset: 'reference' });
+const cells = new LumiCells(document.querySelector<HTMLElement>('#hero')!, { preset: 'reference' });
 
 const bubble = document.querySelector('#bubble')!;
-pl.bindElement(bubble, { type: 'light', color: '#ee2848', colorMix: 0.6 });
-bubble.addEventListener('click', (e) => pl.pulse({ x: e.clientX, y: e.clientY, space: 'client' }));
+cells.bindElement(bubble, { type: 'light', color: '#ee2848', colorMix: 0.6 });
+bubble.addEventListener('click', (e) => {
+  const { clientX, clientY } = e as MouseEvent;
+  cells.pulse({ x: clientX, y: clientY, space: 'client' });
+});
 
-// Плавно поменять параметр за 800 мс.
-pl.set('modes.sphere.radius', 0.5, { transition: 800 });
+// Tween a parameter over 800 ms.
+cells.set('modes.sphere.radius', 0.5, { transition: 800 });
 
-// Освободить WebGL-контекст.
-pl.destroy();
+// Release the WebGL context.
+cells.destroy();
 ```
 
-## Конфигурационный файл
+### Using it before the npm release
 
-Стенд экспортирует `lumicells.config.json`:
+```bash
+git clone https://github.com/supsad/lumicells.git
+cd lumicells
+npm ci
+npm run build:lib   # dist/lib (ES modules, IIFE bundle, schema.json) and dist/types
+npm pack            # lumicells-0.1.0.tgz
+```
+
+Then install the tarball in your app with `npm install ../lumicells/lumicells-0.1.0.tgz`, and all
+the imports above work as written. For a page without a bundler, copy
+`dist/lib/lumicells-element.iife.js` next to it and load it with `<script src>`.
+
+## Config file
+
+The playground exports `lumicells.config.json`:
 
 ```json
 {
@@ -138,131 +198,215 @@ pl.destroy();
 }
 ```
 
-- Файл можно сохранить полностью или только разницей относительно пресета (`extends`). Полный файл не поменяется, если позже изменятся дефолты библиотеки.
-- `lumicells.schema.json` собирается вместе с пакетом (`lumicells/schema.json`), редактор по нему подсказывает поля и диапазоны.
-- `normalizeConfig(raw)` никогда не бросает исключение: чинит типы, обрезает диапазоны, выкидывает неизвестные ключи и возвращает список замечаний с путями. `validateConfig(raw)` строже и подходит для проверки в CI.
-- Кроме JSON стенд отдаёт готовые сниппеты для TypeScript, React и HTML.
+- Save the whole config, or only the difference from a preset (`extends`). A full file does not
+  change when library defaults change later.
+- The JSON Schema ships with the package (`lumicells/schema.json`) and can be downloaded from the
+  playground, so your editor suggests fields and ranges.
+- `normalizeConfig(raw)` never throws: it fixes types, clamps ranges, drops unknown keys and
+  returns a list of issues with paths. `validateConfig(raw)` is stricter and suits CI checks.
+- **Playground round trip**: *Export* gives JSON (full or diff), TypeScript, React and HTML
+  snippets and the JSON Schema; *Import* takes a file or pasted JSON and reports what it fixed.
+  *Link* copies a URL with the config inside.
 
-## Стенд
+## Presets
 
-Панель справа строится из схемы параметров автоматически. Каждая ручка показывает подсказку и путь в конфиге, двойной щелчок по названию возвращает значение пресета.
+<p align="center">
+  <img src="docs/media/presets.png" width="760" alt="The nine presets side by side: reference, orb, pulse, life, vortex, waves, ripples, rain and minimal" />
+</p>
 
-- Сверху: пресет, размер сцены (весь экран, карточка 360×360, баннер, телефон, свой размер), демо-сцена, интерактив, отладочные слои (поле, ореол, bloom, дымка), пауза, имитация потери контекста.
-- История изменений, автосохранение, ссылка с конфигом в адресе.
-- **Экспорт**: JSON полностью или разницей, TypeScript, React, HTML, JSON Schema.
-- **Импорт**: файл или вставка текста, с разбором ошибок.
-- Статистика: FPS, время кадра на CPU и GPU, уровень качества, число пикселей и ячеек.
+`reference` (the default look), `orb`, `pulse`, `life`, `vortex`, `waves`, `ripples`, `rain`,
+`minimal`. Every preset is a small patch over the defaults, so it makes a good starting point
+for your own config: `{ "extends": "vortex", ... }`.
 
-Горячие клавиши: `H` панель, `P` пауза, `D` отладочный слой, `Ctrl+Z` / `Ctrl+Shift+Z` история.
+## Animation modes
 
-## Привязка к окружению
+Modes blend as layers with weights (`animation.blend`: `screen`, `add` or `max`). Switching a
+mode cross-fades the weights.
 
-Фон знает о том, что происходит вокруг, через четыре механизма.
-
-**Влияния** (`bindElement`, `addInfluence`). Прямоугольник со скруглением или круг, который добавляет свет (`light`), затемняет (`shadow`, например под заголовком для читаемости), поднимает пиксели (`lift`), сеет «жизнь» (`seed`) или отталкивает узор (`repel`). Влияний может быть сколько угодно: в шейдер попадают 64 самых важных по приоритету и площади, остальные ждут, смена идёт плавно.
-
-```ts
-const h = pl.bindElement(el, { type: 'light', color: '#0481f5', strength: 0.8, track: 'auto' });
-h.update({ strength: 1.3 }); // при наведении
-h.dispose();
-```
-
-Режимы слежения `track`:
-
-- `auto` читает положение, только пока элемент может двигаться (resize, scroll, CSS-переходы, Web Animations);
-- `frame` читает каждый кадр;
-- `manual` не трогает DOM, координаты передаёт ваш код через `update({ x, y, w, h })`.
-
-Элементы, которые двигает JS, лучше анимировать в `onBeforeFrame` из `lumicells`, тогда подсветка не отстаёт даже на кадр.
-
-**События** (`pulse`, `lift`). Разовая волна из точки и подъём пикселей в точке.
-
-**Модуляции** (`modulate`). Любой числовой параметр можно вести от внешнего источника: числа, функции или объекта с `get()`. Режимы: `add`, `mul`, `override`, `max`, со сглаживанием. Модуляции живут только в рантайме и не попадают в сохранённый конфиг, поэтому не спорят со стендом.
-
-```ts
-// Радиус сферы растёт, пока баблы летят.
-const m = pl.modulate('modes.sphere.radius', () => flying * 0.1, { blend: 'add', smoothingMs: 150 });
-
-// Внешняя энергия, например уровень звука.
-pl.setEnergy(1.4);
-```
-
-**Координаты.** `space` бывает `host` (CSS px от угла контейнера), `client` (px окна, как у `PointerEvent`), `norm` (0..1 контейнера) и `cells` (клетки сетки).
-
-## Режимы анимации
-
-Режимы смешиваются как слои с весами, смена режима идёт плавным перетеканием весов.
-
-| Режим | Что делает |
+| Mode | What it does |
 | --- | --- |
-| `sphere` | Вращающаяся сфера с тёмной сердцевиной и ярким ободком, как на макете |
-| `flow` | Течение шума, «живые» пятна |
-| `pulse` | Дыхание и концентрические волны из точки |
-| `wave` | Направленные волны и интерференция |
-| `ripple` | Капли дождя, расходящиеся круги |
-| `vortex` | Спиральные рукава |
-| `life` | Клеточный автомат Конвея и его варианты с плавным угасанием |
-| `rain` | Падающие колонки |
+| `sphere` | A rotating sphere with a dark core and a bright rim |
+| `flow` | Flowing noise, living blobs |
+| `pulse` | Breathing and concentric rings from a point |
+| `wave` | Directional waves and interference |
+| `ripple` | Raindrops with spreading circles |
+| `vortex` | Spiral arms |
+| `life` | Conway's automaton and its variants, with a smooth fade |
+| `rain` | Falling columns |
 
-Поверх режимов работают мерцание, редкие искры, разреженность окраин, внешняя энергия и свечение в три слоя: узкий ореол вокруг ячейки, мягкий bloom и широкая дымка.
+On top of the modes: flicker, rare sparkles, sparse edges, external energy and the 3-layer glow.
+**Lifted pixels** (`lift`) come in two styles: `pop` raises a cell in place, `float` detaches it
+and carries it upward like a bubble.
 
-**Всплывающие пиксели** (`lift`). Часть ячеек поднимается над сеткой: пружинный подъём, покачивание, мягкая посадка с небольшой волной. Стиль `pop` поднимает пиксель на месте. Стиль `float` отрывает его и уводит вверх. Если задать `render.overflow` (запас в px), пиксели и свечение могут вылетать за границы контейнера.
+## Binding to the page
 
-**Пресеты**: `reference` (как на макете, по умолчанию), `orb`, `pulse`, `life`, `vortex`, `waves`, `ripples`, `rain`, `minimal`.
+The background knows what happens around it through four mechanisms.
 
-## Производительность
+**Influences** (`bindElement`, `addInfluence`): a rounded rectangle or a circle that adds light
+(`light`), darkens (`shadow`, for example under a heading for readability), lifts pixels
+(`lift`), seeds Life (`seed`) or pushes the pattern away (`repel`). Use as many as you like:
+the 64 most important ones (by priority and area) reach the shader, the rest wait and swap in
+smoothly.
 
-- Вся процедурная математика считается в разрешении сетки: один тексель на ячейку, это тысячи точек, а не миллионы. На полном разрешении работает один проход композиции и инстансы всплывающих пикселей.
-- Форма ячейки (скругление, ореол, горячее ядро) запекается в маленький штамп размером с шаг сетки, поэтому композит не считает SDF и экспоненты на каждый пиксель. Bloom и дымка сведены в одну текстуру.
-- Все экземпляры на странице работают от одного `requestAnimationFrame`. Кадр делится на фазы: анимации приложения, чтение DOM, работа с GPU.
-- Разрешение ограничено `render.maxDpr` и бюджетом пикселей `render.maxPixels` (на тач-устройствах не больше 2.4 Мпикс).
-- Адаптивное качество определяет частоту дисплея (60, 120, 144 Гц и выше) и при нехватке времени ступенчато снижает качество и разрешение, с гистерезисом. Фризы главного потока оно не путает с медленным GPU. Уровни: `high` полная картинка, `medium` дешевле выборка свечения, `low` без ореола и фаски.
-- Фон останавливается, когда вкладка скрыта или контейнер вне экрана. При `prefers-reduced-motion` анимация замедляется, а всплывающие пиксели выключаются полностью, включая вызовы `lift()` (можно отключить через `render.reducedMotion: 'ignore'`).
-- В кадре нет аллокаций, uniform-буферы загружаются только при изменениях.
-- Замер на десктопе (RTX 5090, 165 Гц): 1920×1080 около 0.04–0.06 мс GPU и 0.1 мс CPU на кадр, 3840×2160 около 0.08 мс GPU на `high` и 0.07 мс на `medium`. На телефоне при DPR 3 разрешение ограничивается DPR 2 и бюджетом пикселей. На реальных мобильных GPU замеров пока не было: архитектура рассчитана на них, но цифры стоит проверить на целевых устройствах через статистику стенда.
+```ts
+const light = cells.bindElement(el, { type: 'light', color: '#0481f5', strength: 0.8 });
+light.update({ strength: 1.3 }); // on hover
+light.dispose();
 
-Каждый экземпляр держит свой WebGL-контекст. Браузеры ограничивают их число (около 16), поэтому для десятков фонов на одной странице лучше один общий фон.
+// A darker area under a heading, so the text stays readable.
+cells.bindElement(title, { type: 'shadow', padding: 24 });
+```
 
-## Как устроено
+Tracking modes (`track`): `auto` reads the element rect only while it may move (resize, scroll,
+CSS transitions, Web Animations), `frame` reads it every frame, `manual` never touches the DOM
+and takes coordinates from `update({ x, y, w, h })`. For elements moved by JavaScript, animate
+them inside `onBeforeFrame` from `lumicells` and the light never lags a frame behind.
+
+**Events** (`pulse`, `lift`): a one-off ripple from a point and a lift of pixels at a point.
+
+```ts
+cells.pulse({ x: 0.5, y: 0.5, space: 'norm', color: '#19e6d0', strength: 1 });
+cells.lift({ x: 12, y: 8, space: 'cells', count: 6, radius: 2 });
+```
+
+**Modulators** (`modulate`): drive any numeric parameter from a number, a function or an object
+with `get()`. Blend modes: `add`, `mul`, `override`, `max`, with optional smoothing. Modulators
+live only at runtime and never end up in a saved config.
+
+```ts
+// The sphere grows while something is happening on the page.
+const m = cells.modulate('modes.sphere.radius', () => activity * 0.1, {
+  blend: 'add',
+  smoothingMs: 150,
+});
+
+// External energy, for example an audio level.
+cells.setEnergy(1.4);
+```
+
+**Coordinate spaces** (`space`): `host` (CSS px from the container corner), `client` (viewport
+px, like `PointerEvent`), `norm` (0..1 of the container) and `cells` (grid cells).
+
+## Events
+
+```ts
+const off = cells.on('stats', (s) => console.log(s.fps, s.gpuMs, s.quality));
+off(); // unsubscribe
+```
+
+| Event | Payload |
+| --- | --- |
+| `ready` | First frame is on screen |
+| `frame` | `{ time, dt }` every frame (reused object) |
+| `stats` | FPS, CPU/GPU ms, quality, pixels, cells, lifts, influences (about 4 Hz) |
+| `resize` | `{ width, height, cols, rows, dpr, scale }` |
+| `config` | `{ config, changed, source }`, coalesced per frame |
+| `quality` | `{ scale, quality, reason }` when adaptive quality steps |
+| `warn`, `error` | Non-fatal warnings and errors |
+| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' }` |
+| `contextlost`, `contextrestored`, `destroy` | Lifecycle |
+
+The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc-stats`,
+`lc-error`, `lc-fallback`.
+
+## Performance
+
+- All procedural math runs at grid resolution: one texel per cell, thousands of points instead
+  of millions. Full resolution only runs one composite pass and the instanced lifted pixels.
+- The cell shape (rounding, halo, hot core) is baked into a small stamp the size of one grid
+  step, so the composite pass does not evaluate SDFs and exponentials per pixel. Bloom and haze
+  share one texture.
+- Every instance on the page runs on one shared `requestAnimationFrame`, split into phases:
+  app animations, DOM reads, GPU work.
+- Resolution is capped by `render.maxDpr` and the pixel budget `render.maxPixels` (at most
+  2.4 MP on touch devices).
+- Adaptive quality detects the display rate (60, 120, 144 Hz and up) and, when frames run late,
+  steps quality and resolution down with hysteresis. It does not mistake main-thread stalls for
+  a slow GPU. Tiers: `high` full picture, `medium` cheaper glow sampling, `low` no halo and bevel.
+- Rendering stops while the tab is hidden or the container is off screen. With
+  `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
+  `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
+- No allocations per frame; uniform buffers upload only on change.
+
+Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
+1920×1080, about 0.08 ms GPU at 3840×2160 on `high`. There are no measurements on real mobile
+GPUs yet: the mobile path is budgeted by design (DPR cap 2, pixel budget), so check your target
+devices with the playground stats.
+
+Each instance owns a WebGL context and browsers keep only about 16, so prefer one shared
+background over dozens of small ones.
+
+## Browser support
+
+Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2, after a
+context loss and before the first frame, a static CSS poster in the config colors is shown. With
+float render targets the glow is computed in HDR, otherwise in RGBA8 with compression.
+
+## Architecture
 
 ```
-src/schema      схема параметров: типы, дефолты, валидация, пресеты, экспорт, JSON Schema (без DOM)
+src/schema      parameter schema: types, defaults, validation, presets, export, JSON Schema (no DOM)
 src/core
-  controller    твины, модуляции, влияния, волны, всплывающие пиксели, адаптивное качество (без DOM и GL)
-  engine        WebGL2: проходы life, field, bloom, composite, lift и GLSL-режимы
-  dom           canvas и его размер, слежение за элементами, указатель
-  lumi-cells.ts фасад LumiCells
-src/react       компонент и хуки
+  controller    tweens, modulators, influences, pulses, lifted pixels, adaptive quality (no DOM, no GL)
+  engine        WebGL2: life, field, bloom, stamp, composite and lift passes, GLSL modes
+  dom           canvas and its size, element tracking, pointer
+  lumi-cells.ts the LumiCells facade
+src/react       component and hooks
 src/element     Web Component
-demo            стенд и демо-сцена
+demo            playground and demo scene
+examples        plain HTML pages and dev tools
 ```
 
-Схема параметров здесь единственный источник правды. Из неё выводятся тип конфига, пути для `set` и `modulate`, дефолты, валидация, JSON Schema, раскладка uniform-буфера для GPU (макросы `P_<путь>` в GLSL) и панель стенда.
+The schema is the single source of truth. The config type, the paths for `set` and `modulate`,
+defaults, validation, the JSON Schema, the GPU uniform layout (`P_<path>` macros in GLSL) and the
+playground panel are all derived from it.
 
-### Как добавить параметр
+### Adding a parameter
 
-1. Добавить поле в `src/schema/schema.ts`, например `num({ min, max, default, label, gpu: true })`.
-2. Использовать его в шейдере как `P_<путь_через_подчёркивания>`, например `P_glow_halo_strength`.
+1. Add a field to `src/schema/schema.ts`, for example
+   `num({ min, max, default, label, gpu: true })`.
+2. Use it in a shader as `P_<path_with_underscores>`, for example `P_glow_halo_strength`.
 
-Типы, валидация, стенд и экспорт подхватят параметр сами.
+Types, validation, the playground and export pick it up automatically. Add the Russian label to
+`src/schema/locales/ru.ts` (a test checks that every path has one).
 
-### Как добавить режим анимации
+### Adding an animation mode
 
-1. Добавить группу режима в `modes` схемы и его id в `MODE_IDS`.
-2. Написать функцию `vec3 mode_<id>(ModeIn m)` в `src/core/engine/glsl/modes/<id>.ts` и зарегистрировать её в `modes/index.ts`. Функция возвращает яркость, огибающую и акцент.
-3. Если режиму нужна своя анимированная фаза, добавить её в `src/core/controller/clock.ts` и во FrameBlock.
+1. Add the mode group to `modes` in the schema and its id to `MODE_IDS`.
+2. Write `vec3 mode_<id>(ModeIn m)` in `src/core/engine/glsl/modes/<id>.ts` and register it in
+   `modes/index.ts`. The function returns brightness, envelope and accent.
+3. If the mode needs its own animated phase, add it to `src/core/controller/clock.ts` and the
+   frame block.
 
-## Поддержка браузеров
+## Development
 
-Нужен WebGL2: Chrome, Edge, Firefox, Safari 15 и новее. Без WebGL2, при потере контекста и до первого кадра показывается статичный CSS-постер в цветах конфига. Если есть float-текстуры, свечение считается в HDR, иначе в RGBA8 со сжатием.
+```bash
+npm ci
+npm run dev   # http://localhost:5173/
+```
 
-## Скрипты
-
-| Команда | Что делает |
+| Command | What it does |
 | --- | --- |
-| `npm run dev` | Стенд и примеры |
-| `npm run build` | Проверка типов и сборка стенда в `dist-demo` |
-| `npm run build:lib` | Сборка пакета в `dist/lib` и типов в `dist/types` |
-| `npm test` | Юнит-тесты |
-| `npm run typecheck` | Проверка типов |
+| `npm run dev` | Playground and examples |
+| `npm run build` | Type check and build the playground into `dist-demo` |
+| `npm run build:lib` | Build the package into `dist/lib` and types into `dist/types` |
+| `npm run check:types` | Type check the built package as a consumer would |
+| `npm test` | Unit tests (Vitest) |
+| `npm run typecheck` | Type check |
 | `npm run lint` | Biome |
+
+Dev pages: `/` (playground), `/examples/web-component.html`, `/examples/core-basic.html`,
+`/examples/engine-harness.html` (passes one by one, frame timing),
+`/examples/tune.html` (deterministic time for screenshot comparisons),
+`/examples/scene-preview.html` and `/examples/ui-kit.html`.
+
+## Roadmap
+
+- [ ] Publish `lumicells` to npm.
+- [ ] Choose and add an open-source license.
+- [ ] Measure on real mobile GPUs and publish the numbers.
+
+## License
+
+Not chosen yet. A license will be added before the npm release; until then the code is not
+licensed for reuse.
