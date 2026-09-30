@@ -76,7 +76,7 @@
     "build:lib": "vite build --config vite.lib.config.ts && vite build --config vite.element.config.ts && tsc -p tsconfig.lib.json && node scripts/fix-dts.mjs",
     "check:types": "node scripts/check-types.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.examples.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",

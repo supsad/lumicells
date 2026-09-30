@@ -55,10 +55,13 @@ const config: LumiCellsConfigInput = preset ? { ...patch, extends: preset } : pa
 const host = document.getElementById('host') as HTMLElement;
 host.style.width = `${hostW}px`;
 host.style.height = `${hostH}px`;
-const ref = document.getElementById('ref') as HTMLImageElement;
-ref.style.width = `${Math.min(hostW, hostH)}px`;
-ref.style.height = `${Math.min(hostW, hostH)}px`;
-if (q.get('ref') === '0') ref.hidden = true;
+// The design mock is not versioned, so the image may be missing (its onerror removes it).
+const ref = document.getElementById('ref') as HTMLImageElement | null;
+if (ref) {
+  ref.style.width = `${Math.min(hostW, hostH)}px`;
+  ref.style.height = `${Math.min(hostW, hostH)}px`;
+  if (q.get('ref') === '0') ref.hidden = true;
+}
 
 interface TuneApi {
   cells: LumiCellsCore | null;

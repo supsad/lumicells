@@ -88,6 +88,22 @@ const warnCodes = new Map<string, number>();
 // -------------------------------------------------------------------------------------------
 // Frame recording
 
+/** One step of scrollThrough(): numbers the report aggregates, plus raw per-step extras. */
+interface ScrollStep {
+  y: number;
+  fps: number;
+  frameMsP95: number;
+  visible: number;
+  visibleLive: number;
+  visiblePoster: number;
+  visibleDead: number;
+  maxVisibleDead: number;
+  settleMs: number;
+  settleFrames: number;
+  maxLiveContexts: number;
+  [extra: string]: unknown;
+}
+
 interface Recording {
   deltas: number[];
   /** Main-thread time of the page's own per-frame work (ticker frame or shared copy loop). */
@@ -641,7 +657,7 @@ async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } =
   const c0 = { ...probe.counters };
   const ev0 = summarizeEvents();
   probe.resetPeak();
-  const steps = [];
+  const steps: ScrollStep[] = [];
   for (const y of ys) {
     scrollTo(0, y);
     const r: Recording = { deltas: [], work: [] };
