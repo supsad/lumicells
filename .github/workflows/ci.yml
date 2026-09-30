@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint (biome)
+        run: npx biome check .
+
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Build library
+        run: npm run build:lib
+
+      - name: Check published types
+        run: npm run check:types
+
+      - name: Build demo site
+        run: npx vite build

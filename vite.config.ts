@@ -5,8 +5,12 @@ import { defineConfig } from 'vitest/config';
 
 const root = dirname(fileURLToPath(import.meta.url));
 
-// Demo app: the tuning stand (index.html) and a plain HTML page that uses the Web Component.
+// Demo site (GitHub Pages): the tuning stand (index.html) plus two plain HTML examples. The other
+// pages under examples/ (tune, engine-harness, ui-kit, scene-preview) are dev-only and are not
+// part of the production build. Set BASE_PATH (e.g. `/lumicells/`) when the site is served from a
+// sub-path; asset URLs and the public/ files then resolve under it.
 export default defineConfig({
+  base: process.env.BASE_PATH ?? '/',
   plugins: [react()],
   resolve: {
     // The demo imports the library by its package name, exactly like a consumer would.
@@ -28,6 +32,7 @@ export default defineConfig({
       input: {
         stand: resolve(root, 'index.html'),
         element: resolve(root, 'examples/web-component.html'),
+        core: resolve(root, 'examples/core-basic.html'),
       },
     },
   },

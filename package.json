@@ -1,7 +1,28 @@
 {
   "name": "lumicells",
   "version": "0.1.0",
-  "description": "Живой пиксельный фон на WebGL2: ядро без зависимостей, React-обёртка, Web Component и стенд настройки",
+  "description": "Live WebGL2 neon pixel-grid background with a tuning playground, React wrapper and Web Component",
+  "keywords": [
+    "webgl",
+    "webgl2",
+    "shader",
+    "background",
+    "pixel",
+    "neon",
+    "glow",
+    "animation",
+    "react",
+    "web-component",
+    "generative"
+  ],
+  "homepage": "https://supsad.github.io/lumicells/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/supsad/lumicells.git"
+  },
+  "bugs": {
+    "url": "https://github.com/supsad/lumicells/issues"
+  },
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
