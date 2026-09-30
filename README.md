@@ -326,7 +326,7 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
 - Rendering stops while the tab is hidden or the container is off screen. With
   `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
   `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
-- No allocations per frame; uniform buffers upload only on change.
+- No objects or arrays are allocated per frame; uniform buffers upload only on change.
 
 Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
 1920×1080, about 0.08 ms GPU at 3840×2160 on `high`. There are no measurements on real mobile

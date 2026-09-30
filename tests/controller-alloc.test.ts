@@ -115,8 +115,9 @@ describe('Controller.update allocations', () => {
     const perFrame = measure(c, 400);
     // No object, array or closure is created per frame (those would cost kilobytes with 81
     // influences and a dozen lifts). What remains is V8 boxing a few doubles in code that is
-    // not optimized yet, which depends on JIT state and is typically 0-50 bytes.
-    expect(perFrame).toBeLessThan(64);
+    // not optimized yet. It depends on the V8 version and JIT state: 0-50 bytes on Node 26,
+    // about 240 bytes on Node 24 CI runners, i.e. a handful of HeapNumbers, not structures.
+    expect(perFrame).toBeLessThan(512);
   });
 
   it('per-frame allocation does not grow with the number of influences and lifts', () => {
