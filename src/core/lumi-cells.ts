@@ -5,11 +5,17 @@
  * DOM (host sizing, element tracking, pointer, visibility) and to the GL Engine, all driven by
  * the shared ticker: DOM reads in the measure phase, GPU work in the render phase.
  *
- * Lifecycle: the engine is created lazily in start() when WebGL2 is available; programs compile
- * in parallel and 'ready' fires after the first drawn frame (a CSS poster covers the gap). A lost
- * context shows the poster and is rebuilt on restore with a new Engine on the same canvas. An
- * engine that fails (compile/link or resource error) is disposed and its context released at
- * once: browsers cap live contexts at ~16, so a failed instance must not hold one.
+ * Lifecycle: start() creates nothing on the GPU. Once the host comes within about one viewport
+ * of the screen, the instance asks the page-wide GPU scheduler (runtime/scheduler) for a
+ * context: it keeps the page within its context budget (LumiCells.configure) and creates at most
+ * a few engines per frame. Programs compile in parallel and 'ready' fires after the first drawn
+ * frame; the CSS poster covers the gap and the canvas stays hidden until it has drawn.
+ * An instance that stays far from the viewport for `parkAfterMs`, or loses its slot to a better
+ * ranked one, is parked: engine disposed, context released, canvas removed, poster shown. The
+ * controller (time, tweens, runtime layers) lives on, and the engine is rebuilt through the same
+ * path as a context restore when the instance comes back. A lost context hides the canvas behind
+ * the poster and is rebuilt on restore with a new Engine on the same canvas. An engine that fails
+ * (compile/link or resource error) is disposed and its context released at once.
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -36,15 +42,31 @@ import { PointerInteraction } from './dom/pointer';
 import { ElementTracker } from './dom/tracking';
 import { Engine } from './engine/engine';
 import { DEBUG_VIEW, EngineError } from './engine/types';
+import { areaBucket } from './runtime/context-budget';
+import {
+  cancelRequest,
+  claimBudgetWarning,
+  configureRuntime,
+  type GpuClient,
+  maxContexts,
+  noteFirstDraw,
+  rankChanged,
+  releaseContext,
+  requestContext,
+  runtimeSettings,
+} from './runtime/scheduler';
 import { subscribeTicker } from './ticker';
 import type {
   BindElementOptions,
   ConfigSource,
   ConfigUpdateOptions,
+  ConfigureOptions,
   DebugView,
   InfluenceHandle,
   InfluenceOptions,
   InfluenceUpdate,
+  InstancePriority,
+  InstanceState,
   LiftOptions,
   LumiCellsEvents,
   LumiCellsOptions,
@@ -59,16 +81,42 @@ import type {
 type Listener<K extends keyof LumiCellsEvents> = (event: LumiCellsEvents[K]) => void;
 
 let supportedMemo: boolean | undefined;
-let liveInstances = 0;
-let manyWarned = false;
-/** More live instances than this is almost always a leak (strict-mode double mounts, lists). */
-const INSTANCE_WARN = 8;
+/** Creation counter (queue tie-break: older instances first). */
+let instanceSeq = 0;
 const COARSE_MAX_PIXELS = 2.4;
 const SOFTWARE_MAX_PIXELS = 0.5;
 const STATS_INTERVAL = 250;
 const RESIZE_THROTTLE = 100;
 /** IntersectionObserver margin around the canvas (host + overflow), CSS px. */
 const IO_MARGIN = 64;
+/**
+ * Creation zone: one viewport beyond the screen on every side. The engine is created when the
+ * host enters it (ahead of scrolling it into view) and parked after it stays out of it. The
+ * view margin above (which follows the overflow) counts as inside the zone too.
+ *
+ * rootMargin only grows the viewport: a scrolling ancestor (carousel, chat pane, scrollable
+ * panel) still clips the host at its own edge. Both observers therefore pass the same margin
+ * as `scrollMargin` too (Chrome and Edge 120+; percentages there are of the scroll container),
+ * so a host within one container size of its visible part is in the zone. Browsers without it
+ * ignore the option: there, a host outside a scroll container's visible part counts as far away.
+ */
+const ZONE_MARGIN = '100%';
+
+/** One `prefers-reduced-motion` query per window, shared by its instances (each listens itself). */
+const reducedMotionQueries = new WeakMap<Window, MediaQueryList>();
+
+function reducedMotionQuery(win: Window): MediaQueryList {
+  let mql = reducedMotionQueries.get(win);
+  if (!mql) {
+    mql = win.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotionQueries.set(win, mql);
+  }
+  return mql;
+}
+
+function isPriority(v: unknown): v is InstancePriority {
+  return v === 'high' || v === 'normal' || v === 'low';
+}
 
 /** Config changes of one source, coalesced until the next flush (frame or microtask). */
 interface ConfigBatch {
@@ -77,6 +125,15 @@ interface ConfigBatch {
 }
 
 export class LumiCells {
+  /**
+   * Page-wide settings shared by every instance: the WebGL context budget, parking of offscreen
+   * instances and the engine creation rate (see ConfigureOptions). Applies to existing instances
+   * too; safe to call before any instance exists and on the server.
+   */
+  static configure(options: ConfigureOptions): void {
+    configureRuntime(options);
+  }
+
   /** Whether WebGL2 is available. Memoized; always false on the server. */
   static isSupported(): boolean {
     if (supportedMemo !== undefined) return supportedMemo;
@@ -106,13 +163,48 @@ export class LumiCells {
   #canvasCtl: AbortController | null = null;
   #io: IntersectionObserver | null = null;
   #ioMargin = -1;
+  #zoneIo: IntersectionObserver | null = null;
   #destroyed = false;
   #running = false;
   #unsub: (() => void) | null = null;
+  /** Within the view margin (from the view observer; true when there is no observer). */
   #inView = true;
+  /** Within the creation zone (from the zone observer; true when there is no observer). */
+  #inZone = true;
   #hidden = false;
   #lost = false;
+  /**
+   * The context was lost and then dropped (parked, evicted, canvas rebuilt) before the browser
+   * restored it: the next engine built emits the 'contextrestored' that ends the loss.
+   */
+  #lostPending = false;
   #failed = false;
+  /** start() found no WebGL2. */
+  #noWebgl = false;
+  // Context budget (runtime/scheduler): this instance's side of it.
+  readonly #client: GpuClient;
+  #priority: InstancePriority;
+  /** Host area, CSS px squared, read right before a ranking decision (see #refreshArea). */
+  #area = 0;
+  #lastVisible = Number.NEGATIVE_INFINITY;
+  /** Owns a slot: the engine exists (or its context is lost and awaits a restore). */
+  #holds = false;
+  /** Queued in the scheduler. */
+  #requested = false;
+  /** The budget refused the request; poster until served. */
+  #waiting = false;
+  /** Gave its context back (parked or evicted) and has not got a new one yet. */
+  #parked = false;
+  #parkTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  /** When the holder went out of the zone (performance.now()), NaN while it is not away. */
+  #awaySince = Number.NaN;
+  /** The 'budget' fallback was reported for the current wait. */
+  #budgetReported = false;
+  /** Watches the host's size while it holds or asks for a slot (see #watchArea). */
+  #areaRo: ResizeObserver | null = null;
+  #areaWatched = false;
+  /** Area bucket of the last host size the watch reported (-1: none yet). */
+  #areaBucket = -1;
   #fallbackSent = false;
   #readyEmitted = false;
   #drawnSinceMount = false;
@@ -156,10 +248,38 @@ export class LumiCells {
     lifts: 0,
     influences: 0,
     softwareFallback: false,
+    state: 'pending',
   };
 
   constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
     this.host = host;
+    this.#priority = isPriority(options.priority) ? options.priority : 'normal';
+    const self = this;
+    this.#client = {
+      order: ++instanceSeq,
+      // An instance that never pauses offscreen draws wherever it is (a capture or copy
+      // source placed off screen): it ranks like a visible one, never as the first victim.
+      get visible() {
+        return self.#inView || self.#alwaysOn();
+      },
+      get inZone() {
+        return self.#inZone || self.#inView;
+      },
+      get priority() {
+        return self.#priority;
+      },
+      get area() {
+        return self.#area;
+      },
+      get lastVisible() {
+        return self.#lastVisible;
+      },
+      granted: () => this.#onGranted(),
+      evicted: () => this.#park(true),
+      refused: () => this.#onRefused(),
+      refreshArea: () => this.#refreshArea(),
+      settingsChanged: () => this.#onSettingsChanged(),
+    };
     // Merge order: defaults < preset < config (< the `interactive` shortcut).
     const base: LumiCellsConfigInput = options.preset ? { extends: options.preset } : {};
     let input = options.config ? deepMerge(base, options.config) : base;
@@ -184,14 +304,6 @@ export class LumiCells {
     this.#coarse = this.#view.coarsePointer;
     this.#applyPixelCap();
     this.#watchEnvironment();
-
-    liveInstances++;
-    if (liveInstances > INSTANCE_WARN && !manyWarned) {
-      manyWarned = true;
-      const message = `[lumicells] ${liveInstances} live instances: each owns a WebGL context (browsers keep ~16). Destroy unused ones.`;
-      console.warn(message);
-      queueMicrotask(() => this.#emit('warn', { code: 'too-many-instances', message }));
-    }
     if (options.autoStart !== false) this.start();
   }
 
@@ -203,9 +315,24 @@ export class LumiCells {
     return LumiCells.isSupported();
   }
 
-  /** The canvas of this instance (a new element per instance), null before start / after destroy. */
+  /**
+   * The canvas of this instance (a new element per engine). Null until the instance owns a
+   * WebGL context (see `getStats().state`), while it is parked, and after destroy.
+   */
   get canvas(): HTMLCanvasElement | null {
     return this.#view.canvas;
+  }
+
+  /** Priority for the page's WebGL context budget. */
+  get priority(): InstancePriority {
+    return this.#priority;
+  }
+
+  /** Changes the budget priority; a waiting instance may get a context right away. */
+  setPriority(priority: InstancePriority): void {
+    if (this.#destroyed || !isPriority(priority) || priority === this.#priority) return;
+    this.#priority = priority;
+    rankChanged();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -363,19 +490,27 @@ export class LumiCells {
   // -------------------------------------------------------------------------------------------
   // Lifecycle
 
+  /**
+   * Starts rendering. The WebGL context is not created here: the instance asks the page's GPU
+   * scheduler for one once the host is near the viewport (see LumiCells.configure).
+   */
   start(): void {
     if (this.#destroyed || this.#running) return;
     this.#running = true;
     if (!this.supported) {
+      this.#noWebgl = true;
+      this.#publishState();
       this.#sendFallback('no-webgl2');
       return;
     }
-    this.#ensureEngine();
+    this.#syncGpu();
     this.#updateSubscription();
   }
 
+  /** Stops rendering. An existing context is kept (the canvas keeps its last frame). */
   stop(): void {
     this.#running = false;
+    this.#syncGpu();
     this.#updateSubscription();
   }
 
@@ -387,17 +522,26 @@ export class LumiCells {
     this.#unsub = null;
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
+    this.#clearParkTimer();
+    if (this.#requested) {
+      this.#requested = false;
+      cancelRequest(this.#client);
+    }
     // Every listener and observer was registered with this signal (or a per-canvas one).
     this.#ctl.abort();
     this.#releaseCanvas();
     this.#io = null;
+    this.#zoneIo = null;
+    this.#areaRo = null;
     this.#tracker.clear();
     this.#pointer.dispose();
     this.#controller.destroy();
     this.#energy = null;
+    // The context is released before the slot: the next instance's context comes after it.
     this.#disposeEngine();
+    this.#releaseSlot();
     this.#view.restore();
-    liveInstances = Math.max(0, liveInstances - 1);
+    this.#publishState();
     this.#emit('destroy', undefined);
     this.#listeners.clear();
     this.#pending.length = 0;
@@ -508,7 +652,9 @@ export class LumiCells {
     // #ensureEngine disposes the engine when the constructor returns).
     this.#disposeEngine();
     if (this.#view.canvas) this.#dropFailedCanvas();
+    this.#releaseSlot();
     this.#updateSubscription();
+    this.#publishState();
     this.#emit('error', err);
     this.#sendFallback('compile');
   }
@@ -516,11 +662,26 @@ export class LumiCells {
   #onContextLost(e: Event, canvas: HTMLCanvasElement): void {
     // Without preventDefault the browser never restores the context.
     e.preventDefault();
-    if (this.#destroyed || canvas !== this.#view.canvas || this.#lost) return;
+    if (this.#destroyed || canvas !== this.#view.canvas) return;
+    this.#enterLost();
+  }
+
+  /**
+   * The context is gone. Reached from the loss event, or earlier from the render phase: the
+   * context reports the loss at once, but the browser dispatches the event as a task that may
+   * run only after the next frame is painted, and that frame would show the lost canvas's blank
+   * box.
+   */
+  #enterLost(): void {
+    if (this.#lost) return;
     this.#lost = true;
     this.#drawnSinceMount = false;
+    // A lost context's canvas paints a blank box over everything: hide it until the first frame
+    // drawn on the restored context.
+    this.#view.setCanvasVisible(false);
     this.#view.showPoster(posterCss(this.#controller.getConfig()));
     this.#updateSubscription();
+    this.#publishState();
     this.#emit('contextlost', undefined);
     this.#emit('fallback', { reason: 'context-lost' });
   }
@@ -528,18 +689,23 @@ export class LumiCells {
   #onContextRestored(canvas: HTMLCanvasElement): void {
     if (this.#destroyed || this.#failed || canvas !== this.#view.canvas) return;
     this.#lost = false;
+    this.#lostPending = false;
     // The old engine's objects died with the context: rebuild from the controller's state.
     this.#engine?.dispose();
     this.#engine = null;
     this.#failed = false;
     this.#ensureEngine();
+    if (!this.#engine) this.#releaseSlot();
     this.#updateSubscription();
+    this.#publishState();
     this.#emit('contextrestored', undefined);
   }
 
-  /** Overflow 0 <-> >0 changes the context's alpha attribute: new canvas, new engine. */
+  /**
+   * Overflow 0 <-> >0 changes the context's alpha attribute: new canvas, new engine, in the same
+   * budget slot (a stopped instance gives the slot back and is rebuilt when started again).
+   */
   #rebuildCanvas(): void {
-    const running = this.#unsub !== null;
     this.#unsub?.();
     this.#unsub = null;
     this.#disposeEngine();
@@ -548,11 +714,254 @@ export class LumiCells {
     this.#releaseCanvas();
     this.#view.unmount();
     this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    if (this.#lost) this.#lostPending = true;
     this.#lost = false;
-    if (running || this.#running) {
-      this.#ensureEngine();
-      this.#updateSubscription();
+    this.#drawnSinceMount = false;
+    if (this.#holds && this.#running) this.#ensureEngine();
+    if (!this.#engine && this.#holds) {
+      this.#releaseSlot();
+      this.#parked = !this.#failed;
     }
+    this.#updateSubscription();
+    this.#syncGpu();
+    this.#endPendingLoss();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Context budget: lazy creation, waiting, parking
+
+  /** `render.pauseOffscreen: false`: draws wherever the host is, so it is never parked. */
+  #alwaysOn(): boolean {
+    return !this.#controller.getConfig().render.pauseOffscreen;
+  }
+
+  /** Wants a context now: started, working, and near the viewport (or never paused offscreen). */
+  #wantsContext(): boolean {
+    if (!this.#running || this.#destroyed || this.#failed || this.#noWebgl) return false;
+    if (this.#alwaysOn()) return true;
+    return this.#inZone || this.#inView;
+  }
+
+  /** Asks the scheduler for a slot, or withdraws the request, as the wish changed. */
+  #syncGpu(): void {
+    if (!this.#holds && !this.#destroyed) {
+      if (this.#wantsContext()) {
+        if (!this.#requested) {
+          this.#requested = true;
+          requestContext(this.#client);
+        }
+      } else if (this.#requested) {
+        // The wait (if any) ends here: a later one is reported anew.
+        this.#requested = false;
+        this.#waiting = false;
+        this.#budgetReported = false;
+        cancelRequest(this.#client);
+      }
+    }
+    this.#armParkTimer();
+    this.#publishState();
+  }
+
+  /** The scheduler granted a slot: build the engine (same path as a context restore). */
+  #onGranted(): void {
+    this.#requested = false;
+    this.#waiting = false;
+    this.#budgetReported = false;
+    this.#holds = true;
+    if (this.#destroyed || !this.#wantsContext()) {
+      this.#releaseSlot();
+      this.#publishState();
+      return;
+    }
+    this.#parked = false;
+    this.#ensureEngine();
+    if (!this.#engine) this.#releaseSlot();
+    this.#updateSubscription();
+    this.#armParkTimer();
+    this.#publishState();
+    this.#endPendingLoss();
+  }
+
+  /**
+   * The scheduler refused the request (again: it re-evaluates every waiter on each pass). Only a
+   * real refusal reports a visible wait, never a stale one: an instance that waited offscreen
+   * and then scrolled into view is reported only if the pass after the move still refuses it.
+   */
+  #onRefused(): void {
+    if (this.#destroyed) return;
+    if (!this.#waiting) {
+      this.#waiting = true;
+      this.#publishState();
+    }
+    this.#reportBudgetWait();
+  }
+
+  /** A context lost before a park or rebuild is over once a new engine exists. */
+  #endPendingLoss(): void {
+    if (!this.#lostPending || !this.#engine || this.#lost) return;
+    this.#lostPending = false;
+    // Deferred: this runs inside the scheduler's pass, listeners must not re-enter it.
+    queueMicrotask(() => {
+      if (!this.#destroyed) this.#emit('contextrestored', undefined);
+    });
+  }
+
+  /**
+   * A visible instance (or one that never pauses offscreen) kept waiting by the budget: 'budget'
+   * fallback, and one page warning.
+   */
+  #reportBudgetWait(): void {
+    if (!this.#waiting || !this.#client.visible || this.#budgetReported) return;
+    this.#budgetReported = true;
+    queueMicrotask(() => {
+      if (this.#destroyed || !this.#waiting) return;
+      if (claimBudgetWarning()) {
+        const message = `[lumicells] A visible background waits for a WebGL context: the page budget of ${maxContexts()} contexts is taken by instances that rank higher. It shows its poster until one frees up. Raise the budget with LumiCells.configure({ maxContexts }) or set priority: 'high' on the backgrounds that matter most.`;
+        console.warn(message);
+        this.#emit('warn', { code: 'context-budget', message });
+      }
+      this.#emit('fallback', { reason: 'budget' });
+    });
+  }
+
+  /**
+   * Releases the GPU side (engine, context, canvas) and keeps everything else; the poster shows
+   * instead. `evicted`: the scheduler already took the slot back. An instance that still wants a
+   * context (evicted near the viewport) asks again and waits.
+   */
+  #park(evicted: boolean): void {
+    if (!this.#holds || this.#destroyed) return;
+    if (evicted) this.#holds = false;
+    if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
+    this.#restoreTimer = 0;
+    // Stop listening first: the release below must not come back as a context loss.
+    this.#releaseCanvas();
+    this.#disposeEngine();
+    this.#view.unmount();
+    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    // A lost context is dropped here, not restored: the rebuild on the next grant ends the loss.
+    if (this.#lost) this.#lostPending = true;
+    this.#lost = false;
+    this.#drawnSinceMount = false;
+    this.#parked = true;
+    this.#releaseSlot();
+    this.#updateSubscription();
+    this.#syncGpu();
+  }
+
+  /** Gives the budget slot back (after the engine and its context are gone). */
+  #releaseSlot(): void {
+    this.#clearParkTimer();
+    if (!this.#holds) return;
+    this.#holds = false;
+    releaseContext(this.#client);
+  }
+
+  /**
+   * Parks the instance after `parkAfterMs` out of the zone (instances that never pause stay).
+   * `elapsedMs`: time already spent away, when the timer is re-armed for a new `parkAfterMs`.
+   */
+  #armParkTimer(elapsedMs = 0): void {
+    const away = !this.#inZone && !this.#inView;
+    if (!away || !this.#holds || this.#destroyed || this.#alwaysOn()) {
+      this.#clearParkTimer();
+      return;
+    }
+    if (Number.isNaN(this.#awaySince)) this.#awaySince = performance.now();
+    if (this.#parkTimer) return;
+    const ms = runtimeSettings().parkAfterMs;
+    if (!(ms < Number.POSITIVE_INFINITY)) return;
+    this.#parkTimer = setTimeout(
+      () => {
+        this.#parkTimer = 0;
+        if (!this.#inZone && !this.#inView) this.#park(false);
+      },
+      Math.max(0, ms - elapsedMs),
+    );
+  }
+
+  #clearParkTimer(): void {
+    if (this.#parkTimer) clearTimeout(this.#parkTimer);
+    this.#parkTimer = 0;
+    this.#awaySince = Number.NaN;
+  }
+
+  /** LumiCells.configure() changed `parkAfterMs`: a pending (or missing) timer follows it. */
+  #onSettingsChanged(): void {
+    if (this.#destroyed) return;
+    if (this.#parkTimer) clearTimeout(this.#parkTimer);
+    this.#parkTimer = 0;
+    const since = this.#awaySince;
+    this.#armParkTimer(Number.isNaN(since) ? 0 : performance.now() - since);
+  }
+
+  /**
+   * Host size for ranking among visible instances. Read by the scheduler right before it ranks
+   * (once per pass, only while instances compete for slots), from one source for holders and
+   * waiters alike: a waiter has no canvas to measure, so a cached size could be stale.
+   */
+  #refreshArea(): void {
+    if (this.#destroyed) return;
+    const r = this.host.getBoundingClientRect();
+    this.#area = r.width > 0 && r.height > 0 ? r.width * r.height : 0;
+  }
+
+  /**
+   * While the instance holds or asks for a slot, a resize of its host can change who deserves
+   * one (among visible instances the larger ranks higher), yet no intersection callback reports
+   * a resize: a ResizeObserver on the host asks the scheduler to rank again when the area moves
+   * to another bucket (a waiting card that grows, a holder that shrinks). The pass then reads
+   * every competitor's size afresh (#refreshArea); the observer is only the trigger.
+   */
+  #watchArea(): void {
+    const want = (this.#holds || this.#requested) && !this.#destroyed;
+    if (want === this.#areaWatched) return;
+    const win = this.host.ownerDocument.defaultView;
+    if (!win || typeof win.ResizeObserver !== 'function') return;
+    this.#areaWatched = want;
+    this.#areaBucket = -1;
+    if (want) {
+      this.#areaRo ??= new win.ResizeObserver((entries) => this.#onHostResize(entries));
+      this.#areaRo.observe(this.host);
+    } else {
+      this.#areaRo?.unobserve(this.host);
+    }
+  }
+
+  #onHostResize(entries: ResizeObserverEntry[]): void {
+    const e = entries[entries.length - 1];
+    if (!e || this.#destroyed || !this.#areaWatched) return;
+    const box = e.borderBoxSize?.[0];
+    const w = box ? box.inlineSize : e.contentRect.width;
+    const h = box ? box.blockSize : e.contentRect.height;
+    const bucket = areaBucket(w > 0 && h > 0 ? w * h : 0);
+    const was = this.#areaBucket;
+    this.#areaBucket = bucket;
+    // The first report only sets the baseline: the request was just ranked on fresh sizes.
+    if (was >= 0 && bucket !== was) rankChanged();
+  }
+
+  /** The host moved relative to the zones (observer callbacks). */
+  #onPlacement(): void {
+    this.#syncGpu();
+    this.#updateSubscription();
+    // A visible waiter is reported only once the next pass (at frame end) still refuses it.
+    rankChanged();
+  }
+
+  /** Called after every change of the GPU side: the state, and the resize watch that follows it. */
+  #publishState(): void {
+    this.#stats.state = this.#computeState();
+    this.#watchArea();
+  }
+
+  #computeState(): InstanceState {
+    if (this.#destroyed) return 'destroyed';
+    if (this.#failed || this.#noWebgl) return 'failed';
+    if (this.#engine) return this.#lost ? 'lost' : 'live';
+    if (this.#waiting) return 'waiting';
+    if (this.#requested) return 'pending';
+    return this.#parked ? 'parked' : 'pending';
   }
 
   #updateSubscription(): void {
@@ -610,7 +1019,10 @@ export class LumiCells {
     }
     if (render) {
       this.#applyReducedMotion();
+      this.#syncGpu();
       this.#updateSubscription();
+      // render.pauseOffscreen decides whether an offscreen instance ranks as visible.
+      rankChanged();
     }
     if (interaction) this.#pointer.configure(cfg.interaction);
     if (this.#view.posterVisible) this.#view.showPoster(posterCss(cfg));
@@ -660,6 +1072,11 @@ export class LumiCells {
   #render(now: number): void {
     const engine = this.#engine;
     if (this.#destroyed || !engine) return;
+    // Lost since the last frame (the loss event may still be queued): hide the canvas now.
+    if (engine.isContextLost()) {
+      this.#enterLost();
+      return;
+    }
     const c = this.#controller;
     const perf = c.perf;
     const raw = this.#lastNow < 0 ? perf.vsyncMs : now - this.#lastNow;
@@ -704,6 +1121,8 @@ export class LumiCells {
       c.commitFrame();
       if (!this.#drawnSinceMount) {
         this.#drawnSinceMount = true;
+        noteFirstDraw(now);
+        this.#view.setCanvasVisible(true);
         this.#view.hidePoster();
         if (!this.#readyEmitted) {
           this.#readyEmitted = true;
@@ -797,13 +1216,47 @@ export class LumiCells {
       },
       { signal },
     );
-    if (win.matchMedia) {
-      this.#reducedMql = win.matchMedia('(prefers-reduced-motion: reduce)');
+    if (typeof win.matchMedia === 'function') {
+      this.#reducedMql = reducedMotionQuery(win);
       this.#reducedMql.addEventListener('change', () => this.#applyReducedMotion(), { signal });
       this.#applyReducedMotion();
     }
-    signal.addEventListener('abort', () => this.#io?.disconnect(), { once: true });
+    signal.addEventListener(
+      'abort',
+      () => {
+        this.#io?.disconnect();
+        this.#zoneIo?.disconnect();
+        this.#areaRo?.disconnect();
+      },
+      { once: true },
+    );
+    if (typeof win.IntersectionObserver === 'function') {
+      // Unknown until the observers report (right after the first frame): nothing is created
+      // before that, so a page that mounts many instances off screen creates no context.
+      this.#inView = false;
+      this.#inZone = false;
+    }
     this.#observeInView();
+    this.#observeZone();
+  }
+
+  /** Lazy creation and parking: is the host within about one viewport of the screen? */
+  #observeZone(): void {
+    const win = this.host.ownerDocument.defaultView;
+    if (!win || typeof win.IntersectionObserver !== 'function') return;
+    const io = marginObserver(
+      win,
+      (entries) => {
+        if (io !== this.#zoneIo || this.#destroyed) return;
+        const e = entries[entries.length - 1];
+        if (!e) return;
+        this.#inZone = e.isIntersecting;
+        this.#onPlacement();
+      },
+      ZONE_MARGIN,
+    );
+    this.#zoneIo = io;
+    io.observe(this.host);
   }
 
   /**
@@ -819,15 +1272,18 @@ export class LumiCells {
     if (margin === this.#ioMargin && this.#io) return;
     this.#ioMargin = margin;
     this.#io?.disconnect();
-    const io = new win.IntersectionObserver(
+    const io = marginObserver(
+      win,
       (entries) => {
-        if (io !== this.#io) return;
+        if (io !== this.#io || this.#destroyed) return;
         const e = entries[entries.length - 1];
         if (!e) return;
+        const was = this.#inView;
         this.#inView = e.isIntersecting;
-        this.#updateSubscription();
+        if (was && !this.#inView) this.#lastVisible = performance.now();
+        this.#onPlacement();
       },
-      { rootMargin: `${margin}px` },
+      `${margin}px`,
     );
     this.#io = io;
     io.observe(this.host);
@@ -852,6 +1308,23 @@ export class LumiCells {
         console.error(err);
       }
     }
+  }
+}
+
+/**
+ * An IntersectionObserver whose margin grows the viewport (rootMargin) and every scroll container
+ * on the way to the target (scrollMargin, see ZONE_MARGIN). Engines that do not know scrollMargin
+ * ignore it; one that knows it but rejects the value gets the viewport margin alone.
+ */
+function marginObserver(
+  win: Window & typeof globalThis,
+  cb: IntersectionObserverCallback,
+  margin: string,
+): IntersectionObserver {
+  try {
+    return new win.IntersectionObserver(cb, { rootMargin: margin, scrollMargin: margin });
+  } catch {
+    return new win.IntersectionObserver(cb, { rootMargin: margin });
   }
 }
 

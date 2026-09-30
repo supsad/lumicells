@@ -13,15 +13,82 @@ import type {
 
 export type ConfigSource = 'api' | 'stand' | 'attribute' | 'import' | 'preset';
 
+/**
+ * How much an instance matters when the page's WebGL context budget is full (see
+ * `LumiCells.configure`). Among visible instances a higher priority keeps (or takes) a context
+ * first; offscreen instances give theirs up before any visible one, whatever their priority.
+ * An instance with `render.pauseOffscreen: false` draws wherever it is and ranks as visible.
+ */
+export type InstancePriority = 'high' | 'normal' | 'low';
+
+/**
+ * Lifecycle of an instance's GPU side (`Stats.state`):
+ * - `pending`  no context yet: not started, not near the viewport yet, or queued for creation;
+ * - `waiting`  near the viewport, but the context budget is full of instances that rank higher:
+ *              the poster is shown until a context frees up;
+ * - `live`     owns a WebGL context (drawing, paused offscreen or compiling its first frame);
+ * - `parked`   gave its context back (off screen for `parkAfterMs`, or evicted by a higher
+ *              ranked instance): poster shown, config and runtime layers kept, rebuilt when it
+ *              comes back near the viewport;
+ * - `lost`     the browser took the context away; waiting for it to be restored;
+ * - `failed`   no WebGL2 or a shader/resource failure: the poster stays;
+ * - `destroyed` after `destroy()`: no context, no canvas, nothing left to restore.
+ */
+export type InstanceState =
+  | 'pending'
+  | 'waiting'
+  | 'live'
+  | 'parked'
+  | 'lost'
+  | 'failed'
+  | 'destroyed';
+
+/**
+ * Page-wide settings of every LumiCells instance (`LumiCells.configure`). Safe to call before
+ * any instance exists and on the server (it touches no DOM).
+ */
+export interface ConfigureOptions {
+  /**
+   * Most WebGL contexts LumiCells may own at once on the page. `'auto'` (default): 4, or 2 on
+   * touch devices (`(pointer: coarse)`). Browsers keep about 16 contexts per page (fewer on
+   * phones) and kill the oldest one past that; staying well below leaves room for the app's own
+   * WebGL. Instances beyond the budget show their poster; offscreen ones give their context to
+   * visible ones first. Lowering it evicts the lowest ranked instances at once.
+   */
+  maxContexts?: number | 'auto';
+  /**
+   * An instance that stays farther than about one viewport from the screen for this long (ms)
+   * releases its GPU resources and context and shows its poster; it is rebuilt when it comes
+   * back (the Life automaton reseeds, everything else continues). Default 10000; `Infinity`
+   * (or anything above 2147483647 ms, about 24.8 days, the longest timer delay) never parks.
+   * Instances with `render.pauseOffscreen: false` are never parked. Inside a scroll container
+   * "about one viewport" means one container size where the browser supports
+   * IntersectionObserver `scrollMargin` (Chrome, Edge 120+); elsewhere a host outside the
+   * container's visible part counts as far away.
+   */
+  parkAfterMs?: number;
+  /**
+   * Most engines (WebGL contexts) created per frame, default 1. Creating one costs several
+   * milliseconds of main-thread time, so a list of backgrounds comes alive over a few frames
+   * instead of one long task.
+   */
+  createPerFrame?: number;
+}
+
 export interface LumiCellsOptions {
   /** Partial config merged over the preset (or defaults). */
   config?: LumiCellsConfigInput;
   /** Named preset used as the base under `config`. */
   preset?: PresetId;
-  /** Start rendering right away (default true). */
+  /**
+   * Start right away (default true). The WebGL context itself is created lazily, once the host
+   * comes within about one viewport of the screen (see `LumiCells.configure`).
+   */
   autoStart?: boolean;
   /** Shortcut for `interaction.pointer` + `interaction.click`. */
   interactive?: boolean;
+  /** Priority for the page's context budget (default `'normal'`). */
+  priority?: InstancePriority;
 }
 
 export interface ConfigUpdateOptions {
@@ -173,6 +240,8 @@ export interface Stats {
   lifts: number;
   influences: number;
   softwareFallback: boolean;
+  /** GPU lifecycle state (always current, unlike the frame figures sampled about 4 times a second). */
+  state: InstanceState;
 }
 
 export type DebugView = 'final' | 'field' | 'halo' | 'bloom' | 'haze' | 'cells';
@@ -192,9 +261,22 @@ export interface LumiCellsEvents {
    */
   config: { config: Readonly<LumiCellsConfig>; changed: ParamPath[]; source: ConfigSource };
   quality: { scale: number; quality: QualityTier; reason: 'slow' | 'recovered' | 'locked' };
+  /**
+   * Non-fatal warnings. Codes include `software-webgl` (CPU rasterizer), `influence-overflow`
+   * (more influences than GPU slots) and `context-budget` (once per page: a visible instance
+   * waits because the WebGL context budget is full, see `LumiCells.configure`).
+   */
   warn: { code: string; message: string };
   error: Error;
-  fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' };
+  /**
+   * The poster is shown instead of the animation. `no-webgl2` and `compile` are final;
+   * `context-lost` lasts until `contextrestored`; `budget` means a visible instance waits for a
+   * WebGL context because the page budget (`LumiCells.configure({ maxContexts })`) is full of
+   * instances that rank higher (an instance with `render.pauseOffscreen: false` counts as
+   * visible): it starts drawing (with 'ready' if it never drew before) as soon as a context frees
+   * up.
+   */
+  fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' | 'budget' };
   contextlost: undefined;
   contextrestored: undefined;
   destroy: undefined;

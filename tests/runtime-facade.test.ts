@@ -193,20 +193,49 @@ describe('LumiCells without WebGL2', () => {
     expect(el.style.position).toBe('absolute');
   });
 
-  it('warns once when more than 8 instances are alive', async () => {
+  it('many instances alone warn about nothing (the context budget handles them)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const list: LumiCells[] = [];
     const warns: string[] = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       const pl = new LumiCells(host(), { autoStart: false });
       pl.on('warn', (e) => warns.push(e.code));
       list.push(pl);
     }
     await tick();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warns).toEqual(['too-many-instances']);
+    expect(warn).not.toHaveBeenCalled();
+    expect(warns).toEqual([]);
     for (const pl of list) pl.destroy();
     warn.mockRestore();
+  });
+
+  it('stats.state: pending until started, failed without WebGL2, destroyed after destroy()', () => {
+    const pl = new LumiCells(host(), { autoStart: false });
+    expect(pl.getStats().state).toBe('pending');
+    pl.start();
+    expect(pl.getStats().state).toBe('failed');
+    pl.destroy();
+    expect(pl.getStats().state).toBe('destroyed');
+    const idle = new LumiCells(host(), { autoStart: false });
+    idle.destroy();
+    idle.stop();
+    expect(idle.getStats().state).toBe('destroyed');
+  });
+
+  it('configure() and priority are safe without WebGL2', () => {
+    LumiCells.configure({ maxContexts: 2, parkAfterMs: 0, createPerFrame: 2 });
+    const pl = new LumiCells(host(), { priority: 'high' });
+    expect(pl.priority).toBe('high');
+    pl.setPriority('low');
+    expect(pl.priority).toBe('low');
+    // Invalid values are ignored.
+    pl.setPriority('urgent' as never);
+    expect(pl.priority).toBe('low');
+    const bogus = new LumiCells(host(), { priority: 'bogus' as never, autoStart: false });
+    expect(bogus.priority).toBe('normal');
+    bogus.destroy();
+    LumiCells.configure({ maxContexts: 'auto', parkAfterMs: 10_000, createPerFrame: 1 });
+    pl.destroy();
   });
 
   it('listener errors do not break other listeners', async () => {

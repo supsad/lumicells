@@ -9,9 +9,16 @@
  * - The first size is not read at mount: takeSize() reads it in the ticker's measure phase unless
  *   the observer reported first, so mounting N instances in one task costs one layout, not N
  *   (a synchronous clientWidth read after each insert would force a layout per instance).
- * - DPR changes (window dragged to another monitor, zoom) re-arm a resolution media query.
+ * - DPR changes (window dragged to another monitor, zoom) re-arm a resolution media query, armed
+ *   with the first canvas (before that there is nothing to resize).
  * - The poster (static CSS gradient) sits on the host's background until the first frame.
+ * - The canvas is hidden (visibility, so its size is still observed) until the owner has drawn a
+ *   frame on it, and again while its context is lost: a canvas without a drawn frame shows
+ *   nothing useful, and a lost context's canvas paints a blank box over the poster.
  */
+
+/** `(pointer: coarse)` per window: read once, not once per instance. */
+const coarseByWindow = new WeakMap<Window, boolean>();
 
 const BG_PROPS = [
   'background-image',
@@ -47,6 +54,7 @@ export class HostView {
   private needsInitialRead = false;
   private everApplied = false;
   private lastApply = Number.NEGATIVE_INFINITY;
+  private dprArmed = false;
   private readonly size: HostSize = { hostCssW: 0, hostCssH: 0, deviceW: 0, deviceH: 0, dpr: 1 };
   /** Called when a new size is pending (so a paused owner can react). */
   onChange: (() => void) | null = null;
@@ -67,7 +75,6 @@ export class HostView {
       this.savedPosition = host.style.position;
       host.style.position = 'relative';
     }
-    this.armDpr();
   }
 
   get dpr(): number {
@@ -77,7 +84,13 @@ export class HostView {
   /** Coarse pointers (phones, tablets) get a smaller pixel budget. */
   get coarsePointer(): boolean {
     const win = this.host.ownerDocument.defaultView;
-    return !!win?.matchMedia?.('(pointer: coarse)').matches;
+    if (!win) return false;
+    let coarse = coarseByWindow.get(win);
+    if (coarse === undefined) {
+      coarse = !!win.matchMedia?.('(pointer: coarse)').matches;
+      coarseByWindow.set(win, coarse);
+    }
+    return coarse;
   }
 
   /** Creates a fresh canvas with the given overflow margin (CSS px). */
@@ -92,11 +105,16 @@ export class HostView {
     s.pointerEvents = 'none';
     s.display = 'block';
     s.zIndex = '0';
+    s.visibility = 'hidden';
     this.canvas = canvas;
     this.applyOverflow(overflow);
     this.host.insertBefore(canvas, this.host.firstChild);
     this.mountCtl = new AbortController();
     this.observe(canvas);
+    if (!this.dprArmed) {
+      this.dprArmed = true;
+      this.armDpr();
+    }
     return canvas;
   }
 
@@ -108,6 +126,12 @@ export class HostView {
     this.ro = null;
     this.canvas?.remove();
     this.canvas = null;
+  }
+
+  /** Shows the canvas once a frame is drawn on it; hides it while its context is lost. */
+  setCanvasVisible(visible: boolean): void {
+    const c = this.canvas;
+    if (c) c.style.visibility = visible ? '' : 'hidden';
   }
 
   /** Changes the margin without rebuilding (both old and new values > 0). */
