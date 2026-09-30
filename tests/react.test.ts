@@ -259,6 +259,41 @@ describe('<PixelLife>', () => {
     expect(host.querySelector('#fb')).not.toBeNull();
   });
 
+  it('a context-loss fallback ends on contextrestored (node and poster go away)', () => {
+    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    const host = container.firstElementChild as HTMLElement;
+    const inst = live()[0] as Fake;
+    act(() => inst.emit('ready'));
+    expect(host.querySelector('[data-pixel-life-poster]')).toBeNull();
+
+    act(() => {
+      inst.emit('contextlost');
+      inst.emit('fallback', { reason: 'context-lost' });
+    });
+    expect(host.querySelector('#fb')).not.toBeNull();
+    expect(host.querySelector('[data-pixel-life-poster]')).not.toBeNull();
+
+    act(() => inst.emit('contextrestored'));
+    expect(host.querySelector('#fb')).toBeNull();
+    expect(host.querySelector('[data-pixel-life-poster]')).toBeNull();
+  });
+
+  it('compile and no-webgl2 fallbacks are sticky across contextrestored', () => {
+    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    const host = container.firstElementChild as HTMLElement;
+    const inst = live()[0] as Fake;
+    act(() => inst.emit('fallback', { reason: 'compile' }));
+    act(() => inst.emit('contextrestored'));
+    expect(host.querySelector('#fb')).not.toBeNull();
+
+    act(() => root.unmount());
+    FakeClass.supported = false;
+    root = createRoot(container);
+    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    act(() => live()[0]?.emit('contextrestored'));
+    expect((container.firstElementChild as HTMLElement).querySelector('#fb')).not.toBeNull();
+  });
+
   it('routes onReady/onError/onStats to the latest callbacks', () => {
     const first = vi.fn();
     const second = vi.fn();
@@ -329,6 +364,45 @@ describe('hooks', () => {
     act(() => root.unmount());
     expect(inst.binds[1]?.disposed).toBe(true);
     root = createRoot(container);
+  });
+
+  it('useInfluence re-binds for options that update() cannot apply', () => {
+    let current: Record<string, unknown> = { type: 'shadow', padding: 0 };
+    const handles: Array<{ current: unknown }> = [];
+    function Bubble() {
+      const ref = useRef<HTMLDivElement>(null);
+      handles.push(useInfluence(ref, current as any) as { current: unknown });
+      return createElement('div', { ref });
+    }
+    const view = () => createElement(PixelLife, null, createElement(Bubble));
+    render(view());
+    const inst = live()[0] as Fake;
+    expect(inst.binds).toHaveLength(1);
+
+    current = { type: 'shadow', padding: 24 }; // padding is fixed at bind time
+    render(view());
+    expect(inst.binds).toHaveLength(2);
+    expect(inst.binds[0]?.disposed).toBe(true);
+    expect(inst.binds[1]?.opts).toEqual({ type: 'shadow', padding: 24 });
+    expect(handles.at(-1)?.current).not.toBeNull();
+
+    current = { type: 'shadow', padding: 24, track: 'frame' };
+    render(view());
+    expect(inst.binds).toHaveLength(3);
+
+    current = { type: 'shadow', padding: 24, track: 'frame', strength: 1 }; // plain update
+    render(view());
+    expect(inst.binds).toHaveLength(3);
+    expect(inst.binds[2]?.updates).toEqual([current]);
+
+    current = { type: 'shadow', padding: 24, track: 'frame', strength: undefined }; // key unset
+    render(view());
+    expect(inst.binds).toHaveLength(4);
+
+    current = { ...current, cornerRadius: 6 }; // auto-corner flips off
+    render(view());
+    expect(inst.binds).toHaveLength(5);
+    expect(inst.binds.filter((b) => !b.disposed)).toHaveLength(1);
   });
 
   it('useInfluence survives StrictMode double effects with exactly one live binding', () => {

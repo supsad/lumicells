@@ -39,7 +39,7 @@ export interface PixelLifeProps
   onError?: (error: Error) => void;
   /** Called about 4 times per second. */
   onStats?: (stats: Stats) => void;
-  /** The PixelLife instance (null until mounted). React 19 ref-as-prop. */
+  /** The PixelLife instance (null until mounted). Needs React 19 (ref as a regular prop). */
   ref?: Ref<PixelLifeCore>;
   /** Rendered above the canvas. */
   children?: ReactNode;
@@ -101,6 +101,9 @@ export function PixelLife({
     // autoStart is off so no event can fire before the listeners below are attached.
     const inst = new PixelLifeCore(host, { config: initial.config, autoStart: false });
     appliedKey.current = initial.key;
+    // 'no-webgl2' and 'compile' are final; 'context-lost' is temporary (the facade rebuilds its
+    // engine on 'webglcontextrestored'), so the consumer's fallback node must not outlive it.
+    let sticky = !inst.supported;
     const offs = [
       inst.on('ready', () => {
         setStatus((s) => (s === 'fallback' ? s : 'ready'));
@@ -108,7 +111,15 @@ export function PixelLife({
       }),
       inst.on('error', (e) => latest.current.onError?.(e)),
       inst.on('stats', (s) => latest.current.onStats?.(s)),
-      inst.on('fallback', () => setStatus('fallback')),
+      inst.on('fallback', (e) => {
+        if (e.reason !== 'context-lost') sticky = true;
+        setStatus('fallback');
+      }),
+      // 'ready' is emitted once per instance, so the restore is what ends a context-loss fallback
+      // (the facade hides its own poster on the next drawn frame).
+      inst.on('contextrestored', () => {
+        if (!sticky) setStatus('ready');
+      }),
     ];
     if (!inst.supported) setStatus('fallback');
     setInstance(inst);

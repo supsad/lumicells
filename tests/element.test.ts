@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { PixelLife } from '../src/core/pixel-life';
 import { parsePlAttrs } from '../src/element/data-attrs';
 import { definePixelLifeElement, PixelLifeElement } from '../src/element/index';
+import { needsRebind } from '../src/element/rebind';
 
 // The facade needs WebGL2, which jsdom does not have. A recording double stands in for it, so
 // these tests cover the element's own logic (state, lifecycle, binding) independent of the runtime.
@@ -53,8 +54,17 @@ vi.mock('../src/core/pixel-life', () => {
     replaceConfig(config: any, opts: any) {
       this.replaced.push({ config, opts });
     }
+    fallbackSent = false;
     start() {
+      if (this.running) return;
       this.running = true;
+      // Like the real facade: the poster-only path reports 'no-webgl2' on a microtask.
+      if (!this.supported && !this.fallbackSent) {
+        this.fallbackSent = true;
+        queueMicrotask(() => {
+          if (!this.destroyed) this.emit('fallback', { reason: 'no-webgl2' });
+        });
+      }
     }
     stop() {
       this.running = false;
@@ -228,6 +238,23 @@ describe('attributes and properties', () => {
     expect(inst.replaced.at(-1)?.config.modes.sphere.rimPower).toBe(0.8); // from orb
   });
 
+  it('re-setting the same preset attribute value wins over a property override', async () => {
+    const el = mount('<pixel-life preset="orb"></pixel-life>');
+    await flush();
+    const inst = live()[0] as Fake;
+    expect(inst.options.config.modes.sphere.hole).toBe(0);
+
+    el.preset = 'life'; // the attribute still says "orb"
+    await flush();
+    expect(el.preset).toBe('life');
+    expect(inst.replaced.at(-1)?.config.modes.life.weight).toBe(1);
+
+    el.setAttribute('preset', 'orb'); // old === new === 'orb'
+    expect(el.preset).toBe('orb');
+    await flush();
+    expect(inst.replaced.at(-1)?.config.modes.sphere.hole).toBe(0);
+  });
+
   it('reflects boolean properties to attributes and back without echo loops', async () => {
     const el = mount('<pixel-life></pixel-life>');
     await flush();
@@ -366,9 +393,28 @@ describe('events', () => {
     document.addEventListener('pl-fallback', (e) => seen.push((e as CustomEvent).detail));
     mount('<pixel-life></pixel-life>');
     await flush();
+    await flush();
+    // The synchronous notice and the facade's deferred event are one report, not two.
     expect(seen).toEqual([{ reason: 'no-webgl2' }]);
     live()[0]?.emit('fallback', { reason: 'no-webgl2' });
-    expect(seen).toHaveLength(2); // the facade's own event is passed through as well
+    expect(seen).toHaveLength(1);
+    // Later reasons still pass through.
+    live()[0]?.emit('fallback', { reason: 'context-lost' });
+    live()[0]?.emit('fallback', { reason: 'compile' });
+    expect(seen).toEqual([
+      { reason: 'no-webgl2' },
+      { reason: 'context-lost' },
+      { reason: 'compile' },
+    ]);
+  });
+
+  it('a paused element without WebGL2 is still notified once at mount', async () => {
+    FakeClass.supported = false;
+    const seen: unknown[] = [];
+    document.addEventListener('pl-fallback', (e) => seen.push((e as CustomEvent).detail));
+    mount('<pixel-life paused></pixel-life>');
+    await flush();
+    expect(seen).toEqual([{ reason: 'no-webgl2' }]);
   });
 });
 
@@ -395,6 +441,42 @@ describe('src', () => {
     await flush();
     expect(inst.replaced.at(-1)?.config.animation.speed).toBe(1);
     expect(inst.replaced.at(-1)?.config.modes.sphere.hole).toBe(0);
+  });
+
+  it('applies the first loaded file instantly (no crossfade from the default look)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => okResponse({ animation: { speed: 3 } })),
+    );
+    const el = mount('<pixel-life src="/c.json" transition="250"></pixel-life>');
+    await flush();
+    await flush();
+    const inst = live()[0] as Fake;
+    expect(inst.replaced).toHaveLength(1);
+    expect(inst.replaced[0]?.config.animation.speed).toBe(3);
+    expect(inst.replaced[0]?.opts.transition).toBe(0);
+
+    // Later changes tween as usual.
+    el.config = { animation: { speed: 1 } };
+    await flush();
+    expect(inst.replaced[1]?.opts.transition).toBe(250);
+  });
+
+  it('re-setting the same src attribute value reloads after a property override', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        urls.push(url);
+        return new Promise<Response>(() => {});
+      }),
+    );
+    const el = mount('<pixel-life src="/a.json"></pixel-life>');
+    await flush();
+    el.src = '/b.json';
+    el.setAttribute('src', '/a.json'); // old === new === '/a.json'
+    expect(el.src).toBe('/a.json');
+    expect(urls).toEqual(['/a.json', '/b.json', '/a.json']);
   });
 
   it('a partial file keeps the preset underneath', async () => {
@@ -648,5 +730,61 @@ describe('auto-binding', () => {
     inst.interaction = { pointer: false, click: false };
     child.dispatchEvent(new MouseEvent('pointermove', { clientX: 7, clientY: 9, bubbles: true }));
     expect(got).toHaveLength(1);
+  });
+});
+
+describe('document-wide observer', () => {
+  const documentObserves = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter((c) => c[0] === document).length;
+
+  it('is installed only for elements with an id, and follows id changes', async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, 'observe');
+    const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect');
+    try {
+      const el = mount('<pixel-life></pixel-life>');
+      await flush();
+      expect(documentObserves(observe)).toBe(0);
+
+      el.id = 'bg';
+      expect(documentObserves(observe)).toBe(1);
+      const outside = document.createElement('div');
+      outside.setAttribute('data-pl-for', 'bg');
+      document.body.append(outside);
+      await flush();
+      expect(live()[0]?.handles.map((h) => h.el)).toEqual([outside]);
+
+      disconnect.mockClear();
+      el.removeAttribute('id');
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      await flush();
+      expect(live()[0]?.handles[0]?.disposed).toBe(true); // the portal is no longer owned
+
+      el.id = 'other';
+      expect(documentObserves(observe)).toBe(2);
+    } finally {
+      observe.mockRestore();
+      disconnect.mockRestore();
+    }
+  });
+
+  it('still binds descendants of an element without an id', async () => {
+    mount('<pixel-life><div data-pl-influence></div></pixel-life>');
+    await flush();
+    expect(live()[0]?.handles).toHaveLength(1);
+  });
+});
+
+describe('needsRebind', () => {
+  it('flags what update() cannot apply', () => {
+    expect(needsRebind({ strength: 1 }, { strength: 2 })).toBe(false);
+    expect(needsRebind({ strength: 1 }, { strength: 1, color: '#f00' })).toBe(false);
+    expect(needsRebind({}, { padding: 4 })).toBe(true);
+    expect(needsRebind({ track: 'auto' }, { track: 'frame' })).toBe(true);
+    expect(needsRebind({ cornerRadius: 4 }, { cornerRadius: 8 })).toBe(false);
+    expect(needsRebind({}, { cornerRadius: 8 })).toBe(true);
+    expect(needsRebind({ cornerRadius: 8 }, {})).toBe(true);
+    expect(needsRebind({ color: '#f00' }, {})).toBe(true);
+    expect(needsRebind({ color: '#f00' }, { color: undefined })).toBe(true);
+    expect(needsRebind({ color: undefined }, {})).toBe(false);
   });
 });

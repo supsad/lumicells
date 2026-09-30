@@ -8,13 +8,7 @@
  */
 
 import { PixelLife } from '../core/pixel-life';
-import type {
-  BindElementOptions,
-  InfluenceHandle,
-  InfluenceOptions,
-  PixelLifeEvents,
-  Stats,
-} from '../core/types';
+import type { InfluenceHandle, InfluenceOptions, PixelLifeEvents, Stats } from '../core/types';
 import {
   isPresetId,
   normalizePatch,
@@ -31,6 +25,7 @@ import {
   type PlAttrs,
   parsePlAttrs,
 } from './data-attrs';
+import { needsRebind } from './rebind';
 import { resolveConfig } from './resolve';
 
 export const PIXEL_LIFE_TAG = 'pixel-life';
@@ -85,8 +80,8 @@ function applyStyle(root: ShadowRoot): void {
   root.append(style);
 }
 
-// One MutationObserver per root node serves every <pixel-life> that has portals (data-pl-for),
-// instead of each element observing the whole document.
+// One MutationObserver per root node serves every <pixel-life> that has an id (the only elements
+// that can own portals, data-pl-for), instead of each element observing the whole document.
 type RootCallback = (records: MutationRecord[]) => void;
 interface RootWatcher {
   mo: MutationObserver;
@@ -199,6 +194,8 @@ export class PixelLifeElement extends Base {
   #srcAbort: AbortController | null = null;
   #srcUrl: string | null = null;
   #srcPatch: PixelLifeConfigInput | null = null;
+  /** The next flush applies a freshly loaded src patch: no visible crossfade from the default look. */
+  #srcInstant = false;
 
   #bindings = new Map<Element, Binding>();
   #localObserver: MutationObserver | null = null;
@@ -315,10 +312,13 @@ export class PixelLifeElement extends Base {
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, value: string | null): void {
-    if (this.#reflecting || oldValue === value) return;
+    if (this.#reflecting) return;
+    // preset/src are not reflected: a property assignment can leave a stale attribute behind, so
+    // re-setting the same attribute value must still win. They compare against the property state.
+    if (oldValue === value && name !== 'preset' && name !== 'src') return;
     switch (name) {
       case 'preset':
-        this.preset = value;
+        if ((isPresetId(value) ? value : null) !== this.#preset) this.preset = value;
         break;
       case 'src':
         this.src = value;
@@ -339,7 +339,11 @@ export class PixelLifeElement extends Base {
         this.#transition = parseTransitionAttr(value);
         break;
       case 'id':
-        if (this.#instance) this.#scanBindings();
+        if (this.#instance) {
+          // The document-wide observer only exists for elements with an id.
+          if ((this.#unwatchRoot !== null) !== (this.id !== '')) this.#rewatchRoot();
+          else this.#scanBindings();
+        }
         break;
     }
   }
@@ -390,10 +394,11 @@ export class PixelLifeElement extends Base {
       this.#createInstance(resolved.config);
     } else if (resolved.key !== this.#key) {
       this.#instance.replaceConfig(resolved.config, {
-        transition: this.#transition ?? undefined,
+        transition: this.#srcInstant ? 0 : (this.#transition ?? undefined),
         source: 'attribute',
       });
     }
+    this.#srcInstant = false;
     this.#key = resolved.key;
     this.#syncPaused();
   }
@@ -416,6 +421,10 @@ export class PixelLifeElement extends Base {
       instance.on('stats', (e) => this.#emit('pl-stats', { ...e })),
       instance.on('error', (e) => this.#emit('pl-error', e)),
       instance.on('fallback', (e) => {
+        // The synchronous notice below (which paused elements rely on) already reported
+        // no-webgl2; the facade's own deferred event for it must not be reported again.
+        // 'compile' and 'context-lost' still pass.
+        if (this.#fallbackNotified && e.reason === 'no-webgl2') return;
         this.#fallbackNotified = true;
         this.#emit('pl-fallback', e);
       }),
@@ -442,6 +451,7 @@ export class PixelLifeElement extends Base {
     this.#srcAbort?.abort();
     this.#srcAbort = null;
     if (!this.#srcPatch) this.#srcUrl = null;
+    this.#srcInstant = false;
     this.#dropInstance();
   }
 
@@ -487,6 +497,7 @@ export class PixelLifeElement extends Base {
         }
         this.#srcPatch = patch;
         this.#srcUrl = url;
+        this.#srcInstant = true;
         this.#schedule();
       })
       .catch((err: unknown) => {
@@ -522,8 +533,13 @@ export class PixelLifeElement extends Base {
 
   #rewatchRoot(): void {
     this.#unwatchRoot?.();
+    this.#unwatchRoot = null;
     this.#watchedRoot = this.getRootNode();
-    this.#unwatchRoot = watchRoot(this.#watchedRoot, (records) => this.#onRootMutations(records));
+    // Only portals (data-pl-for, which need an id) care about mutations outside this element;
+    // an element without an id must not make the browser report every DOM change on the page.
+    if (this.id !== '') {
+      this.#unwatchRoot = watchRoot(this.#watchedRoot, (records) => this.#onRootMutations(records));
+    }
     this.#scanBindings();
   }
 
@@ -745,12 +761,6 @@ export class PixelLifeElement extends Base {
     if (pulse) listen('pulse', pulse);
     if (lift) listen('lift', lift);
   }
-}
-
-/** `track` and `padding` are fixed at bind time; a removed key cannot be "unset" via update(). */
-function needsRebind(prev: BindElementOptions, next: BindElementOptions): boolean {
-  if (prev.track !== next.track || prev.padding !== next.padding) return true;
-  return (Object.keys(prev) as Array<keyof BindElementOptions>).some((k) => !(k in next));
 }
 
 /**

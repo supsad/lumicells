@@ -21,11 +21,16 @@ import type {
   PulseOptions,
   Stats,
 } from '../core/types';
+import { needsRebind } from '../element/rebind';
 import { PixelLifeContext } from './context';
 
 const NO_OPTIONS: BindElementOptions = {};
 
-/** The instance of the nearest <PixelLife>; null before mount, on the server and when unsupported. */
+/**
+ * The instance of the nearest <PixelLife>; null only on the server, before mount and after
+ * unmount. It is provided even when WebGL2 is unavailable: check `instance.supported` (or use
+ * the component's `fallback` prop) to pick a static variant.
+ */
 export function usePixelLife(): PixelLife | null {
   return useContext(PixelLifeContext);
 }
@@ -49,8 +54,10 @@ interface Bound {
 
 /**
  * Makes the element in `ref` light/shadow/lift the animation. Binds when the instance or the
- * element changes, forwards shallow-changed options through `handle.update()` and never
- * re-adds for option changes. Returns a ref to the current handle (for manual `update`).
+ * element changes and forwards shallow-changed options through `handle.update()`. Options that
+ * are fixed at bind time (`track`, `padding`, `signal`, `cornerRadius` going between set and
+ * unset) or that were removed (or became `undefined`) re-bind instead, because `update()` cannot
+ * apply them. Returns a ref to the current handle (for manual `update`), replaced on re-bind.
  */
 export function useInfluence(
   ref: RefObject<Element | null>,
@@ -79,7 +86,13 @@ export function useInfluence(
       return;
     }
     if (!shallowEqual(cur.opts, opts)) {
-      cur.handle.update(opts as Partial<InfluenceOptions>);
+      if (needsRebind(cur.opts, opts)) {
+        cur.handle.dispose();
+        cur.handle = cur.instance.bindElement(cur.el, opts);
+        handleRef.current = cur.handle;
+      } else {
+        cur.handle.update(opts as Partial<InfluenceOptions>);
+      }
       cur.opts = opts;
     }
   });
