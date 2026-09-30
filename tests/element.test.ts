@@ -42,11 +42,18 @@ vi.mock('../src/core/lumi-cells', () => {
     lifts: any[] = [];
     listeners = new Map<string, Set<(e: any) => void>>();
     interaction = { pointer: true, click: true };
+    priority: string;
+    priorities: string[] = [];
     constructor(
       readonly host: HTMLElement,
       readonly options: any,
     ) {
       FakeLumiCells.instances.push(this);
+      this.priority = options?.priority ?? 'normal';
+    }
+    setPriority(p: string) {
+      this.priorities.push(p);
+      this.priority = p;
     }
     getConfig() {
       return { interaction: this.interaction };
@@ -102,7 +109,9 @@ vi.mock('../src/core/lumi-cells', () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean };
+  options: { config: any; autoStart: boolean; priority?: string };
+  priority: string;
+  priorities: string[];
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -173,6 +182,31 @@ describe('attributes and properties', () => {
     expect(cfg.render.overflow).toBe(64); // bare `overflow` = true
     expect(el.instance).toBe(el.instance);
     expect(el.instance).not.toBeNull();
+  });
+
+  it('priority: attribute and property feed the instance, invalid values mean normal', async () => {
+    const el = mount('<lumi-cells priority="high"></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    expect(inst.options.priority).toBe('high');
+    expect(el.priority).toBe('high');
+    el.setAttribute('priority', 'low');
+    expect(inst.priority).toBe('low');
+    el.priority = 'bogus';
+    expect(el.priority).toBe('normal');
+    expect(inst.priority).toBe('normal');
+    el.removeAttribute('priority');
+    expect(inst.priorities.at(-1)).toBe('normal');
+    // The priority does not rebuild the instance.
+    expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('priority set before the element is connected is used at creation', async () => {
+    const el = document.createElement('lumi-cells') as LumiCellsElement;
+    el.priority = 'low';
+    document.body.append(el);
+    await flush();
+    expect(live()[0]?.options.priority).toBe('low');
   });
 
   it('maps overflow attribute values', async () => {
@@ -385,12 +419,38 @@ describe('events', () => {
     inst.emit('stats', { fps: 60 });
     const err = new Error('boom');
     inst.emit('error', err);
+    inst.emit('fallback', { reason: 'budget' });
+    expect(seen['lc-fallback']).toEqual({ reason: 'budget' });
     inst.emit('fallback', { reason: 'compile' });
     expect((seen['lc-ready'] as { instance: unknown }).instance).toBe(el.instance);
     expect(seen['lc-config']).toMatchObject({ source: 'api' });
     expect(seen['lc-stats']).toEqual({ fps: 60 });
     expect(seen['lc-error']).toBe(err);
     expect(seen['lc-fallback']).toEqual({ reason: 'compile' });
+  });
+
+  it('re-dispatches the context loss and its end (lc-contextlost, lc-contextrestored)', async () => {
+    const el = mount('<lumi-cells></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    const seen: string[] = [];
+    const ctl = new AbortController();
+    for (const type of ['lc-contextlost', 'lc-fallback', 'lc-contextrestored']) {
+      document.addEventListener(
+        type,
+        (e) => {
+          const d = (e as CustomEvent).detail as { reason?: string } | null;
+          const where = e.target === el && e.bubbles && e.composed ? '' : ' (not bubbling)';
+          seen.push(`${d?.reason ? `${type}:${d.reason}` : type}${where}`);
+        },
+        { signal: ctl.signal },
+      );
+    }
+    inst.emit('contextlost');
+    inst.emit('fallback', { reason: 'context-lost' });
+    inst.emit('contextrestored');
+    ctl.abort();
+    expect(seen).toEqual(['lc-contextlost', 'lc-fallback:context-lost', 'lc-contextrestored']);
   });
 
   it('reports lc-fallback once when WebGL2 is unavailable', async () => {

@@ -2,7 +2,7 @@
  * <lumi-cells>: the Web Component wrapper around the LumiCells facade.
  *
  * Properties are the source of truth; the scalar attributes (preset, src, interactive, overflow,
- * paused, transition) feed the same state and only the boolean ones reflect back. The module is
+ * paused, transition, priority) feed the same state and only the boolean ones reflect back. The module is
  * importable in Node (SSR bundlers evaluate it): the HTMLElement base is guarded and nothing
  * here touches the DOM until an element is constructed.
  */
@@ -12,6 +12,7 @@ import type {
   ConfigSource,
   InfluenceHandle,
   InfluenceOptions,
+  InstancePriority,
   LumiCellsEvents,
   Stats,
 } from '../core/types';
@@ -42,6 +43,10 @@ export interface LumiCellsElementEventMap {
   'lc-stats': CustomEvent<Stats>;
   'lc-error': CustomEvent<Error>;
   'lc-fallback': CustomEvent<LumiCellsEvents['fallback']>;
+  /** The WebGL context was lost (an `lc-fallback` with reason `context-lost` follows). */
+  'lc-contextlost': CustomEvent<null>;
+  /** The animation is back after a context loss: ends a `context-lost` fallback. */
+  'lc-contextrestored': CustomEvent<null>;
 }
 
 declare global {
@@ -138,6 +143,7 @@ const UPGRADE_PROPS = [
   'overflow',
   'paused',
   'transition',
+  'priority',
 ] as const;
 
 const FORWARDED_EVENTS = [
@@ -159,6 +165,11 @@ function parseOverflowAttr(value: string | null): boolean | number | undefined {
   return Number.isFinite(n) ? Math.max(0, n) : undefined;
 }
 
+function parsePriority(value: unknown): InstancePriority {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  return v === 'high' || v === 'low' ? v : 'normal';
+}
+
 function parseTransitionAttr(value: string | null): number | null {
   if (value === null || value.trim() === '') return null;
   const n = Number(value);
@@ -173,6 +184,7 @@ export class LumiCellsElement extends Base {
     'overflow',
     'paused',
     'transition',
+    'priority',
     'id',
   ];
 
@@ -187,6 +199,7 @@ export class LumiCellsElement extends Base {
   #overflow: boolean | number | undefined;
   #paused = false;
   #transition: number | null = null;
+  #priority: InstancePriority = 'normal';
 
   #instance: LumiCells | null = null;
   #unsubs: Array<() => void> = [];
@@ -294,6 +307,18 @@ export class LumiCellsElement extends Base {
     this.#transition = n !== null && Number.isFinite(n) ? Math.max(0, n) : null;
   }
 
+  /**
+   * Priority for the page's WebGL context budget (`high`, `normal` or `low`; anything else is
+   * `normal`). Visible backgrounds with a higher priority keep or take a context first.
+   */
+  get priority(): InstancePriority {
+    return this.#priority;
+  }
+  set priority(value: InstancePriority | string | null) {
+    this.#priority = parsePriority(value);
+    this.#instance?.setPriority(this.#priority);
+  }
+
   /** The live LumiCells instance while the element is connected. */
   get instance(): LumiCells | null {
     return this.#instance;
@@ -348,6 +373,9 @@ export class LumiCellsElement extends Base {
         break;
       case 'transition':
         this.#transition = parseTransitionAttr(value);
+        break;
+      case 'priority':
+        this.priority = value;
         break;
       case 'id':
         if (this.#instance) {
@@ -429,7 +457,11 @@ export class LumiCellsElement extends Base {
 
   #createInstance(config: LumiCellsConfig): void {
     // autoStart is off so no event can fire before the listeners below are attached.
-    const instance = new LumiCells(this.#stage, { config, autoStart: false });
+    const instance = new LumiCells(this.#stage, {
+      config,
+      autoStart: false,
+      priority: this.#priority,
+    });
     this.#instance = instance;
     this.#fallbackNotified = false;
     this.#unsubs = [
@@ -445,6 +477,8 @@ export class LumiCellsElement extends Base {
         this.#fallbackNotified = true;
         this.#emit('lc-fallback', e);
       }),
+      instance.on('contextlost', () => this.#emit('lc-contextlost', null)),
+      instance.on('contextrestored', () => this.#emit('lc-contextrestored', null)),
     ];
     // The facade may have decided on the poster-only path during construction.
     if (!instance.supported && !this.#fallbackNotified) {

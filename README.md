@@ -57,6 +57,8 @@ Two plain HTML examples are published next to it:
   modulators that drive any numeric parameter from your own data.
 - **Built for 60+ FPS**: procedural math runs at cell resolution, the cell shape is a baked stamp,
   quality adapts to the device, resolution is capped by a pixel budget.
+- **Many per page**: a page-wide WebGL context budget, lazy creation near the viewport and
+  parking of far-away backgrounds, so a long list never hits the browser's context limit.
 - **React, Web Component and vanilla** entry points over one core.
 - **SSR-safe**: importing does not touch `window`; the React component renders a static poster
   on the server.
@@ -97,8 +99,8 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 }
 ```
 
-Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `fallback`,
-`onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
+Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `priority`,
+`fallback`, `onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
 defaults, then `preset`, then `config`. `config` may be a new object on every render: the
 component compares content, not identity. Requires React 19 (`ref` is a regular prop).
 
@@ -134,8 +136,8 @@ Without a bundler, load the single file `dist/lib/lumicells-element.iife.js` wit
 `<script>`: it registers the tag and exposes the API as the global `LumiCells`.
 
 Attributes: `preset`, `src` (URL of a config file), `interactive`, `overflow`, `paused`,
-`transition`. Properties: `config`, `preset`, `src`, `paused`, `interactive`, `overflow`,
-`transition` and the read-only `instance`.
+`transition`, `priority`. Properties: `config`, `preset`, `src`, `paused`, `interactive`,
+`overflow`, `transition`, `priority` and the read-only `instance`.
 
 Declarative binding of child elements:
 
@@ -303,11 +305,12 @@ off(); // unsubscribe
 | `config` | `{ config, changed, source }`, coalesced per frame |
 | `quality` | `{ scale, quality, reason }` when adaptive quality steps |
 | `warn`, `error` | Non-fatal warnings and errors |
-| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' }` |
+| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' \| 'budget' }` (see [Many instances on one page](#many-instances-on-one-page)) |
 | `contextlost`, `contextrestored`, `destroy` | Lifecycle |
 
 The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc-stats`,
-`lc-error`, `lc-fallback`.
+`lc-error`, `lc-fallback`, `lc-contextlost` and `lc-contextrestored` (the end of a
+`context-lost` fallback: the animation is back).
 
 ## Performance
 
@@ -333,13 +336,53 @@ Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms C
 GPUs yet: the mobile path is budgeted by design (DPR cap 2, pixel budget), so check your target
 devices with the playground stats.
 
-Each instance owns a WebGL context and browsers keep only about 16, so prefer one shared
-background over dozens of small ones.
+Each instance owns a WebGL context; see [Many instances on one page](#many-instances-on-one-page)
+for how LumiCells keeps their number in check.
+
+## Many instances on one page
+
+Every live background owns a WebGL context, and browsers keep only about 16 per page (fewer on
+phones). Past that they silently kill the oldest one, which may be your hero background or the
+app's own WebGL (maps, three.js). LumiCells therefore manages its contexts page-wide:
+
+- **Budget.** At most 4 contexts on desktop and 2 on touch devices by default. When the budget
+  is full, a background that scrolls into view takes the context of an offscreen one (the one seen
+  least recently first). Among visible backgrounds a higher `priority` wins, then the larger one.
+  The others show their CSS poster until a context frees up: `getStats().state` is `'waiting'`,
+  visible ones emit `fallback` with reason `'budget'`, and the page logs one warning.
+- **Lazy creation.** A context is created only when the container comes within about one
+  viewport of the screen, at most one per frame, so mounting a long list does not freeze the page.
+  Inside a scrolling element (a carousel, a chat pane) the zone reaches one element size beyond
+  its visible part in Chrome and Edge 120+ (IntersectionObserver `scrollMargin`). Other browsers
+  create the context there only once the background scrolls into the element's visible part,
+  and treat the rest of the element as far away; in a cross-origin iframe the zone is the
+  visible area.
+- **Parking.** A background that stays farther away for 10 seconds releases its context and GPU
+  memory and shows its poster. Scrolling back rebuilds it; the config, tweens and bound elements
+  are kept, only the Life automaton reseeds.
+
+```ts
+import { LumiCells } from 'lumicells';
+
+// Page-wide settings: call before or after creating instances (safe on the server too).
+LumiCells.configure({ maxContexts: 8, parkAfterMs: 5000, createPerFrame: 1 });
+
+const hero = new LumiCells(heroEl, { preset: 'reference', priority: 'high' });
+hero.getStats().state; // 'pending' | 'waiting' | 'live' | 'parked' | 'lost' | 'failed' | 'destroyed'
+```
+
+In React use `<LumiCells priority="high">`, in HTML `<lumi-cells priority="high">`. If more
+backgrounds must animate at the same time (a feed with ten cards on screen needs at least ten
+contexts), raise `maxContexts`, but stay well below 16. Instances with
+`render.pauseOffscreen: false` (for example an offscreen source copied into other canvases) are
+created right away, never parked, and rank as visible wherever they are: a visible background
+takes their context only with a higher `priority` or a clearly larger size.
 
 ## Browser support
 
 Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2, after a
-context loss and before the first frame, a static CSS poster in the config colors is shown. With
+context loss, before the first frame and while an instance waits for a context or is parked, a
+static CSS poster in the config colors is shown. With
 float render targets the glow is computed in HDR, otherwise in RGBA8 with compression.
 
 ## Architecture

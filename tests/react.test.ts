@@ -53,11 +53,18 @@ vi.mock('../src/core/lumi-cells', () => {
     modulators: Array<{ path: string; source: () => number; opts: any; disposed: boolean }> = [];
     pulses: unknown[] = [];
     listeners = new Map<string, Set<(e: any) => void>>();
+    priority: string;
+    priorities: string[] = [];
     constructor(
       readonly host: HTMLElement,
       readonly options: any,
     ) {
       FakeLumiCells.instances.push(this);
+      this.priority = options?.priority ?? 'normal';
+    }
+    setPriority(p: string) {
+      this.priorities.push(p);
+      this.priority = p;
     }
     replaceConfig(config: any, opts: any) {
       this.replaced.push({ config, opts });
@@ -111,7 +118,9 @@ vi.mock('../src/core/lumi-cells', () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean };
+  options: { config: any; autoStart: boolean; priority?: string };
+  priority: string;
+  priorities: string[];
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -292,6 +301,34 @@ describe('<LumiCells>', () => {
     render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
     act(() => live()[0]?.emit('contextrestored'));
     expect((container.firstElementChild as HTMLElement).querySelector('#fb')).not.toBeNull();
+  });
+
+  it('a budget fallback is a wait, not a failure: no fallback node, poster until ready', () => {
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    const host = container.firstElementChild as HTMLElement;
+    const inst = live()[0] as Fake;
+    act(() => inst.emit('fallback', { reason: 'budget' }));
+    expect(host.querySelector('#fb')).toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).not.toBeNull();
+    // It gets a context later and draws: 'ready' ends the wait.
+    act(() => inst.emit('ready'));
+    expect(host.querySelector('[data-lumicells-poster]')).toBeNull();
+    // A budget wait after the first frame changes nothing on the React side either.
+    act(() => inst.emit('fallback', { reason: 'budget' }));
+    expect(host.querySelector('#fb')).toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).toBeNull();
+  });
+
+  it('passes priority at construction and forwards later changes without a new instance', () => {
+    render(createElement(LumiCells, { priority: 'high' }));
+    const inst = live()[0] as Fake;
+    expect(inst.options.priority).toBe('high');
+    expect(inst.priority).toBe('high');
+    render(createElement(LumiCells, { priority: 'low' }));
+    expect(inst.priority).toBe('low');
+    render(createElement(LumiCells, {}));
+    expect(inst.priority).toBe('normal');
+    expect(FakeClass.instances).toHaveLength(1);
   });
 
   it('routes onReady/onError/onStats to the latest callbacks', () => {

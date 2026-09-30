@@ -317,7 +317,14 @@
       };
 
       // Events are plain CustomEvents and bubble, so one listener on the document sees them all.
-      for (const type of ['lc-ready', 'lc-config', 'lc-error', 'lc-fallback']) {
+      for (const type of [
+        'lc-ready',
+        'lc-config',
+        'lc-error',
+        'lc-fallback',
+        'lc-contextlost',
+        'lc-contextrestored',
+      ]) {
         document.addEventListener(type, (e) => {
           const detail = e.detail;
           const extra =
