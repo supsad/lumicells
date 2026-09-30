@@ -35,7 +35,14 @@ import {
 } from '../engine/frame-block';
 import type { FrameInputs } from '../engine/types';
 import { Clock, type ClockRates } from './clock';
-import { computeGeometry, createGeometry, type Geometry, type GeometryInput } from './geometry';
+import {
+  computeGeometry,
+  computeScaledGeometry,
+  createGeometry,
+  type Geometry,
+  type GeometryInput,
+  MIN_PITCH_PX,
+} from './geometry';
 import {
   type Influence,
   type InfluenceContext,
@@ -116,6 +123,13 @@ export interface LiftRequest {
 
 const FORCED_QUEUE = 32;
 
+/**
+ * Lowest share scale that keeps the grid (see Controller.setShareScale): the lowest factor the
+ * shared pixel budget asks for, scaleForStep(MAX_BUDGET_STEP) in runtime/atlas.ts. Lower ones
+ * come only from the atlas's drawable limit.
+ */
+export const SHARE_GRID_MIN_SCALE = 0.125;
+
 let sharedLayout: ParamLayout | null = null;
 /** The layout depends only on the schema: build it once per page (lazily, SSR-safe). */
 export function getSharedLayout(): ParamLayout {
@@ -191,6 +205,16 @@ export class Controller {
   };
   private readonly tmp = new Float64Array(3);
   private pixelCap = Number.POSITIVE_INFINITY;
+  /** Resolution factor of the shared renderer's pixel budget (1 = full resolution). */
+  private shareScale = 1;
+  /** Geometry at the adaptive scale alone (share scale 1): the grid the share scale keeps. */
+  private readonly baseGeo: Geometry = createGeometry();
+  /**
+   * Geometry at full resolution (adaptive and share scale 1): the natural size the shared budget
+   * plans with. Only computed while either scale is below 1 (`geo` is it otherwise).
+   */
+  private readonly natGeo: Geometry = createGeometry();
+  private natSeparate = false;
   private reducedMotion = false;
   private software = false;
   private clientX = 0;
@@ -464,6 +488,35 @@ export class Controller {
   setPixelCap(mpx: number): void {
     this.pixelCap = mpx > 0 ? mpx : Number.POSITIVE_INFINITY;
     this.updateGeometry();
+  }
+
+  /**
+   * Resolution factor from the shared renderer's pixel budget (0..1, 1 = full resolution): the
+   * drawing buffer shrinks by it on both sides, on top of the adaptive scale. The grid stays the
+   * same (cols, rows, and the cell size on screen: the canvas is stretched by CSS), only the
+   * sharpness drops. The factor snaps down to a whole device-px pitch (a pitch of 7 px at 0.6
+   * becomes 4 px, 0.57) and never below the smallest pitch (3 device px): an instance whose
+   * cells are that small already keeps its resolution. Only below SHARE_GRID_MIN_SCALE, which
+   * the budget alone never asks for (only the atlas's drawable limit does), do the cells grow.
+   */
+  setShareScale(scale: number): void {
+    const v = scale > 0 && scale < 1 ? scale : 1;
+    if (v === this.shareScale) return;
+    this.shareScale = v;
+    this.updateGeometry();
+  }
+
+  /**
+   * Drawing-buffer width at full resolution: without the shared budget's factor and without the
+   * adaptive scale, so an adaptive step lowers the pixels below the budget instead of letting the
+   * budget plan a higher factor that takes the saving back.
+   */
+  get naturalWidth(): number {
+    return this.natSeparate ? this.natGeo.canvasW : this.geo.canvasW;
+  }
+
+  get naturalHeight(): number {
+    return this.natSeparate ? this.natGeo.canvasH : this.geo.canvasH;
   }
 
   /**
@@ -781,7 +834,9 @@ export class Controller {
     gi.overflowCss = cfg.render.overflow;
     gi.maxDpr = s.num(ids.maxDpr);
     gi.maxPixels = Math.min(s.num(ids.maxPixels), this.pixelCap);
-    gi.scale = this.perf.scale;
+    const perf = this.perf.scale;
+    const share = this.shareScale;
+    gi.scale = perf;
     // Sizing blends between "N cells across the shorter side" and "fixed pitch" in log space,
     // so switching the mode mid-session is a smooth zoom rather than a jump.
     const countPitch = Math.min(gi.hostCssW, gi.hostCssH) / Math.max(1, s.num(ids.count));
@@ -793,7 +848,35 @@ export class Controller {
         : m >= 1
           ? fixedPitch
           : Math.exp(Math.log(countPitch) * (1 - m) + Math.log(fixedPitch) * m);
-    if (computeGeometry(gi, this.geo)) this.geometryChanged = true;
+    let changed: boolean;
+    if (share >= 1) {
+      changed = computeGeometry(gi, this.geo);
+    } else {
+      // The shared budget lowers the resolution of the grid at the adaptive scale, not the grid
+      // itself: joining or leaving shared instances must not re-grid the others.
+      const base = this.baseGeo;
+      computeGeometry(gi, base);
+      if (share >= SHARE_GRID_MIN_SCALE) {
+        // Never below the smallest pitch: cells already that small keep their resolution (the
+        // budget is exceeded by them) rather than the whole grid growing coarser.
+        const pitch = Math.min(
+          base.pitchPx,
+          Math.max(MIN_PITCH_PX, Math.floor(base.pitchPx * share + 1e-9)),
+        );
+        changed = computeScaledGeometry(gi, base, pitch, this.geo);
+      } else {
+        // Only the drawable limit asks for this much (the atlas cannot grow any further): the
+        // resolution can then only drop with bigger cells.
+        gi.scale = perf * share;
+        changed = computeGeometry(gi, this.geo);
+      }
+    }
+    if (changed) this.geometryChanged = true;
+    this.natSeparate = perf < 1 || share < 1;
+    if (this.natSeparate) {
+      gi.scale = 1;
+      computeGeometry(gi, this.natGeo);
+    }
   }
 
   /** Has the DOM layer reported a size yet? */

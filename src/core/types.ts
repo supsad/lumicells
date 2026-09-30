@@ -22,15 +22,30 @@ export type ConfigSource = 'api' | 'stand' | 'attribute' | 'import' | 'preset';
 export type InstancePriority = 'high' | 'normal' | 'low';
 
 /**
+ * How an instance gets its pixels to the screen (`LumiCellsOptions.renderer`, `Stats.renderer`):
+ * - `own`    a WebGL context of its own on a canvas in the host: no copies, isolated from other
+ *            instances' context losses, but it takes one slot of the page's context budget
+ *            (`LumiCells.configure({ maxContexts })`);
+ * - `shared` one WebGL context for all shared instances of the page: each draws into a region
+ *            of a common offscreen canvas (the atlas) and is copied into a 2D canvas in its host
+ *            every frame. Any number of instances cost one context (on top of `maxContexts`), at
+ *            the price of one copy per instance and frame; a loss of the shared context affects
+ *            them all (they keep their last frame until it is back).
+ */
+export type InstanceRenderer = 'own' | 'shared';
+
+/**
  * Lifecycle of an instance's GPU side (`Stats.state`):
  * - `pending`  no context yet: not started, not near the viewport yet, or queued for creation;
  * - `waiting`  near the viewport, but the context budget is full of instances that rank higher:
  *              the poster is shown until a context frees up;
- * - `live`     owns a WebGL context (drawing, paused offscreen or compiling its first frame);
- * - `parked`   gave its context back (off screen for `parkAfterMs`, or evicted by a higher
- *              ranked instance): poster shown, config and runtime layers kept, rebuilt when it
- *              comes back near the viewport;
- * - `lost`     the browser took the context away; waiting for it to be restored;
+ * - `live`     owns a WebGL context, or a slot on the shared one (drawing, paused offscreen or
+ *              compiling its first frame);
+ * - `parked`   gave its context (or shared slot) back (off screen for `parkAfterMs`, or evicted
+ *              by a higher ranked instance): poster shown, config and runtime layers kept,
+ *              rebuilt when it comes back near the viewport;
+ * - `lost`     the browser took the context away (for a shared instance: the shared one, while
+ *              its canvas keeps the last frame); waiting for it to be restored;
  * - `failed`   no WebGL2 or a shader/resource failure: the poster stays;
  * - `destroyed` after `destroy()`: no context, no canvas, nothing left to restore.
  */
@@ -73,6 +88,17 @@ export interface ConfigureOptions {
    * instead of one long task.
    */
   createPerFrame?: number;
+  /**
+   * Pixel budget of the shared renderer's atlas in megapixels (instances with
+   * `renderer: 'shared'` that are drawing). `'auto'` (default): 4, or 2 on touch devices. When
+   * the drawing shared instances need more at full resolution, all of them render at a lower
+   * resolution, stretched to their size: the grid and the cell size on screen stay, only the
+   * sharpness drops (each instance's factor snaps down to a whole device-px cell pitch, never
+   * below 3 device px: an instance whose cells are already that small keeps its resolution and
+   * the budget is exceeded). None is dropped. The budget caps the full-resolution size; adaptive
+   * quality lowers the resolution further on top of it.
+   */
+  sharedBudget?: number | 'auto';
 }
 
 export interface LumiCellsOptions {
@@ -89,6 +115,13 @@ export interface LumiCellsOptions {
   interactive?: boolean;
   /** Priority for the page's context budget (default `'normal'`). */
   priority?: InstancePriority;
+  /**
+   * `'own'` (default): a WebGL context of its own. `'shared'`: one WebGL context for every
+   * shared instance on the page, copied into a 2D canvas in the host (see InstanceRenderer).
+   * Use it for many small backgrounds (cards, list items); keep large ones on `'own'`.
+   * `setRenderer()` switches later.
+   */
+  renderer?: InstanceRenderer;
 }
 
 export interface ConfigUpdateOptions {
@@ -224,10 +257,59 @@ export interface ModulatorHandle extends Handle {
 
 export type QualityTier = 'high' | 'medium' | 'low';
 
+/**
+ * The shared renderer as a whole (`Stats.shared` of every shared instance): the one device all
+ * shared instances draw on. Frame figures are smoothed over about ten frames.
+ */
+export interface SharedRendererStats {
+  /** GPU time of every shared instance's passes in one frame, ms (null without a GPU timer). */
+  gpuMs: number | null;
+  /** Main-thread time of the draw series (every shared instance's GL commands), ms. */
+  drawMs: number;
+  /** Main-thread time of the copy series (every drawImage into the instances' 2D canvases), ms. */
+  copyMs: number;
+  /**
+   * Part of `copyMs` no single copy owns, ms: the snapshot of the atlas (staged copies), or the
+   * flush the first drawImage from the WebGL canvas pays (direct copies, estimated from frames
+   * with several copies). Every instance's `presentMs` carries a share of it by pixels.
+   */
+  snapshotMs: number;
+  /**
+   * Copy series cost (snapshot included, canvas resizes and set-up excluded) per megapixel
+   * copied, ms, averaged over 60 settled frames: no instance joining or resizing its canvas,
+   * the copy path decided. Measured for the current atlas size and budget scale: null until
+   * then, and again after either changes. Cheap on GPU-backed 2D canvases (Chrome, Safari); a
+   * software 2D canvas reads every copy back from the GPU and costs much more. Much of the cost
+   * is per call and per frame rather than per pixel, so the figure falls as regions grow.
+   */
+  copyMsPerMpx: number | null;
+  /** Size of the shared canvas (the atlas), device px. */
+  atlasWidth: number;
+  atlasHeight: number;
+  /** Instances holding a slot on the shared device. */
+  members: number;
+  /** Instances drawing into the atlas (each has a region there). */
+  regions: number;
+  /** Resolution factor all shared instances render at because of `sharedBudget` (1 = full). */
+  scale: number;
+  /**
+   * The last copy series went through one snapshot of the atlas (a 2D staging canvas) instead of
+   * copying every region from the WebGL canvas directly. Chosen by measurement: where every
+   * drawImage() from a WebGL canvas reads back the whole canvas (Firefox), one readback per
+   * frame instead of one per instance.
+   */
+  copyStaged: boolean;
+}
+
 export interface Stats {
   fps: number;
   frameMs: number;
+  /** Main-thread time of this instance per frame (update, GL commands and, when shared, its copy), ms. */
   cpuMs: number;
+  /**
+   * GPU time per frame, ms, null without a GPU timer. For a shared instance it is the time of
+   * the whole shared device (every shared instance's passes), which adaptive quality reacts to.
+   */
   gpuMs: number | null;
   vsyncMs: number;
   missRatio: number;
@@ -242,6 +324,15 @@ export interface Stats {
   softwareFallback: boolean;
   /** GPU lifecycle state (always current, unlike the frame figures sampled about 4 times a second). */
   state: InstanceState;
+  /** Which renderer the instance uses (always current). */
+  renderer: InstanceRenderer;
+  /**
+   * Main-thread time of this instance's copy into its 2D canvas, with its share (by pixels) of
+   * the copy series' snapshot, ms (null for `own`: no copy).
+   */
+  presentMs: number | null;
+  /** The shared renderer's device (null for `own`). */
+  shared: SharedRendererStats | null;
 }
 
 export type DebugView = 'final' | 'field' | 'halo' | 'bloom' | 'haze' | 'cells';

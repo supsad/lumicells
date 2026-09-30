@@ -12,6 +12,10 @@
  * instance shows its poster) until a slot frees up or the requester ranks higher, e.g. it became
  * visible and may now take the slot of an offscreen instance.
  *
+ * The shared renderer (runtime/shared-renderer) creates its one context through the same
+ * per-frame allowance (claimContextCreation) and reserves it on top of the budget: own contexts
+ * keep all `maxContexts` slots, the shared one is the +1 (reserveSharedContext).
+ *
  * Nothing runs at import: the budget is created on first use (SSR-safe).
  */
 
@@ -52,6 +56,8 @@ export interface RuntimeSettings {
   maxContexts: number | 'auto';
   parkAfterMs: number;
   createPerFrame: number;
+  /** Pixel budget of the shared renderer's atlas, megapixels, or 'auto'. */
+  sharedBudget: number | 'auto';
 }
 
 /**
@@ -64,7 +70,13 @@ const DEFAULTS: Readonly<RuntimeSettings> = {
   maxContexts: 'auto',
   parkAfterMs: 10_000,
   createPerFrame: 1,
+  sharedBudget: 'auto',
 };
+
+/** Default shared atlas budget on desktop (fine pointer), megapixels. */
+export const DESKTOP_SHARED_BUDGET = 4;
+/** Default shared atlas budget on phones and tablets (coarse pointer), megapixels. */
+export const COARSE_SHARED_BUDGET = 2;
 
 const settings: RuntimeSettings = { ...DEFAULTS };
 let budget: ContextBudget<GpuClient> | null = null;
@@ -76,6 +88,15 @@ let dirty = false;
 let budgetWarned = false;
 /** Timestamp of the last frame in which an engine drew its first frame. */
 let firstDrawAt = Number.NaN;
+/** Contexts created in the frame stamped `ledgerAt` (own engines and the shared device alike). */
+let ledgerAt = Number.NaN;
+let ledgerCount = 0;
+/** The shared renderer's device holds a context (counted on top of the budget). */
+let sharedReserved = false;
+/** `(pointer: coarse)`, read once for the shared budget. */
+let coarseMemo: boolean | undefined;
+/** Shared instances holding a seat: they follow `parkAfterMs` changes like budget holders. */
+const settingsWatchers = new Set<() => void>();
 
 function coarsePointer(): boolean {
   const mm = (globalThis as { matchMedia?: (q: string) => MediaQueryList }).matchMedia;
@@ -86,6 +107,18 @@ function getBudget(): ContextBudget<GpuClient> {
   if (!budget)
     budget = new ContextBudget(resolveMaxContexts(settings.maxContexts, coarsePointer()));
   return budget;
+}
+
+function createdIn(now: number): number {
+  return now === ledgerAt ? ledgerCount : 0;
+}
+
+function noteCreated(now: number): void {
+  if (now !== ledgerAt) {
+    ledgerAt = now;
+    ledgerCount = 0;
+  }
+  ledgerCount++;
 }
 
 function kick(): void {
@@ -123,7 +156,8 @@ function serve(now: number): void {
   if (b.size + queue.size > b.max) refreshAreas(b);
   const list = Array.from(queue).sort((x, y) => compareRank(y, x) || x.order - y.order);
   const cap = settings.createPerFrame;
-  let created = 0;
+  // The shared renderer may have created its context in this frame already.
+  let created = createdIn(now);
   let capped = false;
   for (let i = 0; i < list.length; i++) {
     const c = list[i] as GpuClient;
@@ -144,6 +178,7 @@ function serve(now: number): void {
     // The victim's context is gone before the new one is created: never above the budget.
     r.evicted?.evicted();
     created++;
+    noteCreated(now);
     c.granted();
   }
   if (!capped && !dirty) unkick();
@@ -165,6 +200,10 @@ export function configureRuntime(opts: ConfigureOptions): void {
     const v = Number(opts.createPerFrame);
     if (v >= 1) settings.createPerFrame = Number.isFinite(v) ? Math.floor(v) : v;
   }
+  if (opts.sharedBudget !== undefined) {
+    const v = opts.sharedBudget === 'auto' ? 'auto' : Number(opts.sharedBudget);
+    if (v === 'auto' || (Number.isFinite(v) && v > 0)) settings.sharedBudget = v;
+  }
   if (opts.maxContexts !== undefined) {
     const v = opts.maxContexts === 'auto' ? 'auto' : sanitizeMaxContexts(opts.maxContexts);
     if (v !== null) {
@@ -180,6 +219,7 @@ export function configureRuntime(opts: ConfigureOptions): void {
   // Existing holders follow the new delay (only holders run a park timer). A copy: a holder
   // that has been away longer than the new delay parks, and releases its slot, right away.
   if (parkChanged && budget) for (const h of Array.from(budget.holders())) h.settingsChanged();
+  if (parkChanged) for (const cb of Array.from(settingsWatchers)) cb();
   if (queue.size > 0) kick();
 }
 
@@ -192,9 +232,46 @@ export function maxContexts(): number {
   return getBudget().max;
 }
 
-/** Contexts granted right now (engines alive or awaiting a browser restore). */
+/**
+ * Contexts in use right now: own engines granted (alive or awaiting a browser restore) plus the
+ * shared renderer's device, which is reserved on top of `maxContexts()`.
+ */
 export function contextsInUse(): number {
-  return budget?.size ?? 0;
+  return (budget?.size ?? 0) + (sharedReserved ? 1 : 0);
+}
+
+/**
+ * The shared atlas pixel budget in device pixels (the setting, or 4 / 2 megapixels). Read every
+ * frame by the shared renderer: the pointer query runs once.
+ */
+export function sharedBudgetPx(): number {
+  const v = settings.sharedBudget;
+  if (v !== 'auto') return v * 1e6;
+  if (coarseMemo === undefined) coarseMemo = coarsePointer();
+  return (coarseMemo ? COARSE_SHARED_BUDGET : DESKTOP_SHARED_BUDGET) * 1e6;
+}
+
+/**
+ * Asks to create one context in the frame stamped `now` (the shared renderer's device): allowed
+ * within `createPerFrame` creations per frame, own engines included, and never in a frame in
+ * which an engine drew its first frame. Recorded when allowed.
+ */
+export function claimContextCreation(now: number): boolean {
+  if (now === firstDrawAt || createdIn(now) >= settings.createPerFrame) return false;
+  noteCreated(now);
+  return true;
+}
+
+/** The shared renderer's device holds a context (one on top of the own-context budget). */
+export function reserveSharedContext(): void {
+  sharedReserved = true;
+}
+
+/** The shared renderer released its context. */
+export function releaseSharedContext(): void {
+  if (!sharedReserved) return;
+  sharedReserved = false;
+  if (queue.size > 0) kick();
 }
 
 /** Queues a request for a slot (served from the next frame on). */
@@ -219,9 +296,23 @@ export function rankChanged(): void {
   if (queue.size > 0) kick();
 }
 
-/** An engine drew its first frame in the frame stamped `now` (a heavy frame: see serve()). */
+/**
+ * An engine (or a shared slot) drew its first frame in the frame stamped `now` (a heavy frame:
+ * see serve()).
+ */
 export function noteFirstDraw(now: number): void {
   firstDrawAt = now;
+}
+
+/**
+ * Calls `cb` when a setting its caller acts on by itself changes (`parkAfterMs`), for instances
+ * outside the context budget (shared seats). Returns the unsubscribe function.
+ */
+export function watchSettings(cb: () => void): () => void {
+  settingsWatchers.add(cb);
+  return () => {
+    settingsWatchers.delete(cb);
+  };
 }
 
 /** True once per page: the "visible instance waits for a context" warning is due. */
@@ -240,4 +331,8 @@ export function resetRuntimeForTesting(): void {
   dirty = false;
   budgetWarned = false;
   firstDrawAt = Number.NaN;
+  ledgerAt = Number.NaN;
+  ledgerCount = 0;
+  sharedReserved = false;
+  coarseMemo = undefined;
 }

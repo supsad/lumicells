@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Controller } from '../src/core/controller/controller';
+import { Controller, SHARE_GRID_MIN_SCALE } from '../src/core/controller/controller';
 import {
   computeGeometry,
   createGeometry,
@@ -225,5 +225,121 @@ describe('controller geometry', () => {
     expect(c.geo.canvasW * c.geo.canvasH).toBeLessThanOrEqual(0.5e6 * 1.01);
     expect(c.geo.canvasW * c.geo.canvasH).toBeLessThan(full);
     expect(c.geometryChanged).toBe(true);
+  });
+});
+
+describe('shared renderer resolution factor', () => {
+  it('scales the drawing buffer, keeps the natural size and the grid', () => {
+    const c = new Controller({ random: mulberry32(1), config: { grid: { sizing: 'pitch' } } });
+    c.setViewport({ hostCssW: 400, hostCssH: 200, dpr: 1, deviceW: 0, deviceH: 0 });
+    const full = { ...c.geo, cellCss: c.cellCss };
+    expect([c.naturalWidth, c.naturalHeight]).toEqual([full.canvasW, full.canvasH]);
+    c.setShareScale(0.5);
+    // The factor snaps down to a whole device-px pitch: never more pixels than asked for.
+    expect(c.geo.pitchPx).toBe(Math.floor(full.pitchPx * 0.5));
+    const r = c.geo.pitchPx / full.pitchPx;
+    expect(c.geo.canvasW).toBe(Math.round(full.canvasW * r));
+    expect(c.geo.canvasH).toBe(Math.round(full.canvasH * r));
+    expect(c.geo.canvasW).toBeLessThanOrEqual(Math.round(full.canvasW * 0.5));
+    // The natural size is what the budget plans with: unchanged by the factor itself.
+    expect([c.naturalWidth, c.naturalHeight]).toEqual([full.canvasW, full.canvasH]);
+    c.setShareScale(1);
+    expect([c.geo.canvasW, c.geo.canvasH]).toEqual([full.canvasW, full.canvasH]);
+    // Out of range means full resolution.
+    c.setShareScale(0);
+    expect(c.geo.canvasW).toBe(full.canvasW);
+  });
+
+  it('keeps cols, rows and the cell size on screen at every budget factor (no re-grid)', () => {
+    // Small cards at DPR 1 and 2, with and without an overflow margin: the pitch rounding
+    // used to change the grid at every step of the budget scale.
+    for (const [w, h, dpr, overflow, count] of [
+      [300, 200, 1, 0, 34],
+      [300, 200, 2, 0, 34],
+      [260, 180, 1.5, 12, 22],
+      [420, 240, 2, 0, 60],
+    ] as const) {
+      const c = new Controller({
+        random: mulberry32(2),
+        config: { grid: { sizing: 'count', count }, render: { overflow } },
+      });
+      c.setViewport({ hostCssW: w, hostCssH: h, dpr, deviceW: 0, deviceH: 0 });
+      const full = { ...c.geo, cellCss: c.cellCss };
+      for (let k = 1; k <= 24; k++) {
+        const scale = 2 ** (-k / 8);
+        c.geometryChanged = false;
+        c.setShareScale(scale);
+        const g = c.geo;
+        expect([g.cols, g.rows, g.pad]).toEqual([full.cols, full.rows, full.pad]);
+        expect(Number.isInteger(g.pitchPx)).toBe(true);
+        // Same cell size on screen within the canvas rounding (well under 1 %).
+        expect(Math.abs(c.cellCss - full.cellCss) / full.cellCss).toBeLessThan(0.01);
+        // Snapped down to a whole pitch, never below the 3 px minimum (nor above the full one).
+        expect(g.pitchPx).toBe(
+          Math.min(full.pitchPx, Math.max(3, Math.floor(full.pitchPx * scale))),
+        );
+        if (Math.floor(full.pitchPx * scale) >= 3) {
+          // Never more pixels than the budget factor asks for.
+          expect(g.canvasW * g.canvasH).toBeLessThanOrEqual(
+            Math.ceil(full.canvasW * scale + 1) * Math.ceil(full.canvasH * scale + 1),
+          );
+        }
+        // The grid still covers the host and stays centered on it.
+        expect(g.cols * g.pitchPx).toBeGreaterThanOrEqual(g.hostW);
+        expect(g.rows * g.pitchPx).toBeGreaterThanOrEqual(g.hostH);
+        const midX = g.originX + (g.pad + (g.cols - 1) / 2 + 0.5) * g.pitchPx;
+        expect(Math.abs(midX - g.centerX)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(g.originX / g.pitchPx - full.originX / full.pitchPx)).toBeLessThan(0.5);
+        expect([c.naturalWidth, c.naturalHeight]).toEqual([full.canvasW, full.canvasH]);
+      }
+    }
+  });
+
+  it('a default small card keeps its grid at the lowest budget step (the 3 px pitch floor)', () => {
+    // Default config (sizing 'count'), 180x100 CSS at DPR 1: already at the 3 px pitch.
+    const c = new Controller({ random: mulberry32(4) });
+    c.setViewport({ hostCssW: 180, hostCssH: 100, dpr: 1, deviceW: 0, deviceH: 0 });
+    const full = { ...c.geo, cellCss: c.cellCss };
+    expect(full.pitchPx).toBe(3);
+    for (const scale of [0.917, Math.SQRT1_2, 0.5, SHARE_GRID_MIN_SCALE]) {
+      c.setShareScale(scale);
+      expect([c.geo.cols, c.geo.rows, c.geo.pitchPx]).toEqual([full.cols, full.rows, 3]);
+      expect([c.geo.canvasW, c.geo.canvasH]).toEqual([full.canvasW, full.canvasH]);
+      expect(c.cellCss).toBeCloseTo(full.cellCss, 6);
+    }
+    // Only the drawable limit asks for less: then the cells grow.
+    c.setShareScale(SHARE_GRID_MIN_SCALE / 2);
+    expect(c.geo.canvasW).toBeLessThan(full.canvasW);
+    expect(c.cellCss).toBeGreaterThan(full.cellCss);
+    // DPR 2: cell size on screen and grid stay put across the whole budget ladder (it used to
+    // wobble non-monotonically as the scaled pitch re-snapped).
+    c.setShareScale(1);
+    c.setViewport({ hostCssW: 180, hostCssH: 100, dpr: 2, deviceW: 0, deviceH: 0 });
+    const full2 = { ...c.geo, cellCss: c.cellCss };
+    for (let k = 1; k <= 24; k++) {
+      c.setShareScale(2 ** (-k / 8));
+      expect([c.geo.cols, c.geo.rows]).toEqual([full2.cols, full2.rows]);
+      expect(Math.abs(c.cellCss - full2.cellCss) / full2.cellCss).toBeLessThan(0.01);
+    }
+  });
+
+  it('the natural size leaves the adaptive scale out (adaptive steps save pixels)', () => {
+    const c = new Controller({ random: mulberry32(3) });
+    c.setViewport({ hostCssW: 400, hostCssH: 300, dpr: 2, deviceW: 0, deviceH: 0 });
+    const natW = c.naturalWidth;
+    const natH = c.naturalHeight;
+    // Adaptive quality at its 0.72 resolution level (level 4 of QUALITY_LEVELS).
+    (c.perf as unknown as { level: number }).level = 4;
+    expect(c.perf.scale).toBe(0.72);
+    c.setViewport({ hostCssW: 400, hostCssH: 300, dpr: 2, deviceW: 0, deviceH: 0 });
+    expect(c.geo.canvasW).toBeLessThan(natW);
+    // Unchanged: the budget plan does not see the adaptive step, so it does not undo it.
+    expect([c.naturalWidth, c.naturalHeight]).toEqual([natW, natH]);
+    const adaptive = { ...c.geo };
+    // The share factor comes on top of the adaptive one, on the adaptive grid.
+    c.setShareScale(0.5);
+    expect([c.naturalWidth, c.naturalHeight]).toEqual([natW, natH]);
+    expect(c.geo.canvasW).toBeLessThanOrEqual(Math.round(adaptive.canvasW * 0.5));
+    expect([c.geo.cols, c.geo.rows]).toEqual([adaptive.cols, adaptive.rows]);
   });
 });

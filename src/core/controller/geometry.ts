@@ -60,6 +60,8 @@ export interface Geometry {
 }
 
 export const MAX_PAD = 16;
+/** Smallest cell pitch, device px. */
+export const MIN_PITCH_PX = 3;
 /** Keeps the cell textures well inside every GPU's max texture size. */
 export const MAX_GRID_CELLS = 2048;
 
@@ -143,13 +145,73 @@ export function computeGeometry(inp: GeometryInput, out: Geometry): boolean {
   const my = Math.round(ov * sy);
   const hw = Math.max(1, cw - 2 * mx);
   const hh = Math.max(1, ch - 2 * my);
-  let pitch = Math.max(3, Math.round(inp.cssPitch * sx));
+  let pitch = Math.max(MIN_PITCH_PX, Math.round(inp.cssPitch * sx));
   pitch = Math.max(pitch, Math.ceil(Math.max(hw, hh) / (MAX_GRID_CELLS - 2 * MAX_PAD - 2)));
   let cols = Math.ceil(hw / pitch) + 1;
   if (cols % 2 === 0) cols++;
   let rows = Math.ceil(hh / pitch) + 1;
   if (rows % 2 === 0) rows++;
   const pad = Math.min(MAX_PAD, 2 + Math.ceil(Math.max(mx, my) / pitch));
+  return writeGeometry(out, cssW, cssH, eff, cw, ch, mx, my, pitch, cols, rows, pad);
+}
+
+/**
+ * `base` at a lower resolution with the same grid: the drawing buffer shrinks by
+ * `pitch / base.pitchPx` on both sides while cols, rows and pad stay those of `base`, so the
+ * cells keep their size on screen (the canvas is stretched by CSS) and only the sharpness drops.
+ * `pitch` is a whole number of device px below `base.pitchPx` (at least MIN_PITCH_PX): the
+ * factor snaps to a ratio that keeps the pitch whole. Used for the shared renderer's budget.
+ * Returns true when anything the engine or events care about changed.
+ */
+export function computeScaledGeometry(
+  inp: GeometryInput,
+  base: Geometry,
+  pitch: number,
+  out: Geometry,
+): boolean {
+  const r = pitch / base.pitchPx;
+  const ov = Math.max(0, inp.overflowCss);
+  const cssW = base.canvasCssW;
+  const cssH = base.canvasCssH;
+  const cw = Math.max(1, Math.round(base.canvasW * r));
+  const ch = Math.max(1, Math.round(base.canvasH * r));
+  const mx = Math.round(ov * (cw / cssW));
+  const my = Math.round(ov * (ch / cssH));
+  return writeGeometry(
+    out,
+    cssW,
+    cssH,
+    base.effDpr * r,
+    cw,
+    ch,
+    mx,
+    my,
+    pitch,
+    base.cols,
+    base.rows,
+    base.pad,
+  );
+}
+
+/** Derives the placement from the sizes and the grid, fills `out`, reports a change. */
+function writeGeometry(
+  out: Geometry,
+  cssW: number,
+  cssH: number,
+  eff: number,
+  cw: number,
+  ch: number,
+  mx: number,
+  my: number,
+  pitch: number,
+  cols: number,
+  rows: number,
+  pad: number,
+): boolean {
+  const sx = cw / cssW;
+  const sy = ch / cssH;
+  const hw = Math.max(1, cw - 2 * mx);
+  const hh = Math.max(1, ch - 2 * my);
   const centerX = mx + hw / 2;
   const centerY = my + hh / 2;
   const originX = Math.round(centerX - (cols / 2 + pad) * pitch);

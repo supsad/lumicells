@@ -2,11 +2,13 @@
  * One requestAnimationFrame loop shared by every LumiCells instance on the page.
  *
  * Several backgrounds (cards, hero, modal) cost a single rAF callback and see the same timestamp,
- * so their animations stay in phase. Each frame runs in three strict phases:
+ * so their animations stay in phase. Each frame runs in four strict phases:
  *
  * 1. `before`  - app animators (e.g. flying bubbles) write their DOM/styles first;
  * 2. `measure` - every instance reads layout (host rect, bound elements) in one batch;
- * 3. `render`  - every instance does GPU work only, no DOM reads or writes.
+ * 3. `render`  - every instance does GPU work only, no DOM reads or writes;
+ * 4. `present` - the shared renderer draws every shared instance into its atlas, then copies
+ *                each one into its own 2D canvas (all draws strictly before all copies).
  *
  * Keeping reads and writes apart avoids forced synchronous layouts, and running animators first
  * removes the one-frame lag between a moving element and the light it casts on the grid.
@@ -17,7 +19,8 @@
 
 export interface TickSubscriber {
   measure?(now: number): void;
-  render(now: number): void;
+  render?(now: number): void;
+  present?(now: number): void;
 }
 
 type BeforeCallback = (now: number) => void;
@@ -27,25 +30,48 @@ const befores = new Set<BeforeCallback>();
 const ends = new Set<BeforeCallback>();
 let rafId = 0;
 
-function safeCall(fn: () => void): void {
-  try {
-    fn();
-  } catch (err) {
-    // One broken subscriber must not stop the others.
-    console.error(err);
-  }
-}
-
 function busy(): boolean {
   return subscribers.size > 0 || befores.size > 0 || ends.size > 0;
 }
 
+// One broken subscriber must not stop the others: every call is guarded on its own.
 function frame(now: number): void {
   rafId = busy() ? requestAnimationFrame(frame) : 0;
-  for (const cb of befores) safeCall(() => cb(now));
-  for (const s of subscribers) if (s.measure) safeCall(() => s.measure?.(now));
-  for (const s of subscribers) safeCall(() => s.render(now));
-  for (const cb of ends) safeCall(() => cb(now));
+  for (const cb of befores) {
+    try {
+      cb(now);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  for (const s of subscribers) {
+    try {
+      s.measure?.(now);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  for (const s of subscribers) {
+    try {
+      s.render?.(now);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  for (const s of subscribers) {
+    try {
+      s.present?.(now);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  for (const cb of ends) {
+    try {
+      cb(now);
+    } catch (err) {
+      console.error(err);
+    }
+  }
 }
 
 function ensureRunning(): void {

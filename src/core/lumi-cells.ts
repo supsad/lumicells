@@ -16,6 +16,15 @@
  * path as a context restore when the instance comes back. A lost context hides the canvas behind
  * the poster and is rebuilt on restore with a new Engine on the same canvas. An engine that fails
  * (compile/link or resource error) is disposed and its context released at once.
+ *
+ * Renderers (`renderer` option, setRenderer()): 'own' is the path above, one context per
+ * instance. 'shared' asks the page's shared renderer (runtime/shared-renderer) for a seat
+ * instead: a slot on its one device and, while drawing, a region of its atlas. The render phase
+ * then only updates the controller; the shared renderer draws every shared instance in the
+ * ticker's present phase and copies each into a 2D canvas that HostView places exactly like the
+ * WebGL canvas ('ready' after the first copy). Parking gives the seat back and shrinks the 2D
+ * canvas to 0x0 (browsers cap the canvas memory of a page); a loss of the shared context keeps
+ * every 2D canvas on its last frame until the device is rebuilt.
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -54,7 +63,14 @@ import {
   releaseContext,
   requestContext,
   runtimeSettings,
+  watchSettings,
 } from './runtime/scheduler';
+import {
+  getSharedRenderer,
+  peekSharedRenderer,
+  type SharedClient,
+  type SharedSeat,
+} from './runtime/shared-renderer';
 import { subscribeTicker } from './ticker';
 import type {
   BindElementOptions,
@@ -66,6 +82,7 @@ import type {
   InfluenceOptions,
   InfluenceUpdate,
   InstancePriority,
+  InstanceRenderer,
   InstanceState,
   LiftOptions,
   LumiCellsEvents,
@@ -75,6 +92,7 @@ import type {
   ModulationSource,
   ModulatorHandle,
   PulseOptions,
+  SharedRendererStats,
   Stats,
 } from './types';
 
@@ -118,6 +136,10 @@ function isPriority(v: unknown): v is InstancePriority {
   return v === 'high' || v === 'normal' || v === 'low';
 }
 
+function isRenderer(v: unknown): v is InstanceRenderer {
+  return v === 'own' || v === 'shared';
+}
+
 /** Config changes of one source, coalesced until the next flush (frame or microtask). */
 interface ConfigBatch {
   source: ConfigSource;
@@ -158,6 +180,32 @@ export class LumiCells {
   #engine: Engine | null = null;
   /** Context alpha attribute of the current canvas (null before the first engine). */
   #engineOpaque: boolean | null = null;
+  #renderer: InstanceRenderer;
+  readonly #sharedClient: SharedClient;
+  /** Seat on the shared renderer ('shared' only); its slot is null while the context is lost. */
+  #seat: SharedSeat | null = null;
+  /** 2D alpha attribute the current canvas was handed to a seat with (null: never). */
+  #targetAlpha: boolean | null = null;
+  /** Main-thread time of the last controller update of a shared frame, ms. */
+  #updateMs = 0;
+  /** dt and vsync-ideal of the frame submitted to the shared renderer (reported in present). */
+  #sharedDt = 0;
+  #sharedIdeal = 16.67;
+  #presentEma = 0;
+  readonly #sharedStats: SharedRendererStats = {
+    gpuMs: null,
+    drawMs: 0,
+    copyMs: 0,
+    snapshotMs: 0,
+    copyMsPerMpx: null,
+    atlasWidth: 0,
+    atlasHeight: 0,
+    members: 0,
+    regions: 0,
+    scale: 1,
+    copyStaged: false,
+  };
+  #unwatchSettings: (() => void) | null = null;
   #hookedCanvas: HTMLCanvasElement | null = null;
   /** Lifetime of the context listeners of #hookedCanvas (aborted when that canvas is dropped). */
   #canvasCtl: AbortController | null = null;
@@ -249,11 +297,16 @@ export class LumiCells {
     influences: 0,
     softwareFallback: false,
     state: 'pending',
+    renderer: 'own',
+    presentMs: null,
+    shared: null,
   };
 
   constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
     this.host = host;
     this.#priority = isPriority(options.priority) ? options.priority : 'normal';
+    this.#renderer = options.renderer === 'shared' ? 'shared' : 'own';
+    this.#stats.renderer = this.#renderer;
     const self = this;
     this.#client = {
       order: ++instanceSeq,
@@ -279,6 +332,48 @@ export class LumiCells {
       refused: () => this.#onRefused(),
       refreshArea: () => this.#refreshArea(),
       settingsChanged: () => this.#onSettingsChanged(),
+    };
+    this.#sharedClient = {
+      order: this.#client.order,
+      get visible() {
+        return self.#client.visible;
+      },
+      get inZone() {
+        return self.#client.inZone;
+      },
+      get priority() {
+        return self.#priority;
+      },
+      get area() {
+        return self.#area;
+      },
+      get lastVisible() {
+        return self.#lastVisible;
+      },
+      get layout() {
+        return self.#controller.layout;
+      },
+      get frame() {
+        return self.#controller.frame;
+      },
+      get naturalWidth() {
+        return self.#controller.naturalWidth;
+      },
+      get naturalHeight() {
+        return self.#controller.naturalHeight;
+      },
+      get expectedWidth() {
+        return self.#expectedSize(0);
+      },
+      get expectedHeight() {
+        return self.#expectedSize(1);
+      },
+      setShareScale: (scale) => this.#controller.setShareScale(scale),
+      evict: () => this.#park(false),
+      attached: (seat, restored) => this.#onSeat(seat, restored),
+      detached: () => this.#onSharedLost(),
+      failed: (err) => this.#onSharedFailed(err),
+      presented: (drawn, shown, now) => this.#onPresented(drawn, shown, now),
     };
     // Merge order: defaults < preset < config (< the `interactive` shortcut).
     const base: LumiCellsConfigInput = options.preset ? { extends: options.preset } : {};
@@ -316,11 +411,34 @@ export class LumiCells {
   }
 
   /**
-   * The canvas of this instance (a new element per engine). Null until the instance owns a
-   * WebGL context (see `getStats().state`), while it is parked, and after destroy.
+   * The canvas of this instance. With `renderer: 'own'` the WebGL canvas (a new element per
+   * engine), null until the instance owns a WebGL context (see `getStats().state`) and while it
+   * is parked. With `renderer: 'shared'` the 2D canvas the shared renderer copies into, null
+   * until the instance first gets its slot; while parked it stays in the host at 0x0. Null after
+   * destroy.
    */
   get canvas(): HTMLCanvasElement | null {
     return this.#view.canvas;
+  }
+
+  /** The renderer this instance uses (see `LumiCellsOptions.renderer`). */
+  get renderer(): InstanceRenderer {
+    return this.#renderer;
+  }
+
+  /**
+   * Switches between a WebGL context of its own and the page's shared renderer. The current GPU
+   * side is released and the instance asks the other renderer (the poster shows in between,
+   * usually for a frame or two); config, time and runtime layers are kept, the Life automaton
+   * reseeds.
+   */
+  setRenderer(renderer: InstanceRenderer): void {
+    if (this.#destroyed || !isRenderer(renderer) || renderer === this.#renderer) return;
+    this.#dropGpu();
+    this.#renderer = renderer;
+    this.#parked = false;
+    this.#updateSubscription();
+    this.#syncGpu();
   }
 
   /** Priority for the page's WebGL context budget. */
@@ -484,7 +602,8 @@ export class LumiCells {
   }
 
   getStats(): Stats {
-    return { ...this.#stats };
+    const s = this.#stats;
+    return { ...s, shared: s.shared ? { ...s.shared } : null };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -523,10 +642,9 @@ export class LumiCells {
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
     this.#clearParkTimer();
-    if (this.#requested) {
-      this.#requested = false;
-      cancelRequest(this.#client);
-    }
+    this.#cancelRequest();
+    this.#unwatchSettings?.();
+    this.#unwatchSettings = null;
     // Every listener and observer was registered with this signal (or a per-canvas one).
     this.#ctl.abort();
     this.#releaseCanvas();
@@ -547,10 +665,19 @@ export class LumiCells {
     this.#pending.length = 0;
   }
 
-  /** Simulates a context loss (and the browser's restore ~0.5 s later) to test recovery. */
+  /**
+   * Simulates a context loss (and the browser's restore ~0.5 s later) to test recovery. On a
+   * shared instance it loses the shared context: every shared instance on the page is affected.
+   */
   loseContextForTesting(): void {
+    if (this.#destroyed || this.#lost) return;
+    const seat = this.#seat;
+    if (seat) {
+      if (seat.slot) seat.loseContextForTesting();
+      return;
+    }
     const e = this.#engine;
-    if (this.#destroyed || !e || this.#lost) return;
+    if (!e) return;
     e.loseContextForTesting();
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = setTimeout(() => {
@@ -610,18 +737,22 @@ export class LumiCells {
         signal,
       });
     }
-    if (engine.softwareFallback && !this.#software) {
-      this.#software = true;
-      this.#controller.setSoftwareFallback(true);
-      this.#applyPixelCap();
-      queueMicrotask(() =>
-        this.#emit('warn', {
-          code: 'software-webgl',
-          message: `[lumicells] WebGL runs on a software rasterizer (${engine.caps.renderer || 'unknown'}): low quality, 0.5 Mpx budget.`,
-        }),
-      );
-    }
+    if (engine.softwareFallback) this.#noteSoftware(engine.caps.renderer);
     this.#controller.invalidateGpu();
+  }
+
+  /** The context runs on a CPU rasterizer: lowest tier, small pixel budget, one warning. */
+  #noteSoftware(renderer: string): void {
+    if (this.#software) return;
+    this.#software = true;
+    this.#controller.setSoftwareFallback(true);
+    this.#applyPixelCap();
+    queueMicrotask(() =>
+      this.#emit('warn', {
+        code: 'software-webgl',
+        message: `[lumicells] WebGL runs on a software rasterizer (${renderer || 'unknown'}): low quality, 0.5 Mpx budget.`,
+      }),
+    );
   }
 
   #disposeEngine(): void {
@@ -641,6 +772,7 @@ export class LumiCells {
   #dropFailedCanvas(): void {
     this.#releaseCanvas();
     this.#view.unmount();
+    this.#targetAlpha = null;
     this.#drawnSinceMount = false;
     this.#view.showPoster(posterCss(this.#controller.getConfig()));
   }
@@ -748,14 +880,11 @@ export class LumiCells {
       if (this.#wantsContext()) {
         if (!this.#requested) {
           this.#requested = true;
-          requestContext(this.#client);
+          if (this.#renderer === 'shared') getSharedRenderer().request(this.#sharedClient);
+          else requestContext(this.#client);
         }
-      } else if (this.#requested) {
-        // The wait (if any) ends here: a later one is reported anew.
-        this.#requested = false;
-        this.#waiting = false;
-        this.#budgetReported = false;
-        cancelRequest(this.#client);
+      } else {
+        this.#cancelRequest();
       }
     }
     this.#armParkTimer();
@@ -768,7 +897,7 @@ export class LumiCells {
     this.#waiting = false;
     this.#budgetReported = false;
     this.#holds = true;
-    if (this.#destroyed || !this.#wantsContext()) {
+    if (this.#destroyed || !this.#wantsContext() || this.#renderer !== 'own') {
       this.#releaseSlot();
       this.#publishState();
       return;
@@ -798,7 +927,7 @@ export class LumiCells {
 
   /** A context lost before a park or rebuild is over once a new engine exists. */
   #endPendingLoss(): void {
-    if (!this.#lostPending || !this.#engine || this.#lost) return;
+    if (!this.#lostPending || (!this.#engine && !this.#seat) || this.#lost) return;
     this.#lostPending = false;
     // Deferred: this runs inside the scheduler's pass, listeners must not re-enter it.
     queueMicrotask(() => {
@@ -834,10 +963,16 @@ export class LumiCells {
     if (evicted) this.#holds = false;
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
-    // Stop listening first: the release below must not come back as a context loss.
-    this.#releaseCanvas();
-    this.#disposeEngine();
-    this.#view.unmount();
+    if (this.#seat) {
+      // Shared: the seat (slot and region) goes back; the 2D canvas stays in the host, emptied.
+      this.#releaseSlot();
+      this.#shrinkTarget();
+    } else {
+      // Stop listening first: the release below must not come back as a context loss.
+      this.#releaseCanvas();
+      this.#disposeEngine();
+      this.#view.unmount();
+    }
     this.#view.showPoster(posterCss(this.#controller.getConfig()));
     // A lost context is dropped here, not restored: the rebuild on the next grant ends the loss.
     if (this.#lost) this.#lostPending = true;
@@ -849,12 +984,196 @@ export class LumiCells {
     this.#syncGpu();
   }
 
-  /** Gives the budget slot back (after the engine and its context are gone). */
+  /**
+   * Gives the budget slot back (after the engine and its context are gone), or, when shared,
+   * the seat (its slot and region).
+   */
   #releaseSlot(): void {
     this.#clearParkTimer();
+    const seat = this.#seat;
+    if (seat) {
+      this.#seat = null;
+      this.#unwatchSettings?.();
+      this.#unwatchSettings = null;
+      seat.release();
+    }
     if (!this.#holds) return;
     this.#holds = false;
-    releaseContext(this.#client);
+    if (!seat) releaseContext(this.#client);
+  }
+
+  /** Withdraws a request that was not served yet (from whichever renderer it went to). */
+  #cancelRequest(): void {
+    if (!this.#requested) return;
+    // The wait (if any) ends here: a later one is reported anew.
+    this.#requested = false;
+    this.#waiting = false;
+    this.#budgetReported = false;
+    cancelRequest(this.#client);
+    peekSharedRenderer()?.cancel(this.#sharedClient);
+  }
+
+  /** Releases whatever GPU side the instance has or asks for (renderer switch). */
+  #dropGpu(): void {
+    if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
+    this.#restoreTimer = 0;
+    this.#cancelRequest();
+    this.#releaseCanvas();
+    this.#disposeEngine();
+    this.#releaseSlot();
+    this.#view.unmount();
+    this.#targetAlpha = null;
+    this.#engineOpaque = null;
+    // The shared budget's resolution factor belongs to the shared renderer (a new seat sets it).
+    this.#controller.setShareScale(1);
+    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    if (this.#lost) this.#lostPending = true;
+    this.#lost = false;
+    this.#drawnSinceMount = false;
+  }
+
+  /**
+   * The shared renderer gave this instance a seat: the first grant (mount the 2D canvas; drawn
+   * from the next frame, shown after the first copy), or the same seat rebuilt after a loss of
+   * the shared context (the canvas still shows the last frame, the next copy replaces it).
+   */
+  #onSeat(seat: SharedSeat, restored: boolean): void {
+    if (restored) {
+      if (this.#destroyed || seat !== this.#seat) {
+        seat.release();
+        return;
+      }
+      this.#lost = false;
+      this.#lostPending = false;
+      this.#applySharedCaps(seat);
+      this.#controller.invalidateGpu();
+      this.#updateSubscription();
+      this.#publishState();
+      this.#emit('contextrestored', undefined);
+      return;
+    }
+    this.#requested = false;
+    this.#waiting = false;
+    this.#budgetReported = false;
+    if (this.#destroyed || !this.#wantsContext() || this.#renderer !== 'shared') {
+      seat.release();
+      this.#publishState();
+      return;
+    }
+    this.#holds = true;
+    this.#seat = seat;
+    this.#parked = false;
+    this.#unwatchSettings ??= watchSettings(() => this.#onSettingsChanged());
+    const overflow = this.#controller.getConfig().render.overflow;
+    const alpha = overflow > 0;
+    let canvas = this.#view.canvas;
+    // A canvas keeps the 2D context (and its alpha attribute) it was first given.
+    if (!canvas || (this.#targetAlpha !== null && this.#targetAlpha !== alpha)) {
+      canvas = this.#view.mount(overflow);
+      this.#drawnSinceMount = false;
+    }
+    this.#targetAlpha = alpha;
+    seat.setTarget(canvas, alpha);
+    this.#applySharedCaps(seat);
+    this.#controller.invalidateGpu();
+    this.#updateSubscription();
+    this.#syncIdle();
+    this.#armParkTimer();
+    this.#publishState();
+    this.#endPendingLoss();
+  }
+
+  /**
+   * Shared, out of the creation zone: the 2D canvas frees its memory at once (browsers cap the
+   * canvas memory of a page) while the seat stays for a quick return; the poster shows until the
+   * next copy refills the canvas. Parking (later, or early when too many seats are idle) gives
+   * the seat back too.
+   */
+  #syncIdle(): void {
+    const seat = this.#seat;
+    if (!seat) return;
+    const idle = !this.#inZone && !this.#inView && !this.#alwaysOn();
+    if (idle && !seat.idle) {
+      this.#shrinkTarget();
+      this.#drawnSinceMount = false;
+      this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    }
+    seat.setIdle(idle);
+  }
+
+  /**
+   * Drawing-buffer size (0 width, 1 height) at full resolution: the controller's once it has
+   * been measured, else estimated from the host's box, the overflow margin and the DPR cap (read
+   * by the shared renderer to size its atlas ahead of instances about to draw).
+   */
+  #expectedSize(axis: 0 | 1): number {
+    const c = this.#controller;
+    if (c.measured) return axis === 0 ? c.naturalWidth : c.naturalHeight;
+    const r = this.host.getBoundingClientRect();
+    const cfg = c.getConfig().render;
+    const dpr = Math.min(this.host.ownerDocument.defaultView?.devicePixelRatio || 1, cfg.maxDpr);
+    const css = (axis === 0 ? r.width : r.height) + 2 * Math.max(0, cfg.overflow);
+    return Math.max(1, Math.round(css * dpr));
+  }
+
+  #applySharedCaps(seat: SharedSeat): void {
+    this.#controller.setMaxDrawableSize(seat.maxDrawableSize);
+    if (seat.softwareFallback) this.#noteSoftware(seat.rendererName);
+  }
+
+  /**
+   * The shared context is lost. Unlike an own canvas, the 2D canvas keeps showing the last frame
+   * copied into it (no poster, no blank box) until the shared renderer rebuilds the device.
+   */
+  #onSharedLost(): void {
+    if (this.#destroyed || !this.#seat || this.#lost) return;
+    this.#lost = true;
+    this.#updateSubscription();
+    this.#publishState();
+    this.#emit('contextlost', undefined);
+    this.#emit('fallback', { reason: 'context-lost' });
+  }
+
+  /** The shared device (or this slot) failed for good; the renderer already took the seat back. */
+  #onSharedFailed(err: EngineError): void {
+    this.#requested = false;
+    this.#waiting = false;
+    if (this.#destroyed || this.#failed) return;
+    this.#failed = true;
+    this.#seat = null;
+    this.#holds = false;
+    this.#unwatchSettings?.();
+    this.#unwatchSettings = null;
+    this.#clearParkTimer();
+    if (this.#view.canvas) this.#dropFailedCanvas();
+    this.#updateSubscription();
+    this.#publishState();
+    // Deferred: this runs inside the shared renderer's pass.
+    queueMicrotask(() => {
+      if (!this.#destroyed) this.#emit('error', err);
+    });
+    this.#sendFallback(err.code === 'no-webgl2' ? 'no-webgl2' : 'compile');
+  }
+
+  /** Overflow 0 <-> > 0 while shared: a 2D canvas with the other alpha attribute, same seat. */
+  #swapTarget(): void {
+    const cfg = this.#controller.getConfig();
+    const alpha = cfg.render.overflow > 0;
+    const canvas = this.#view.mount(cfg.render.overflow);
+    this.#targetAlpha = alpha;
+    this.#seat?.setTarget(canvas, alpha);
+    this.#drawnSinceMount = false;
+    this.#view.showPoster(posterCss(cfg));
+  }
+
+  /** Parked while shared: the 2D canvas frees its memory (browsers cap it per page) and hides. */
+  #shrinkTarget(): void {
+    const c = this.#view.canvas;
+    if (c) {
+      c.width = 0;
+      c.height = 0;
+    }
+    this.#view.setCanvasVisible(false);
   }
 
   /**
@@ -914,7 +1233,8 @@ export class LumiCells {
    * every competitor's size afresh (#refreshArea); the observer is only the trigger.
    */
   #watchArea(): void {
-    const want = (this.#holds || this.#requested) && !this.#destroyed;
+    // Only own contexts compete for budget slots by size.
+    const want = this.#renderer === 'own' && (this.#holds || this.#requested) && !this.#destroyed;
     if (want === this.#areaWatched) return;
     const win = this.host.ownerDocument.defaultView;
     if (!win || typeof win.ResizeObserver !== 'function') return;
@@ -945,20 +1265,27 @@ export class LumiCells {
   #onPlacement(): void {
     this.#syncGpu();
     this.#updateSubscription();
+    this.#syncIdle();
     // A visible waiter is reported only once the next pass (at frame end) still refuses it.
     rankChanged();
   }
 
   /** Called after every change of the GPU side: the state, and the resize watch that follows it. */
   #publishState(): void {
-    this.#stats.state = this.#computeState();
+    const s = this.#stats;
+    s.state = this.#computeState();
+    s.renderer = this.#renderer;
+    if (this.#renderer === 'own') {
+      s.presentMs = null;
+      s.shared = null;
+    }
     this.#watchArea();
   }
 
   #computeState(): InstanceState {
     if (this.#destroyed) return 'destroyed';
     if (this.#failed || this.#noWebgl) return 'failed';
-    if (this.#engine) return this.#lost ? 'lost' : 'live';
+    if (this.#engine || this.#seat) return this.#lost ? 'lost' : 'live';
     if (this.#waiting) return 'waiting';
     if (this.#requested) return 'pending';
     return this.#parked ? 'parked' : 'pending';
@@ -972,7 +1299,7 @@ export class LumiCells {
       !this.#destroyed &&
       !this.#failed &&
       !this.#lost &&
-      this.#engine !== null &&
+      (this.#engine !== null || this.#seat !== null) &&
       visible;
     if (should && !this.#unsub) {
       this.#lastNow = -1;
@@ -986,6 +1313,8 @@ export class LumiCells {
       // Config events must not wait for a frame that will not come.
       if (this.#pending.length > 0) this.#queueFlush();
     }
+    // A drawing shared instance needs a region in the atlas.
+    this.#seat?.setRendering(this.#unsub !== null);
   }
 
   #afterConfig(changed: ParamPath[], source: ConfigSource = 'api'): void {
@@ -1010,7 +1339,16 @@ export class LumiCells {
     }
     if (overflow) {
       const opaque = cfg.render.overflow <= 0;
-      if (this.#view.canvas && this.#engineOpaque !== null && this.#engineOpaque !== opaque) {
+      if (this.#seat) {
+        // Shared: the region follows the new size by itself and the shared context stays; only
+        // a switch between opaque and transparent needs a 2D canvas of the other kind.
+        if (this.#targetAlpha !== null && this.#targetAlpha === opaque) this.#swapTarget();
+        else this.#view.setOverflow(cfg.render.overflow);
+      } else if (
+        this.#view.canvas &&
+        this.#engineOpaque !== null &&
+        this.#engineOpaque !== opaque
+      ) {
         this.#rebuildCanvas();
       } else {
         this.#view.setOverflow(cfg.render.overflow);
@@ -1021,6 +1359,7 @@ export class LumiCells {
       this.#applyReducedMotion();
       this.#syncGpu();
       this.#updateSubscription();
+      this.#syncIdle();
       // render.pauseOffscreen decides whether an offscreen instance ranks as visible.
       rankChanged();
     }
@@ -1071,18 +1410,23 @@ export class LumiCells {
 
   #render(now: number): void {
     const engine = this.#engine;
-    if (this.#destroyed || !engine) return;
+    const seat = this.#seat;
+    if (this.#destroyed || (!engine && !seat)) return;
     // Lost since the last frame (the loss event may still be queued): hide the canvas now.
-    if (engine.isContextLost()) {
+    if (engine?.isContextLost()) {
       this.#enterLost();
       return;
     }
+    // The shared renderer settles this frame's budget scale before any shared instance updates.
+    seat?.beginFrame(now);
     const c = this.#controller;
     const perf = c.perf;
     const raw = this.#lastNow < 0 ? perf.vsyncMs : now - this.#lastNow;
     this.#lastNow = now;
-    // Feed every rAF (skipped ones too) so the refresh estimate reflects the display.
-    const change = c.samplePerf(raw, this.#lastCpu, engine.gpuTimeMs, now);
+    // Feed every rAF (skipped ones too) so the refresh estimate reflects the display. A shared
+    // instance feeds the GPU time of the whole shared device.
+    const gpuMs = engine ? engine.gpuTimeMs : (seat?.stats.gpuMs ?? null);
+    const change = c.samplePerf(raw, this.#lastCpu, gpuMs, now);
     if (change) {
       this.#emit('quality', {
         scale: change.scale,
@@ -1114,23 +1458,61 @@ export class LumiCells {
     this.#flushConfig();
     const t0 = performance.now();
     const inputs = c.update(dt, now);
+    if (!engine) {
+      // Shared: drawn and copied in the present phase, reported in #onPresented.
+      this.#updateMs = performance.now() - t0;
+      this.#sharedDt = dt;
+      this.#sharedIdeal = ideal;
+      (seat as SharedSeat).submit();
+      return;
+    }
     const drawn = engine.render(inputs);
     // A failure inside render() disposed the engine and dropped the canvas.
     if (this.#engine !== engine) return;
     if (drawn) {
       c.commitFrame();
       if (!this.#drawnSinceMount) {
-        this.#drawnSinceMount = true;
         noteFirstDraw(now);
-        this.#view.setCanvasVisible(true);
-        this.#view.hidePoster();
-        if (!this.#readyEmitted) {
-          this.#readyEmitted = true;
-          this.#emit('ready', undefined);
-        }
+        this.#showFirstFrame();
       }
     }
-    const cpu = performance.now() - t0;
+    this.#finishFrame(performance.now() - t0, dt, ideal, now, engine.gpuTimeMs);
+  }
+
+  /** The shared renderer drew (and copied) the frame this instance submitted, or could not. */
+  #onPresented(drawn: boolean, shown: boolean, now: number): void {
+    const seat = this.#seat;
+    if (this.#destroyed || !seat) return;
+    // Drawn: the slot consumed the one-shot inputs (uploads, life reset).
+    if (drawn) this.#controller.commitFrame();
+    if (shown) {
+      this.#presentEma += (seat.copyMs - this.#presentEma) * 0.1;
+      if (!this.#drawnSinceMount) this.#showFirstFrame();
+    }
+    this.#finishFrame(
+      this.#updateMs + seat.drawMs + seat.copyMs,
+      this.#sharedDt,
+      this.#sharedIdeal,
+      now,
+      seat.stats.gpuMs,
+    );
+  }
+
+  /** The canvas shows a frame for the first time since it was mounted (or rebuilt). */
+  #showFirstFrame(): void {
+    this.#drawnSinceMount = true;
+    this.#view.setCanvasVisible(true);
+    this.#view.hidePoster();
+    if (!this.#readyEmitted) {
+      this.#readyEmitted = true;
+      this.#emit('ready', undefined);
+    }
+  }
+
+  /** Per-frame bookkeeping after the frame was drawn (or not): timings, events, stats. */
+  #finishFrame(cpu: number, dt: number, ideal: number, now: number, gpuMs: number | null): void {
+    const c = this.#controller;
+    const perf = c.perf;
     this.#lastCpu = cpu;
     this.#cpuEma += (cpu - this.#cpuEma) * 0.1;
     this.#time += dt;
@@ -1159,12 +1541,12 @@ export class LumiCells {
       this.#renderFps = this.#statsAt > 0 ? (this.#statsFrames * 1000) / span : 1000 / ideal;
       this.#statsAt = now;
       this.#statsFrames = 0;
-      this.#updateStats(engine);
-      if (this.#listeners.get('stats')?.size) this.#emit('stats', { ...this.#stats });
+      this.#updateStats(gpuMs);
+      if (this.#listeners.get('stats')?.size) this.#emit('stats', this.getStats());
     }
   }
 
-  #updateStats(engine: Engine): void {
+  #updateStats(gpuMs: number | null): void {
     const c = this.#controller;
     const g = c.geo;
     const perf = c.perf;
@@ -1172,7 +1554,7 @@ export class LumiCells {
     s.fps = this.#renderFps;
     s.frameMs = this.#renderFps > 0 ? 1000 / this.#renderFps : 0;
     s.cpuMs = this.#cpuEma;
-    s.gpuMs = engine.gpuTimeMs;
+    s.gpuMs = gpuMs;
     s.vsyncMs = perf.vsyncMs;
     s.missRatio = perf.missRatio;
     s.scale = perf.scale;
@@ -1184,6 +1566,24 @@ export class LumiCells {
     s.lifts = c.lifts.written;
     s.influences = c.influences.activeCount;
     s.softwareFallback = this.#software;
+    const seat = this.#seat;
+    if (seat) {
+      const d = this.#sharedStats;
+      const src = seat.stats;
+      d.gpuMs = src.gpuMs;
+      d.drawMs = src.drawMs;
+      d.copyMs = src.copyMs;
+      d.snapshotMs = src.snapshotMs;
+      d.copyMsPerMpx = src.copyMsPerMpx;
+      d.atlasWidth = src.atlasWidth;
+      d.atlasHeight = src.atlasHeight;
+      d.members = src.members;
+      d.regions = src.regions;
+      d.scale = src.scale;
+      d.copyStaged = src.copyStaged;
+      s.shared = d;
+      s.presentMs = this.#presentEma;
+    }
   }
 
   #applyPixelCap(): void {
