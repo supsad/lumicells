@@ -196,7 +196,8 @@ describe('attributes and properties', () => {
     await flush();
     expect(inst.replaced).toHaveLength(1);
     expect(inst.replaced[0]?.config.animation.speed).toBe(2);
-    expect(inst.replaced[0]?.opts.source).toBe('attribute');
+    // A property write is an API change; only attribute changes report 'attribute'.
+    expect(inst.replaced[0]?.opts.source).toBe('api');
 
     // Equal content in a new object: nothing to apply.
     el.config = { animation: { speed: 2 } };
@@ -212,6 +213,11 @@ describe('attributes and properties', () => {
     expect(inst.replaced[1]?.config.animation.speed).toBe(3);
     expect(inst.replaced[1]?.config.modes.life.weight).toBe(1); // life preset
     expect(inst.replaced[1]?.config.interaction.pointer).toBe(true);
+
+    el.setAttribute('preset', 'rain');
+    await flush();
+    expect(inst.replaced).toHaveLength(3);
+    expect(inst.replaced[2]?.opts.source).toBe('attribute');
   });
 
   it('passes transition to replaceConfig and ignores garbage values', async () => {

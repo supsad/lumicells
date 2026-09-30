@@ -8,7 +8,13 @@
  */
 
 import { PixelLife } from '../core/pixel-life';
-import type { InfluenceHandle, InfluenceOptions, PixelLifeEvents, Stats } from '../core/types';
+import type {
+  ConfigSource,
+  InfluenceHandle,
+  InfluenceOptions,
+  PixelLifeEvents,
+  Stats,
+} from '../core/types';
 import {
   isPresetId,
   normalizePatch,
@@ -196,6 +202,8 @@ export class PixelLifeElement extends Base {
   #srcPatch: PixelLifeConfigInput | null = null;
   /** The next flush applies a freshly loaded src patch: no visible crossfade from the default look. */
   #srcInstant = false;
+  // Where the pending change came from, reported as `pl-config` detail.source.
+  #pendingSource: ConfigSource = 'attribute';
 
   #bindings = new Map<Element, Binding>();
   #localObserver: MutationObserver | null = null;
@@ -226,7 +234,7 @@ export class PixelLifeElement extends Base {
   }
   set config(value: PixelLifeConfigInput | null) {
     this.#config = value ?? null;
-    this.#schedule();
+    this.#touch('api');
   }
 
   get preset(): PresetId | null {
@@ -234,7 +242,7 @@ export class PixelLifeElement extends Base {
   }
   set preset(value: PresetId | string | null) {
     this.#preset = isPresetId(value) ? value : null;
-    this.#schedule();
+    this.#touch('api');
   }
 
   get src(): string | null {
@@ -253,7 +261,7 @@ export class PixelLifeElement extends Base {
   set interactive(value: boolean) {
     this.#interactive = !!value;
     this.#reflect('interactive', this.#interactive);
-    this.#schedule();
+    this.#touch('api');
   }
 
   get overflow(): boolean | number {
@@ -266,7 +274,7 @@ export class PixelLifeElement extends Base {
         : value === null || value === undefined
           ? undefined
           : value;
-    this.#schedule();
+    this.#touch('api');
   }
 
   get paused(): boolean {
@@ -275,7 +283,7 @@ export class PixelLifeElement extends Base {
   set paused(value: boolean) {
     this.#paused = !!value;
     this.#reflect('paused', this.#paused);
-    this.#schedule();
+    this.#touch('api');
   }
 
   get transition(): number | null {
@@ -318,22 +326,25 @@ export class PixelLifeElement extends Base {
     if (oldValue === value && name !== 'preset' && name !== 'src') return;
     switch (name) {
       case 'preset':
-        if ((isPresetId(value) ? value : null) !== this.#preset) this.preset = value;
+        if ((isPresetId(value) ? value : null) !== this.#preset) {
+          this.#preset = isPresetId(value) ? value : null;
+          this.#touch('attribute');
+        }
         break;
       case 'src':
         this.src = value;
         break;
       case 'interactive':
         this.#interactive = value !== null;
-        this.#schedule();
+        this.#touch('attribute');
         break;
       case 'paused':
         this.#paused = value !== null;
-        this.#schedule();
+        this.#touch('attribute');
         break;
       case 'overflow':
         this.#overflow = parseOverflowAttr(value);
-        this.#schedule();
+        this.#touch('attribute');
         break;
       case 'transition':
         this.#transition = parseTransitionAttr(value);
@@ -372,6 +383,11 @@ export class PixelLifeElement extends Base {
     }
   }
 
+  #touch(source: ConfigSource): void {
+    this.#pendingSource = source;
+    this.#schedule();
+  }
+
   #schedule(): void {
     if (this.#scheduled || !this.#active) return;
     this.#scheduled = true;
@@ -395,10 +411,11 @@ export class PixelLifeElement extends Base {
     } else if (resolved.key !== this.#key) {
       this.#instance.replaceConfig(resolved.config, {
         transition: this.#srcInstant ? 0 : (this.#transition ?? undefined),
-        source: 'attribute',
+        source: this.#pendingSource,
       });
     }
     this.#srcInstant = false;
+    this.#pendingSource = 'attribute';
     this.#key = resolved.key;
     this.#syncPaused();
   }
@@ -498,7 +515,7 @@ export class PixelLifeElement extends Base {
         this.#srcPatch = patch;
         this.#srcUrl = url;
         this.#srcInstant = true;
-        this.#schedule();
+        this.#touch('import');
       })
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
