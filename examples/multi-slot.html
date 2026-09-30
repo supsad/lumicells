@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LumiCells — multi-slot device</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
+    />
+    <!--
+      Dev-only check of the engine split (not part of the production build): a GpuDevice renders
+      several RenderSlots (different presets, sizes and pixel ratios, overflow margins and lifts,
+      every debug view, the 'low' tier, float and RGBA8 targets) into regions of one canvas. Each
+      slot's FrameInputs also drive an Engine with a context of its own (the path every LumiCells
+      instance uses). At every checkpoint frame the regions are compared with the own-context
+      engines, the pixels outside the regions must be 0, and the page prints a PASS / FAIL
+      verdict (with the reasons) above the raw numbers.
+      URL parameters:
+        frames=240     frames per scenario (virtual 1/60 s each)
+        perRaf=4       frames rendered per animation frame
+        lifts=0        no lifted pixels (isolates the lift pass)
+        auto=0         do not run the parity check on load
+      window.multi exposes parity(opts), startup(opts) and last (the latest results) for
+      automated runs; see main.ts.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #0b0b12;
+        color: #d8d4ee;
+      }
+      main {
+        padding: 12px;
+        display: grid;
+        gap: 12px;
+      }
+      h2 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 6px;
+        color: #a9a3c9;
+      }
+      canvas {
+        display: block;
+        background: repeating-conic-gradient(#1a1a26 0 25%, #12121b 0 50%) 0 0 / 16px 16px;
+      }
+      .own {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      #status {
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h2>GpuDevices (float / RGBA8 targets), RenderSlots in regions of one canvas each</h2>
+        <div class="own" id="devices"></div>
+      </section>
+      <section>
+        <h2>The same slots, each through an Engine with its own context</h2>
+        <div class="own" id="own"></div>
+      </section>
+      <pre id="status">running…</pre>
+    </main>
+    <script type="module" src="./multi-slot/main.ts"></script>
+  </body>
+</html>

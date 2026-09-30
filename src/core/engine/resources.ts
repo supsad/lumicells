@@ -18,6 +18,20 @@ export interface Target {
 const CELL_STEP = 32;
 const QUARTER_STEP = 8;
 
+/** vec4 count the prelude declares for the ParamsBlock (`u_p[N]`), 0 when it declares none. */
+export function declaredParamVec4(prelude: string): number {
+  const m = /u_p\s*\[\s*(\d+)\s*\]/.exec(prelude);
+  return Number(m?.[1] ?? 0);
+}
+
+/**
+ * Floats a slot's params buffer holds: at least the block the prelude declares (or draws fail)
+ * and at least what the producer uploads, never less than one vec4.
+ */
+export function paramsFloatCount(declaredVec4: number, vec4Count: number): number {
+  return Math.max(1, Math.floor(vec4Count) || 0, declaredVec4) * 4;
+}
+
 export class CellTargets {
   /** Logical sizes (cells incl. pad; quarter-res haze). */
   w = 0;

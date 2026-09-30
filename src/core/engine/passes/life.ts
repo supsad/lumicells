@@ -93,9 +93,16 @@ void main() {
 `;
 }
 
+/**
+ * The seed of one automaton run: the producer's seed mixed with the slot's run counter, so a
+ * producer that never changes lifeSeed still gets fresh births every step.
+ */
+export function lifeRunSeed(lifeSeed: number, run: number): number {
+  return ((lifeSeed >>> 0) ^ Math.imul(run >>> 0, 0x9e3779b1)) >>> 0;
+}
+
 export class LifePass {
   private readonly prog: LazyProgram;
-  private stepCounter = 0;
 
   constructor(private readonly ctx: PassContext) {
     this.prog = new LazyProgram(ctx, FULLSCREEN_VS, lifeFs(ctx.header), 'life', (p) => {
@@ -107,7 +114,10 @@ export class LifePass {
     return this.prog.poll();
   }
 
-  /** Renders the next state of `src` into `dst` (viewport must be set to w x h by the caller). */
+  /**
+   * Renders the next state of `src` into `dst`. `run` counts the automaton runs of the slot that
+   * owns the targets (it is mixed into the seed, see lifeRunSeed).
+   */
   run(
     mode: number,
     src: WebGLTexture,
@@ -117,6 +127,7 @@ export class LifePass {
     prevW: number,
     prevH: number,
     f: FrameInputs,
+    run: number,
   ): void {
     const gl = this.ctx.gl;
     const p = this.prog.use();
@@ -127,12 +138,7 @@ export class LifePass {
     bindTexture(gl, UNIT_SRC, src);
     gl.uniform4i(p.uniform('u_size'), w, h, Math.max(1, prevW), Math.max(1, prevH));
     gl.uniform1i(p.uniform('u_mode'), mode);
-    // Mix a local counter in so a producer that never changes lifeSeed still gets fresh births.
-    this.stepCounter = (this.stepCounter + 1) >>> 0;
-    gl.uniform1ui(
-      p.uniform('u_seed'),
-      ((f.lifeSeed >>> 0) ^ Math.imul(this.stepCounter, 0x9e3779b1)) >>> 0,
-    );
+    gl.uniform1ui(p.uniform('u_seed'), lifeRunSeed(f.lifeSeed, run));
     gl.uniform1i(p.uniform('u_rule'), f.lifeRule | 0);
     gl.uniform1f(p.uniform('u_birth'), f.lifeBirth);
     gl.uniform1f(p.uniform('u_density'), f.lifeSeedDensity);

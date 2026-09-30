@@ -11,9 +11,15 @@
  * computed in the vertex shader and passed flat. The quad covers exactly the region where the
  * output can be nonzero: the body plus the larger of the halo and shadow margins (none while the
  * lift sits on its cell), not their sum.
+ *
+ * The program and its vertex array belong to the device and are shared by every slot; the
+ * instance buffer belongs to the slot (createLiftBuffer) and the vertex array is re-pointed at it
+ * only when a different slot draws lifts. Positions are relative to the slot's region (u_region),
+ * like the composite's.
  */
 
 import { MAX_LIFTS } from '../frame-block';
+import { REGION_PIXEL_GLSL, type Region } from '../region';
 import { LIFT_STRIDE } from '../types';
 import {
   LazyProgram,
@@ -33,7 +39,7 @@ uniform sampler2D u_fieldA;
 uniform sampler2D u_fieldB;
 uniform sampler2D u_lut;
 uniform vec4 u_cellTex;
-uniform vec4 u_view;  // xy drawing buffer px, z opaque output (1) or alpha canvas (0)
+uniform vec4 u_region;  // xy region origin in the framebuffer (GL bottom-left, device px), zw size
 out vec2 v_plane;
 flat out vec4 v_body;  // rgb body color (tonemapped, sRGB), a unused
 flat out vec4 v_halo;  // rgb halo color per unit of kernel (linear, exposure applied), a unused
@@ -79,7 +85,7 @@ void main() {
   float focal = 6.0 * max(halfB.x, halfB.y);
   float w = max((focal + v.z) / focal, 0.2);
   vec2 s = center + v.xy / w;
-  vec2 ndc = vec2(s.x / u_view.x * 2.0 - 1.0, 1.0 - s.y / u_view.y * 2.0);
+  vec2 ndc = vec2(s.x / u_region.z * 2.0 - 1.0, 1.0 - s.y / u_region.w * 2.0);
   gl_Position = alpha > 0.002 ? vec4(ndc * w, 0.0, w) : vec4(2.0, 2.0, 2.0, 1.0);
   v_plane = c;
   vec3 hotC = textureLod(u_lut, vec2(B.r * (255.0 / 256.0) + 0.5 / 256.0, 0.75), 0.0).rgb;
@@ -107,7 +113,8 @@ void main() {
 
 function liftFs(header: string): string {
   return `${header}
-uniform vec4 u_view;
+uniform vec4 u_region;
+uniform float u_opaque;  // 1 opaque output, 0 alpha canvas
 in vec2 v_plane;
 flat in vec4 v_body;
 flat in vec4 v_halo;
@@ -142,11 +149,11 @@ void main() {
   mediump vec3 bodyS = v_body.rgb;
   mediump vec3 rgb = (bodyS * body + haloS * (1.0 - body)) * alpha;
   mediump float a = alpha * (body + shadowA * (1.0 - body));
-  if (u_view.z < 0.5) {
+  if (u_opaque < 0.5) {
     // Alpha canvas: outside the host the composite leaves glow-only pixels (alpha ~ max3(rgb)),
     // and the purely additive halo (rgb > a) would push them past valid premultiplied alpha.
     // Raise alpha there like the composite does; inside the host (opaque) keep it additive.
-    vec2 px = vec2(gl_FragCoord.x, u_view.y - gl_FragCoord.y);
+    vec2 px = ${REGION_PIXEL_GLSL};
     vec2 hp = px - f_host.xy;
     mediump float inHost = sat(min(hp.x, f_host.z - hp.x) + 0.5) * sat(min(hp.y, f_host.w - hp.y) + 0.5);
     a = mix(max(a, max3M(rgb)), a, inHost);
@@ -156,11 +163,23 @@ void main() {
 `;
 }
 
+/** A slot's lift instance buffer (MAX_LIFTS records, rewritten every frame lifts are drawn). */
+export function createLiftBuffer(gl: WebGL2RenderingContext): WebGLBuffer {
+  const buffer = gl.createBuffer();
+  if (!buffer) throw new Error('[lumicells] cannot create lift buffer');
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, MAX_LIFTS * LIFT_STRIDE * 4, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  return buffer;
+}
+
 export class LiftPass {
   private readonly prog: LazyProgram;
   private readonly vao: WebGLVertexArrayObject;
-  private readonly buffer: WebGLBuffer;
-  private readonly last = new Float32Array(7).fill(Number.NaN);
+  /** Instance buffer the vertex array currently reads (null: none yet). */
+  private source: WebGLBuffer | null = null;
+  /** Last uploaded uniforms (per program, so they stay valid whichever slot draws next). */
+  private readonly last = new Float32Array(9).fill(Number.NaN);
 
   constructor(private readonly ctx: PassContext) {
     const gl = ctx.gl;
@@ -170,32 +189,45 @@ export class LiftPass {
       setSampler(gl, p, 'u_lut', UNIT_LUT);
     });
     const vao = gl.createVertexArray();
-    const buffer = gl.createBuffer();
-    if (!vao || !buffer) throw new Error('[lumicells] cannot create lift buffers');
+    if (!vao) throw new Error('[lumicells] cannot create lift vertex array');
     this.vao = vao;
-    this.buffer = buffer;
     gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, MAX_LIFTS * LIFT_STRIDE * 4, gl.DYNAMIC_DRAW);
-    const stride = LIFT_STRIDE * 4;
     for (let i = 0; i < 3; i++) {
       gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, 4, gl.FLOAT, false, stride, i * 16);
       gl.vertexAttribDivisor(i, 1);
     }
     gl.bindVertexArray(null);
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   poll(): boolean {
     return this.prog.poll();
   }
 
+  /** Points the vertex array at `buffer` (only when it changed). The VAO must be bound. */
+  private attach(buffer: WebGLBuffer): void {
+    if (this.source === buffer) return;
+    const gl = this.ctx.gl;
+    const stride = LIFT_STRIDE * 4;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    for (let i = 0; i < 3; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, stride, i * 16);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this.source = buffer;
+  }
+
+  /** A slot's buffer is being deleted: never keep pointing at it. */
+  release(buffer: WebGLBuffer): void {
+    if (this.source === buffer) this.source = null;
+  }
+
+  /**
+   * Uploads `count` lift records into the slot's `buffer` and draws them over the composite,
+   * into the region the composite set up (viewport and framebuffer are left bound by it).
+   */
   run(
+    buffer: WebGLBuffer,
     lifts: Float32Array,
     count: number,
-    viewW: number,
-    viewH: number,
+    region: Region,
     w: number,
     h: number,
     allocW: number,
@@ -214,17 +246,24 @@ export class LiftPass {
       l[3] = allocH;
       gl.uniform4f(p.uniform('u_cellTex'), w, h, 1 / allocW, 1 / allocH);
     }
-    const op = opaque ? 1 : 0;
-    if (l[4] !== viewW || l[5] !== viewH || l[6] !== op) {
-      l[4] = viewW;
-      l[5] = viewH;
-      l[6] = op;
-      gl.uniform4f(p.uniform('u_view'), viewW, viewH, op, 0);
+    const { x, y, width, height } = region;
+    if (l[4] !== x || l[5] !== y || l[6] !== width || l[7] !== height) {
+      l[4] = x;
+      l[5] = y;
+      l[6] = width;
+      l[7] = height;
+      gl.uniform4f(p.uniform('u_region'), x, y, width, height);
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    const op = opaque ? 1 : 0;
+    if (l[8] !== op) {
+      l[8] = op;
+      gl.uniform1f(p.uniform('u_opaque'), op);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, lifts, 0, n * LIFT_STRIDE);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.bindVertexArray(this.vao);
+    this.attach(buffer);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
@@ -236,6 +275,6 @@ export class LiftPass {
     const gl = this.ctx.gl;
     this.prog.dispose();
     gl.deleteVertexArray(this.vao);
-    gl.deleteBuffer(this.buffer);
+    this.source = null;
   }
 }

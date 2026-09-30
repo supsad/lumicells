@@ -12,9 +12,14 @@
  * them the neighbour and halo-stamp fetches.
  * Color math runs in mediump (FP16 on mobile GPUs); positions, texture coordinates and the dither
  * hash stay highp.
+ *
+ * The pass draws into a region of the bound framebuffer (see ../region.ts): its own canvas's
+ * default framebuffer, where the region is the whole drawing buffer, or a part of a shared one.
+ * Every position is derived from gl_FragCoord relative to that region, so the pixels are the same.
  */
 
 import { FULLSCREEN_VS } from '../glsl/common';
+import { REGION_PIXEL_GLSL, type Region } from '../region';
 import {
   LazyProgram,
   type PassContext,
@@ -36,7 +41,8 @@ uniform sampler2D u_lut;
 uniform sampler2D u_stampA;
 uniform sampler2D u_stampB;
 uniform vec4 u_cellTex;  // xy logical cell texture size, zw 1 / allocation
-uniform vec4 u_view;     // xy drawing buffer px, z quality (0 high, 1 medium, 2 low), w debug view
+uniform vec4 u_region;   // xy region origin in the framebuffer (GL bottom-left, device px), zw size
+uniform vec2 u_view;     // x quality (0 high, 1 medium, 2 low), y debug view
 uniform vec2 u_flags;    // x opaque output, y glow on (the glow passes ran this frame)
 out vec4 o_color;
 
@@ -48,16 +54,17 @@ mediump vec3 spot(mediump vec2 bp, mediump vec2 pos, mediump vec3 color, mediump
 }
 
 void main() {
-  vec2 px = vec2(gl_FragCoord.x, u_view.y - gl_FragCoord.y);
+  // Region-local device px, y down (the controller's canvas coordinates).
+  vec2 px = ${REGION_PIXEL_GLSL};
   float pitch = f_grid.z;
   vec2 gp = (px - f_origin.xy) / pitch;
   ivec2 lim = ivec2(u_cellTex.xy) - 1;
   ivec2 c = clamp(ivec2(floor(gp)), ivec2(0), lim);
   vec2 hp = px - f_host.xy;
   mediump float inHost = sat(min(hp.x, f_host.z - hp.x) + 0.5) * sat(min(hp.y, f_host.w - hp.y) + 0.5);
-  int dbg = int(u_view.w + 0.5);
-  bool cubic = u_view.z < 0.5;
-  bool lowQ = u_view.z > 1.5;
+  int dbg = int(u_view.y + 0.5);
+  bool cubic = u_view.x < 0.5;
+  bool lowQ = u_view.x > 1.5;
 
   // Background in host-centered mode units; the vignette touches background and haze only (the
   // glow's haze share carries it already).
@@ -144,7 +151,8 @@ void main() {
   mediump float exposure = P_glow_exposure;
   mediump float whitePoint = P_glow_whitePoint;
   mediump vec3 tm = tonemapMaxM(col * exposure, whitePoint);
-  mediump vec3 srgb = sat3M(lin2srgbM(tm) + ditherTPDF(gl_FragCoord.xy));
+  // Dither keyed to the region-local pixel: the same noise wherever the region sits.
+  mediump vec3 srgb = sat3M(lin2srgbM(tm) + ditherTPDF(gl_FragCoord.xy - u_region.xy));
   mediump float a = 1.0;
   if (u_flags.x < 0.5 && inHost < 1.0) {
     // Glow-only margin: keep valid premultiplied alpha (rgb <= a) for every compositor.
@@ -158,7 +166,8 @@ void main() {
 
 export class CompositePass {
   private readonly prog: LazyProgram;
-  private readonly last = new Float32Array(12).fill(Number.NaN);
+  /** Last uploaded uniforms (per program, so they stay valid whichever slot draws next). */
+  private readonly last = new Float32Array(14).fill(Number.NaN);
 
   constructor(private readonly ctx: PassContext) {
     const gl = ctx.gl;
@@ -176,10 +185,13 @@ export class CompositePass {
     return this.prog.poll();
   }
 
-  /** Sizes are uploaded only when they change. `glow`: the glow target was rendered this frame. */
+  /**
+   * Draws into `region` of `fb` (null = the default framebuffer). Uniforms are uploaded only
+   * when they change. `glow`: the glow target was rendered this frame.
+   */
   run(
-    viewW: number,
-    viewH: number,
+    fb: WebGLFramebuffer | null,
+    region: Region,
     w: number,
     h: number,
     allocW: number,
@@ -199,22 +211,28 @@ export class CompositePass {
       l[3] = allocH;
       gl.uniform4f(p.uniform('u_cellTex'), w, h, 1 / allocW, 1 / allocH);
     }
-    if (l[4] !== viewW || l[5] !== viewH || l[6] !== quality || l[7] !== debugView) {
-      l[4] = viewW;
-      l[5] = viewH;
-      l[6] = quality;
-      l[7] = debugView;
-      gl.uniform4f(p.uniform('u_view'), viewW, viewH, quality, debugView);
+    const { x, y, width, height } = region;
+    if (l[4] !== x || l[5] !== y || l[6] !== width || l[7] !== height) {
+      l[4] = x;
+      l[5] = y;
+      l[6] = width;
+      l[7] = height;
+      gl.uniform4f(p.uniform('u_region'), x, y, width, height);
+    }
+    if (l[8] !== quality || l[9] !== debugView) {
+      l[8] = quality;
+      l[9] = debugView;
+      gl.uniform2f(p.uniform('u_view'), quality, debugView);
     }
     const op = opaque ? 1 : 0;
     const gw = glow ? 1 : 0;
-    if (l[8] !== op || l[9] !== gw) {
-      l[8] = op;
-      l[9] = gw;
+    if (l[10] !== op || l[11] !== gw) {
+      l[10] = op;
+      l[11] = gw;
       gl.uniform2f(p.uniform('u_flags'), op, gw);
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, viewW, viewH);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.viewport(x, y, width, height);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 

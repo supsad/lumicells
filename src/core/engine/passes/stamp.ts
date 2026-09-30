@@ -17,8 +17,12 @@
  *         vertical (z) and diagonal (w) neighbours in the pixel's quadrant (the composite picks
  *         the same neighbours from the same offset).
  * Both are RGBA16F when float targets render (the values are then exact to ~1e-3), else RGBA8.
+ *
+ * The program belongs to the device (StampPass); the baked textures depend on the slot's params
+ * and pitch, so every slot owns a StampTarget.
  */
 
+import type { TextureFormat } from '../../gl/caps';
 import { bucketSize, createMrtFramebuffer, createTexture, needsRealloc } from '../../gl/target';
 import { FULLSCREEN_VS } from '../glsl/common';
 import {
@@ -77,16 +81,55 @@ void main() {
 `;
 }
 
+/** A slot's baked stamp: the MRT pair, its bucketed allocation and what it was baked for. */
+export class StampTarget {
+  texA: WebGLTexture | null = null;
+  texB: WebGLTexture | null = null;
+  fb: WebGLFramebuffer | null = null;
+  alloc = 0;
+  /** Pitch the stamp was baked for (0 = nothing baked yet). */
+  pitch = 0;
+  /** Set when the slot's params block changed: the next bake re-renders it. */
+  dirty = true;
+
+  constructor(
+    private readonly gl: WebGL2RenderingContext,
+    private readonly format: TextureFormat,
+  ) {}
+
+  /**
+   * (Re)allocates the pair at `size` and binds it to its texture units: only ever called while
+   * the owning slot is the one bound on the device.
+   */
+  allocate(size: number): void {
+    const gl = this.gl;
+    this.free();
+    // New textures bind to the active unit: use the scratch one, then bind them to their own.
+    gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
+    this.texA = createTexture(gl, size, size, { format: this.format });
+    this.texB = createTexture(gl, size, size, { format: this.format });
+    this.fb = createMrtFramebuffer(gl, [this.texA, this.texB]);
+    bindTexture(gl, UNIT_SRC, null);
+    bindTexture(gl, UNIT_STAMP_A, this.texA);
+    bindTexture(gl, UNIT_STAMP_B, this.texB);
+    this.alloc = size;
+  }
+
+  free(): void {
+    const gl = this.gl;
+    gl.deleteFramebuffer(this.fb);
+    gl.deleteTexture(this.texA);
+    gl.deleteTexture(this.texB);
+    this.fb = null;
+    this.texA = null;
+    this.texB = null;
+    this.alloc = 0;
+    this.pitch = 0;
+  }
+}
+
 export class StampPass {
   private readonly prog: LazyProgram;
-  private texA: WebGLTexture | null = null;
-  private texB: WebGLTexture | null = null;
-  private fb: WebGLFramebuffer | null = null;
-  private alloc = 0;
-  /** Pitch the stamp was baked for (0 = nothing baked yet). */
-  private pitch = 0;
-  /** Set when the params block changed: the next update() re-bakes. */
-  dirty = true;
 
   constructor(private readonly ctx: PassContext) {
     this.prog = new LazyProgram(ctx, FULLSCREEN_VS, stampFs(ctx.header), 'cell-stamp', () => {});
@@ -96,50 +139,25 @@ export class StampPass {
     return this.prog.poll();
   }
 
-  /** Bakes the stamp for `pitch` (device px) when it changed or `dirty` is set. */
-  update(pitch: number): void {
+  /**
+   * Bakes `t` for `pitch` (device px) when the pitch changed or `t.dirty` is set. Reads the
+   * params block bound on the device, so the owning slot must be the bound one.
+   */
+  update(t: StampTarget, pitch: number): void {
     const p = Math.max(1, Math.round(pitch));
-    if (!this.dirty && p === this.pitch && this.fb) return;
+    if (!t.dirty && p === t.pitch && t.fb) return;
     const gl = this.ctx.gl;
-    if (!this.fb || needsRealloc(this.alloc, p, STAMP_STEP))
-      this.allocate(bucketSize(p, STAMP_STEP));
+    if (!t.fb || needsRealloc(t.alloc, p, STAMP_STEP)) t.allocate(bucketSize(p, STAMP_STEP));
     this.prog.use();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
     discardTargets(this.ctx, 2);
     gl.viewport(0, 0, p, p);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    this.pitch = p;
-    this.dirty = false;
-  }
-
-  private allocate(size: number): void {
-    const gl = this.ctx.gl;
-    this.free();
-    const format = this.ctx.caps.hdrFormat;
-    // New textures bind to the active unit: use the scratch one, then bind them to their own.
-    gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
-    this.texA = createTexture(gl, size, size, { format });
-    this.texB = createTexture(gl, size, size, { format });
-    this.fb = createMrtFramebuffer(gl, [this.texA, this.texB]);
-    bindTexture(gl, UNIT_SRC, null);
-    bindTexture(gl, UNIT_STAMP_A, this.texA);
-    bindTexture(gl, UNIT_STAMP_B, this.texB);
-    this.alloc = size;
-  }
-
-  private free(): void {
-    const gl = this.ctx.gl;
-    gl.deleteFramebuffer(this.fb);
-    gl.deleteTexture(this.texA);
-    gl.deleteTexture(this.texB);
-    this.fb = null;
-    this.texA = null;
-    this.texB = null;
-    this.alloc = 0;
+    t.pitch = p;
+    t.dirty = false;
   }
 
   dispose(): void {
     this.prog.dispose();
-    this.free();
   }
 }

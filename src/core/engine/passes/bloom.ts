@@ -13,6 +13,8 @@
  * with the unfolded kernel (up to 16 per side, cheap at cell resolution).
  * Every pass rewrites its target's whole logical rect, so the old contents are discarded first
  * (tiled GPUs then skip loading them).
+ * The programs belong to the device and are shared by every slot: kernels and target sizes are
+ * cached by value, so they are re-uploaded only when the slot that draws next needs other ones.
  */
 
 import { FULLSCREEN_VS } from '../glsl/common';
@@ -206,6 +208,8 @@ export class BloomPass {
   private bloomSigma = -1;
   private hazeSigma = -1;
   private mixView = -1;
+  /** Last uploaded target sizes (setSizes arguments). */
+  private readonly sizes = new Float32Array(8).fill(Number.NaN);
 
   constructor(private readonly ctx: PassContext) {
     const gl = ctx.gl;
@@ -242,6 +246,7 @@ export class BloomPass {
     this.bloomSigma = -1;
     this.hazeSigma = -1;
     this.mixView = -1;
+    this.sizes.fill(Number.NaN);
   }
 
   private uploadKernel(first: number, sigma: number): void {
@@ -273,7 +278,7 @@ export class BloomPass {
     }
   }
 
-  /** Updates per-target size uniforms (call after (re)allocation or logical size change). */
+  /** Updates the per-target size uniforms when they differ from the last upload. */
   setSizes(
     w: number,
     h: number,
@@ -284,6 +289,27 @@ export class BloomPass {
     allocQW: number,
     allocQH: number,
   ): void {
+    const s = this.sizes;
+    if (
+      s[0] === w &&
+      s[1] === h &&
+      s[2] === allocW &&
+      s[3] === allocH &&
+      s[4] === qw &&
+      s[5] === qh &&
+      s[6] === allocQW &&
+      s[7] === allocQH
+    ) {
+      return;
+    }
+    s[0] = w;
+    s[1] = h;
+    s[2] = allocW;
+    s[3] = allocH;
+    s[4] = qw;
+    s[5] = qh;
+    s[6] = allocQW;
+    s[7] = allocQH;
     const gl = this.ctx.gl;
     const dp = this.downsample.use();
     gl.uniform4f(dp.uniform('u_cellTex'), w, h, 1 / allocW, 1 / allocH);
