@@ -55,16 +55,23 @@ vi.mock('../src/core/lumi-cells', () => {
     listeners = new Map<string, Set<(e: any) => void>>();
     priority: string;
     priorities: string[] = [];
+    renderer: string;
+    renderers: string[] = [];
     constructor(
       readonly host: HTMLElement,
       readonly options: any,
     ) {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
+      this.renderer = options?.renderer ?? 'own';
     }
     setPriority(p: string) {
       this.priorities.push(p);
       this.priority = p;
+    }
+    setRenderer(r: string) {
+      if (r !== this.renderer) this.renderers.push(r);
+      this.renderer = r;
     }
     replaceConfig(config: any, opts: any) {
       this.replaced.push({ config, opts });
@@ -118,9 +125,11 @@ vi.mock('../src/core/lumi-cells', () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean; priority?: string };
+  options: { config: any; autoStart: boolean; priority?: string; renderer?: string };
   priority: string;
   priorities: string[];
+  renderer: string;
+  renderers: string[];
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -328,6 +337,20 @@ describe('<LumiCells>', () => {
     expect(inst.priority).toBe('low');
     render(createElement(LumiCells, {}));
     expect(inst.priority).toBe('normal');
+    expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('passes renderer at construction and switches it later without a new instance', () => {
+    render(createElement(LumiCells, { renderer: 'shared' }));
+    const inst = live()[0] as Fake;
+    expect(inst.options.renderer).toBe('shared');
+    // The mount effect does not switch what the constructor already chose.
+    expect(inst.renderers).toEqual([]);
+    render(createElement(LumiCells, { renderer: 'own' }));
+    expect(inst.renderer).toBe('own');
+    render(createElement(LumiCells, { renderer: 'shared' }));
+    render(createElement(LumiCells, {}));
+    expect(inst.renderers).toEqual(['own', 'shared', 'own']);
     expect(FakeClass.instances).toHaveLength(1);
   });
 

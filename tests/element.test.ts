@@ -44,16 +44,23 @@ vi.mock('../src/core/lumi-cells', () => {
     interaction = { pointer: true, click: true };
     priority: string;
     priorities: string[] = [];
+    renderer: string;
+    renderers: string[] = [];
     constructor(
       readonly host: HTMLElement,
       readonly options: any,
     ) {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
+      this.renderer = options?.renderer ?? 'own';
     }
     setPriority(p: string) {
       this.priorities.push(p);
       this.priority = p;
+    }
+    setRenderer(r: string) {
+      this.renderers.push(r);
+      this.renderer = r;
     }
     getConfig() {
       return { interaction: this.interaction };
@@ -109,9 +116,11 @@ vi.mock('../src/core/lumi-cells', () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean; priority?: string };
+  options: { config: any; autoStart: boolean; priority?: string; renderer?: string };
   priority: string;
   priorities: string[];
+  renderer: string;
+  renderers: string[];
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -199,6 +208,35 @@ describe('attributes and properties', () => {
     expect(inst.priorities.at(-1)).toBe('normal');
     // The priority does not rebuild the instance.
     expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('renderer: attribute and property switch the instance in place, invalid values mean own', async () => {
+    const el = mount('<lumi-cells renderer="shared"></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    expect(inst.options.renderer).toBe('shared');
+    expect(el.renderer).toBe('shared');
+    el.setAttribute('renderer', 'OWN');
+    expect(el.renderer).toBe('own');
+    expect(inst.renderer).toBe('own');
+    el.renderer = 'shared';
+    expect(inst.renderer).toBe('shared');
+    el.renderer = 'bogus';
+    expect(el.renderer).toBe('own');
+    el.setAttribute('renderer', 'shared');
+    el.removeAttribute('renderer');
+    expect(inst.renderers).toEqual(['own', 'shared', 'own', 'shared', 'own']);
+    // Switching never rebuilds the element's instance (runtime layers and bindings stay).
+    expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('renderer set before the element is connected is used at creation', async () => {
+    const el = document.createElement('lumi-cells') as LumiCellsElement;
+    el.renderer = 'shared';
+    document.body.append(el);
+    await flush();
+    expect(live()[0]?.options.renderer).toBe('shared');
+    expect(live()[0]?.renderers).toEqual([]);
   });
 
   it('priority set before the element is connected is used at creation', async () => {

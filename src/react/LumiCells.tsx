@@ -12,7 +12,7 @@ import {
   useState,
 } from 'react';
 import { LumiCells as LumiCellsCore } from '../core/lumi-cells';
-import type { InstancePriority, Stats } from '../core/types';
+import type { InstancePriority, InstanceRenderer, Stats } from '../core/types';
 import { resolveConfig } from '../element/resolve';
 import { type LumiCellsConfigInput, type PresetId, posterCss, stableStringify } from '../schema';
 import { LumiCellsContext } from './context';
@@ -36,6 +36,12 @@ export interface LumiCellsProps
    * visible backgrounds with a higher priority keep or take a context first. Default `'normal'`.
    */
   priority?: InstancePriority;
+  /**
+   * `'own'` (default): a WebGL context of its own. `'shared'`: one WebGL context for every shared
+   * background on the page, copied into a 2D canvas (for many small backgrounds: cards, list
+   * items). Changing it switches the running instance (see `LumiCells.setRenderer`).
+   */
+  renderer?: InstanceRenderer;
   /**
    * Rendered over the static poster when there is no animation: WebGL2 unavailable, a shader
    * failure, or (until it is restored) a lost context. Not for a wait on the context budget
@@ -67,6 +73,7 @@ export function LumiCells({
   interactive,
   overflow,
   priority,
+  renderer,
   fallback,
   className,
   style,
@@ -97,9 +104,27 @@ export function LumiCells({
   const appliedKey = useRef('');
 
   // Latest props for long-lived listeners; refreshed before the other effects of each commit.
-  const latest = useRef({ resolved, transition, paused, priority, onReady, onError, onStats });
+  const latest = useRef({
+    resolved,
+    transition,
+    paused,
+    priority,
+    renderer,
+    onReady,
+    onError,
+    onStats,
+  });
   useEffect(() => {
-    latest.current = { resolved, transition, paused, priority, onReady, onError, onStats };
+    latest.current = {
+      resolved,
+      transition,
+      paused,
+      priority,
+      renderer,
+      onReady,
+      onError,
+      onStats,
+    };
   });
 
   // Created after mount (never during render), destroyed in cleanup: safe under StrictMode,
@@ -107,12 +132,18 @@ export function LumiCells({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const { resolved: initial, paused: startPaused, priority: initialPriority } = latest.current;
+    const {
+      resolved: initial,
+      paused: startPaused,
+      priority: initialPriority,
+      renderer: initialRenderer,
+    } = latest.current;
     // autoStart is off so no event can fire before the listeners below are attached.
     const inst = new LumiCellsCore(host, {
       config: initial.config,
       autoStart: false,
       priority: initialPriority,
+      renderer: initialRenderer,
     });
     appliedKey.current = initial.key;
     // 'no-webgl2' and 'compile' are final; 'context-lost' is temporary (the facade rebuilds its
@@ -170,6 +201,10 @@ export function LumiCells({
   useEffect(() => {
     instance?.setPriority(priority ?? 'normal');
   }, [instance, priority]);
+
+  useEffect(() => {
+    instance?.setRenderer(renderer ?? 'own');
+  }, [instance, renderer]);
 
   // Exposes null while there is no instance (Ref<T> types the value as T | null anyway).
   useImperativeHandle(ref, () => instance as LumiCellsCore, [instance]);

@@ -2,7 +2,8 @@
  * <lumi-cells>: the Web Component wrapper around the LumiCells facade.
  *
  * Properties are the source of truth; the scalar attributes (preset, src, interactive, overflow,
- * paused, transition, priority) feed the same state and only the boolean ones reflect back. The module is
+ * paused, transition, priority, renderer) feed the same state and only the boolean ones reflect
+ * back. The module is
  * importable in Node (SSR bundlers evaluate it): the HTMLElement base is guarded and nothing
  * here touches the DOM until an element is constructed.
  */
@@ -13,6 +14,7 @@ import type {
   InfluenceHandle,
   InfluenceOptions,
   InstancePriority,
+  InstanceRenderer,
   LumiCellsEvents,
   Stats,
 } from '../core/types';
@@ -144,6 +146,7 @@ const UPGRADE_PROPS = [
   'paused',
   'transition',
   'priority',
+  'renderer',
 ] as const;
 
 const FORWARDED_EVENTS = [
@@ -170,6 +173,11 @@ function parsePriority(value: unknown): InstancePriority {
   return v === 'high' || v === 'low' ? v : 'normal';
 }
 
+function parseRenderer(value: unknown): InstanceRenderer {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  return v === 'shared' ? 'shared' : 'own';
+}
+
 function parseTransitionAttr(value: string | null): number | null {
   if (value === null || value.trim() === '') return null;
   const n = Number(value);
@@ -185,6 +193,7 @@ export class LumiCellsElement extends Base {
     'paused',
     'transition',
     'priority',
+    'renderer',
     'id',
   ];
 
@@ -200,6 +209,7 @@ export class LumiCellsElement extends Base {
   #paused = false;
   #transition: number | null = null;
   #priority: InstancePriority = 'normal';
+  #renderer: InstanceRenderer = 'own';
 
   #instance: LumiCells | null = null;
   #unsubs: Array<() => void> = [];
@@ -319,6 +329,19 @@ export class LumiCellsElement extends Base {
     this.#instance?.setPriority(this.#priority);
   }
 
+  /**
+   * `own` (default): a WebGL context of its own; `shared`: one WebGL context for every shared
+   * background on the page, copied into a 2D canvas (anything else is `own`). Switches the
+   * running instance (see `LumiCells.setRenderer`).
+   */
+  get renderer(): InstanceRenderer {
+    return this.#renderer;
+  }
+  set renderer(value: InstanceRenderer | string | null) {
+    this.#renderer = parseRenderer(value);
+    this.#instance?.setRenderer(this.#renderer);
+  }
+
   /** The live LumiCells instance while the element is connected. */
   get instance(): LumiCells | null {
     return this.#instance;
@@ -376,6 +399,9 @@ export class LumiCellsElement extends Base {
         break;
       case 'priority':
         this.priority = value;
+        break;
+      case 'renderer':
+        this.renderer = value;
         break;
       case 'id':
         if (this.#instance) {
@@ -461,6 +487,7 @@ export class LumiCellsElement extends Base {
       config,
       autoStart: false,
       priority: this.#priority,
+      renderer: this.#renderer,
     });
     this.#instance = instance;
     this.#fallbackNotified = false;

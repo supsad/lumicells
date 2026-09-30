@@ -100,7 +100,7 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 ```
 
 Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `priority`,
-`fallback`, `onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
+`renderer`, `fallback`, `onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
 defaults, then `preset`, then `config`. `config` may be a new object on every render: the
 component compares content, not identity. Requires React 19 (`ref` is a regular prop).
 
@@ -136,8 +136,8 @@ Without a bundler, load the single file `dist/lib/lumicells-element.iife.js` wit
 `<script>`: it registers the tag and exposes the API as the global `LumiCells`.
 
 Attributes: `preset`, `src` (URL of a config file), `interactive`, `overflow`, `paused`,
-`transition`, `priority`. Properties: `config`, `preset`, `src`, `paused`, `interactive`,
-`overflow`, `transition`, `priority` and the read-only `instance`.
+`transition`, `priority`, `renderer`. Properties: `config`, `preset`, `src`, `paused`,
+`interactive`, `overflow`, `transition`, `priority`, `renderer` and the read-only `instance`.
 
 Declarative binding of child elements:
 
@@ -336,8 +336,9 @@ Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms C
 GPUs yet: the mobile path is budgeted by design (DPR cap 2, pixel budget), so check your target
 devices with the playground stats.
 
-Each instance owns a WebGL context; see [Many instances on one page](#many-instances-on-one-page)
-for how LumiCells keeps their number in check.
+By default each instance owns a WebGL context; see
+[Many instances on one page](#many-instances-on-one-page) for how LumiCells keeps their number in
+check, and for the shared renderer that draws any number of instances with one context.
 
 ## Many instances on one page
 
@@ -377,6 +378,43 @@ contexts), raise `maxContexts`, but stay well below 16. Instances with
 `render.pauseOffscreen: false` (for example an offscreen source copied into other canvases) are
 created right away, never parked, and rank as visible wherever they are: a visible background
 takes their context only with a higher `priority` or a clearly larger size.
+
+### Shared renderer
+
+For many small backgrounds that should all animate at once (cards, list items), use
+`renderer: 'shared'`. Every shared instance draws into its own region of one offscreen WebGL
+canvas, which is then copied into a 2D canvas in each host. Any number of them cost one WebGL
+context, counted on top of `maxContexts`.
+
+```ts
+const card = new LumiCells(cardEl, { preset: 'orb', renderer: 'shared' });
+LumiCells.configure({ sharedBudget: 4 }); // megapixels of the shared canvas ('auto': 4, touch 2)
+```
+
+- Config, pointer, influences, pulses, lifted pixels, events, debug views and quality tiers work
+  per instance as before. `canvas` is the 2D canvas, and `ready` fires after the first copy.
+- Only instances on screen get a region. When they need more pixels than `sharedBudget`, all of
+  them render at a lower resolution: the grid and the cell size stay, only the sharpness drops,
+  and no instance is dropped. The factor snaps down to a whole pixel cell size, never below 3
+  device pixels: instances whose cells are already that small keep their resolution.
+- Parked instances give their slot back and shrink their 2D canvas to 0×0, because Safari caps
+  the canvas memory of a page.
+- A lost shared context affects every shared instance. Each keeps its last frame (no poster) and
+  gets `contextlost`, then `contextrestored` once the context is rebuilt.
+- Each instance still costs its own GPU work plus one `drawImage` per frame, so the frame time
+  grows with the number of animating instances. On the test desktop 100 cards animating at once
+  took 2.9 ms of main thread per frame; at 165 Hz the GPU work capped them at about 47 fps.
+  `getStats()` reports `renderer`, `presentMs` (this instance's copy, with its share of the
+  frame's atlas snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part of the
+  copy cost, and a calibration of the copy cost per megapixel, measured again when the atlas size
+  or budget scale changes). For a shared instance `gpuMs` is the GPU time of the whole shared
+  device.
+- Keep large backgrounds (hero, full screen) on the default `'own'`: they need no copy, and
+  another instance's context loss does not affect them.
+
+In React use `<LumiCells renderer="shared">`, in HTML `<lumi-cells renderer="shared">`;
+`setRenderer()` switches a running instance. A mode that chooses the renderer automatically is
+planned.
 
 ## Browser support
 
