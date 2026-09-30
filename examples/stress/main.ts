@@ -1,9 +1,10 @@
 /**
  * Stress bench: N animated card backgrounds on one page, three ways.
  *
- * - `lumicells`: one LumiCells instance per card. Every instance owns a WebGL2 context, and
- *   browsers keep only about 16 live contexts per page (Chrome evicts the oldest one when a new
- *   one is created), so this mode shows what happens past that limit.
+ * - `lumicells`: one LumiCells instance per card. A live instance owns a WebGL2 context and
+ *   browsers keep only about 16 per page (Chrome evicts the oldest one when a new one is
+ *   created); the library's context budget (LumiCells.configure, maxContexts=N here) keeps the
+ *   page below that, so the cards past the budget show their poster.
  * - `shared`: one WebGL2 canvas renders a simple pixel-grid shader once per frame; each card is a
  *   2D canvas filled with drawImage() from it (see shared.ts).
  * - `mirror`: the same copy technique, but the source is ONE real LumiCells instance: the full
@@ -12,10 +13,22 @@
  * URL parameters are documented in stress.html. `window.bench` is the automation surface:
  * `measure(ms)` records frame pacing, main-thread and GPU cost, context churn and memory over a
  * window; `snapshot()` returns the instantaneous state; `scrollThrough()` scrolls the whole page
- * down and back up and reports, per step, whether the visible cards are live or on the poster.
+ * down and back up and reports, per step, whether the visible cards are live or on the poster
+ * and how long the newly visible ones took to come alive; `mount()` reports the cost of
+ * creating the instances (they are created in a task of their own after the page settled, so
+ * that task's long task / long animation frame is theirs alone); `lossTest()` forces WebGL
+ * context losses on live visible cards and reports what those cards show until the contexts
+ * are restored (a lost context's canvas must never paint its blank box over the page).
  */
 
-import { LumiCells, onBeforeFrame, PRESET_IDS, type PresetId, type Stats } from 'lumicells';
+import {
+  type ConfigureOptions,
+  LumiCells,
+  onBeforeFrame,
+  PRESET_IDS,
+  type PresetId,
+  type Stats,
+} from 'lumicells';
 import { installContextProbe } from './probe';
 import { drawCover, type SharedCard, SharedRenderer } from './shared';
 
@@ -41,6 +54,12 @@ const params = {
     : 'reference') as PresetId,
   pauseOffscreen: qs.get('pauseOffscreen') !== '0',
   hud: qs.get('hud') !== '0',
+  /** LumiCells.configure() overrides (library default when absent). */
+  maxContexts: qs.get('maxContexts'),
+  parkAfterMs: qs.get('parkAfterMs'),
+  createPerFrame: qs.get('createPerFrame'),
+  /** Delay before the instances are created, ms (lets a profiler attach first). */
+  mountDelay: clampInt(qs.get('mountDelay'), 0, 60_000, 0),
 };
 
 function clampInt(v: string | null, min: number, max: number, fallback: number): number {
@@ -95,6 +114,47 @@ try {
 } catch {
   // Long Tasks API unavailable (Firefox, Safari).
 }
+/** Long animation frames (Chrome 123+): a frame whose tasks + rendering took over 50 ms. */
+interface LongFrame extends LongTask {
+  blocking: number;
+  /** Where the time went: rendering (style/layout/paint) and the longest scripts. */
+  renderMs: number;
+  styleLayoutMs: number;
+  scripts: { invoker: string; fn: string; ms: number }[];
+}
+interface LoafEntry extends PerformanceEntry {
+  blockingDuration?: number;
+  renderStart?: number;
+  styleAndLayoutStart?: number;
+  scripts?: {
+    invoker: string;
+    sourceFunctionName: string;
+    duration: number;
+  }[];
+}
+const longFrames: LongFrame[] = [];
+try {
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries() as LoafEntry[]) {
+      const end = e.startTime + e.duration;
+      const renderStart = e.renderStart ?? 0;
+      const slStart = e.styleAndLayoutStart ?? 0;
+      longFrames.push({
+        start: e.startTime,
+        duration: e.duration,
+        blocking: e.blockingDuration ?? 0,
+        renderMs: renderStart > 0 ? end - renderStart : 0,
+        styleLayoutMs: slStart > 0 ? end - slStart : 0,
+        scripts: (e.scripts ?? [])
+          .map((sc) => ({ invoker: sc.invoker, fn: sc.sourceFunctionName, ms: sc.duration }))
+          .sort((a, b) => b.ms - a.ms)
+          .slice(0, 4),
+      });
+    }
+  }).observe({ type: 'long-animation-frame', buffered: true });
+} catch {
+  // LoAF unavailable.
+}
 
 // -------------------------------------------------------------------------------------------
 // Cards
@@ -141,7 +201,8 @@ interface Entry {
   errors: number;
 }
 
-const t0 = performance.now();
+/** Set when the instances are created (see mountAll()). */
+let t0 = performance.now();
 const entries: Entry[] = [];
 let shared: SharedRenderer | null = null;
 let sharedCards: (SharedCard & { card: Card })[] = [];
@@ -195,59 +256,90 @@ function makeCardCanvas(card: Card): SharedCard & { card: Card } {
 
 const renderConfig = { render: { pauseOffscreen: params.pauseOffscreen } };
 
-if (params.mode === 'lumicells') {
-  for (const card of cards) {
-    const cells = new LumiCells(card.host, { preset: params.preset, config: renderConfig });
-    entries.push(watch(cells, card));
-  }
-  onBeforeFrame(() => {
-    const r = rec;
-    if (!r) return;
-    const start = performance.now();
-    // Microtasks run right after the ticker's rAF callback: this measures the whole frame
-    // (every instance's measure + render phase).
-    queueMicrotask(() => r.work.push(performance.now() - start));
-  });
-} else if (params.mode === 'shared') {
-  shared = new SharedRenderer(Math.round(320 * DPR), Math.round(200 * DPR));
-  sharedCards = cards.map(makeCardCanvas);
-  const renderer = shared;
-  const loop = (now: number) => {
-    requestAnimationFrame(loop);
-    const start = performance.now();
-    renderer.frame((now - t0) / 1000, sharedCards, params.pauseOffscreen);
-    if (firstCopyAt < 0) firstCopyAt = performance.now() - t0;
-    rec?.work.push(performance.now() - start);
-  };
-  requestAnimationFrame(loop);
-} else {
-  const sourceHost = document.createElement('div');
-  sourceHost.id = 'mirror-source';
-  document.body.appendChild(sourceHost);
-  const source = new LumiCells(sourceHost, {
-    preset: params.preset,
-    // The source is invisible by design: it must never pause.
-    config: { render: { pauseOffscreen: false } },
-  });
-  mirrorSource = watch(source, { host: sourceHost, visible: true });
-  sharedCards = cards.map(makeCardCanvas);
-  onBeforeFrame(() => {
-    const start = performance.now();
-    const r = rec;
-    // After the ticker's render phase, in the same task: the source's drawing buffer is valid.
-    queueMicrotask(() => {
-      const src = source.canvas;
-      if (src && mirrorSource && mirrorSource.readyAt >= 0 && src.width > 0) {
-        for (const c of sharedCards) {
-          if (params.pauseOffscreen && !c.visible) continue;
-          drawCover(c.ctx, src, c.canvas.width, c.canvas.height);
-        }
-        if (firstCopyAt < 0) firstCopyAt = performance.now() - t0;
-      }
-      r?.work.push(performance.now() - start);
-    });
-  });
+/** LumiCells.configure() from the URL (only the given keys; absent means the library default). */
+function applyRuntimeParams(): ConfigureOptions {
+  const opts: ConfigureOptions = {};
+  const num = (v: string | null) => (v === null || v === '' ? null : Number(v));
+  const max = num(params.maxContexts);
+  if (params.maxContexts === 'auto') opts.maxContexts = 'auto';
+  else if (max !== null) opts.maxContexts = max;
+  const park = num(params.parkAfterMs);
+  if (park !== null) opts.parkAfterMs = park;
+  const perFrame = num(params.createPerFrame);
+  if (perFrame !== null) opts.createPerFrame = perFrame;
+  if (Object.keys(opts).length > 0) LumiCells.configure(opts);
+  return opts;
 }
+const runtimeParams = applyRuntimeParams();
+
+const mountInfo = { startAt: -1, syncMs: -1 };
+
+function mountAll(): void {
+  if (params.mode === 'lumicells') {
+    for (const card of cards) {
+      const cells = new LumiCells(card.host, { preset: params.preset, config: renderConfig });
+      entries.push(watch(cells, card));
+    }
+    onBeforeFrame(() => {
+      const r = rec;
+      if (!r) return;
+      const start = performance.now();
+      // Microtasks run right after the ticker's rAF callback: this measures the whole frame
+      // (every instance's measure + render phase).
+      queueMicrotask(() => r.work.push(performance.now() - start));
+    });
+  } else if (params.mode === 'shared') {
+    shared = new SharedRenderer(Math.round(320 * DPR), Math.round(200 * DPR));
+    sharedCards = cards.map(makeCardCanvas);
+    const renderer = shared;
+    const loop = (now: number) => {
+      requestAnimationFrame(loop);
+      const start = performance.now();
+      renderer.frame((now - t0) / 1000, sharedCards, params.pauseOffscreen);
+      if (firstCopyAt < 0) firstCopyAt = performance.now() - t0;
+      rec?.work.push(performance.now() - start);
+    };
+    requestAnimationFrame(loop);
+  } else {
+    const sourceHost = document.createElement('div');
+    sourceHost.id = 'mirror-source';
+    document.body.appendChild(sourceHost);
+    const source = new LumiCells(sourceHost, {
+      preset: params.preset,
+      // The source is invisible by design: it must never pause.
+      config: { render: { pauseOffscreen: false } },
+    });
+    mirrorSource = watch(source, { host: sourceHost, visible: true });
+    sharedCards = cards.map(makeCardCanvas);
+    onBeforeFrame(() => {
+      const start = performance.now();
+      const r = rec;
+      // After the ticker's render phase, in the same task: the source's drawing buffer is valid.
+      queueMicrotask(() => {
+        const src = source.canvas;
+        if (src && mirrorSource && mirrorSource.readyAt >= 0 && src.width > 0) {
+          for (const c of sharedCards) {
+            if (params.pauseOffscreen && !c.visible) continue;
+            drawCover(c.ctx, src, c.canvas.width, c.canvas.height);
+          }
+          if (firstCopyAt < 0) firstCopyAt = performance.now() - t0;
+        }
+        r?.work.push(performance.now() - start);
+      });
+    });
+  }
+}
+
+// The instances are created in a task of their own once the page has painted, so the long task
+// (and long animation frame) of that task measures the mount alone, not module evaluation.
+requestAnimationFrame(() =>
+  setTimeout(() => {
+    t0 = performance.now();
+    mountInfo.startAt = t0;
+    mountAll();
+    mountInfo.syncMs = performance.now() - t0;
+  }, params.mountDelay),
+);
 
 // -------------------------------------------------------------------------------------------
 // Measurements
@@ -267,6 +359,35 @@ function contextAlive(canvas: HTMLCanvasElement | null): boolean {
   return !!gl && !gl.isContextLost();
 }
 
+function canvasShown(canvas: HTMLCanvasElement): boolean {
+  return canvas.style.visibility !== 'hidden' && canvas.style.display !== 'none';
+}
+
+/**
+ * Whether the browser paints the canvas, from the computed style (page CSS included, not just
+ * the inline flag the library sets). Read only for canvases whose context is lost, so the
+ * per-frame checks force no style recalculation in the common case.
+ */
+function canvasPainted(canvas: HTMLCanvasElement): boolean {
+  if (!canvas.isConnected) return false;
+  const cs = getComputedStyle(canvas);
+  return cs.visibility === 'visible' && cs.display !== 'none' && Number(cs.opacity) > 0;
+}
+
+type CardLook = 'live' | 'poster' | 'dead' | 'blank';
+
+/**
+ * What a card shows: `live` a drawing canvas; `poster` the CSS poster; `dead` a canvas whose
+ * context is gone painted over everything (Chrome draws a white box with a broken-image icon);
+ * `blank` none of these (a canvas that has not drawn yet and no poster).
+ */
+function cardLook(e: Entry): CardLook {
+  const canvas = e.cells.canvas;
+  if (canvas && !contextAlive(canvas) && canvasPainted(canvas)) return 'dead';
+  if (posterOn(e.card.host)) return 'poster';
+  return canvas && canvasShown(canvas) ? 'live' : 'blank';
+}
+
 function snapshot() {
   const now = performance.now();
   let live = 0;
@@ -279,6 +400,9 @@ function snapshot() {
   let webglBytes = 0;
   let canvas2dBytes = 0;
   let lostCanvas = 0;
+  let visibleDead = 0;
+  let visibleBlank = 0;
+  const states: Record<string, number> = {};
   let readyAllMs: number | null = null;
 
   if (params.mode === 'lumicells') {
@@ -286,10 +410,11 @@ function snapshot() {
     for (const e of entries) {
       const canvas = e.cells.canvas;
       const alive = contextAlive(canvas);
-      const onPoster = posterOn(e.card.host);
-      // A lost context's canvas stays in the card and paints over the poster.
-      if (canvas && !alive) lostCanvas++;
-      const isLive = alive && !onPoster;
+      const look = cardLook(e);
+      // A lost context's canvas painting over the poster (a white box).
+      if (look === 'dead') lostCanvas++;
+      const isLive = look === 'live';
+      const onPoster = look === 'poster';
       if (isLive) live++;
       if (onPoster) poster++;
       if (isFresh(e, now)) rendering++;
@@ -297,10 +422,14 @@ function snapshot() {
         ready++;
         maxReady = Math.max(maxReady, e.readyAt);
       }
+      const state = e.cells.getStats().state;
+      if (state) states[state] = (states[state] ?? 0) + 1;
       if (e.card.visible) {
         visible++;
         if (isLive) visibleLive++;
         if (onPoster) visiblePoster++;
+        if (look === 'dead') visibleDead++;
+        if (look === 'blank') visibleBlank++;
       }
       // Default context: color buffer + a separate presentation buffer (x2).
       if (alive && canvas) webglBytes += canvas.width * canvas.height * 4 * 2;
@@ -336,10 +465,13 @@ function snapshot() {
       visible,
       visibleLive,
       visiblePoster,
+      visibleDead,
+      visibleBlank,
       lostCanvas,
+      states,
     },
     readyAllMs,
-    contexts: { ...probe.counters, liveNow: probe.liveNow() },
+    contexts: { ...probe.counters, liveNow: probe.liveNow(), peakLive: probe.peakLive() },
     memory: {
       usedJSHeapMB: mem ? round(mem.usedJSHeapSize / 1048576, 1) : null,
       webglBuffersMB: round(webglBytes / 1048576, 2),
@@ -445,6 +577,8 @@ async function measure(ms = 5000) {
     contextChurnInWindow: {
       created: c1.created - c0.created,
       lost: c1.lost - c0.lost,
+      released: c1.released - c0.released,
+      evicted: c1.evicted - c0.evicted,
       restored: c1.restored - c0.restored,
     },
     ...snapshot(),
@@ -478,7 +612,24 @@ function summarizeEvents() {
   return { lost, restored, fallbacks, errors, lostInstances, lostFirstIndex, lostLastIndex };
 }
 
-/** Scrolls the page down to the end and back up, dwelling on each screen. */
+function nextFrame(): Promise<number> {
+  return new Promise((r) => requestAnimationFrame(r));
+}
+
+/** Visible cards (by the page's own observer) that do not show a live canvas. */
+function visibleNotLive(): number {
+  let n = 0;
+  for (const e of entries) if (e.card.visible && cardLook(e) !== 'live') n++;
+  return n;
+}
+
+/**
+ * Scrolls the page down to the end and back up, dwelling on each screen. Per step: frame pacing,
+ * what the visible cards show at the end of the dwell, the most live contexts seen during it,
+ * and `settleMs` / `settleFrames`: how long after the jump every visible card showed a live
+ * canvas (-1: not within the dwell). The page's observer updates `visible` one frame after a
+ * scroll, so the check starts on the second frame.
+ */
 async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } = {}) {
   const dwell = opts.dwellMs ?? 700;
   const step = Math.max(1, Math.round(innerHeight * (opts.stepFraction ?? 0.8)));
@@ -488,12 +639,33 @@ async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } =
   ys.push(maxY);
   for (let i = ys.length - 2; i >= 0; i--) ys.push(ys[i] as number);
   const c0 = { ...probe.counters };
+  const ev0 = summarizeEvents();
+  probe.resetPeak();
   const steps = [];
   for (const y of ys) {
     scrollTo(0, y);
     const r: Recording = { deltas: [], work: [] };
     rec = r;
-    await sleep(dwell);
+    const start = performance.now();
+    let frames = 0;
+    let settleMs = -1;
+    let settleFrames = -1;
+    let maxLive = 0;
+    let maxVisibleDead = 0;
+    while (performance.now() - start < dwell) {
+      await nextFrame();
+      frames++;
+      maxLive = Math.max(maxLive, probe.liveNow());
+      if (params.mode === 'lumicells') {
+        let dead = 0;
+        for (const e of entries) if (e.card.visible && cardLook(e) === 'dead') dead++;
+        maxVisibleDead = Math.max(maxVisibleDead, dead);
+      }
+      if (settleMs < 0 && frames >= 2 && (params.mode !== 'lumicells' || visibleNotLive() === 0)) {
+        settleMs = Math.round(performance.now() - start);
+        settleFrames = frames;
+      }
+    }
     rec = null;
     const s = snapshot();
     const f = frameSummary(r.deltas);
@@ -504,8 +676,14 @@ async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } =
       visible: s.instances.visible,
       visibleLive: s.instances.visibleLive,
       visiblePoster: s.instances.visiblePoster,
+      visibleDead: s.instances.visibleDead,
+      maxVisibleDead,
+      settleMs,
+      settleFrames,
       rendering: s.instances.rendering,
       liveContexts: s.contexts.liveNow,
+      maxLiveContexts: maxLive,
+      states: s.instances.states,
       created: s.contexts.created - c0.created,
       lost: s.contexts.lost - c0.lost,
       evicted: s.contexts.evicted - c0.evicted,
@@ -514,26 +692,195 @@ async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } =
   }
   scrollTo(0, 0);
   const c1 = probe.counters;
+  const ev1 = summarizeEvents();
+  const settled = steps.filter((s) => s.settleMs >= 0);
+  const sum = (f: (s: (typeof steps)[number]) => number) => steps.reduce((a, s) => a + f(s), 0);
+  const visibleCards = sum((s) => s.visible);
+  const visibleLive = sum((s) => s.visibleLive);
   return {
     params,
+    runtimeParams,
     steps,
     totals: {
       created: c1.created - c0.created,
       lost: c1.lost - c0.lost,
+      released: c1.released - c0.released,
       evicted: c1.evicted - c0.evicted,
       restored: c1.restored - c0.restored,
+      /** 'contextlost' events received by the instances during the pass. */
+      instanceContextLost: ev1.lost - ev0.lost,
+      peakLiveContexts: probe.peakLive(),
+      maxLiveContextsSampled: Math.max(0, ...steps.map((s) => s.maxLiveContexts)),
       stepsWithVisiblePoster: steps.filter((s) => s.visiblePoster > 0).length,
       maxVisiblePoster: Math.max(0, ...steps.map((s) => s.visiblePoster)),
+      /**
+       * Visible cards summed over the steps (at the end of each dwell) and what they showed:
+       * the share that animates, not just whether anything was broken.
+       */
+      visibleCards,
+      visibleLive,
+      visiblePoster: sum((s) => s.visiblePoster),
+      visibleLiveShare: visibleCards > 0 ? round(visibleLive / visibleCards, 3) : 0,
+      stepsWithVisibleDead: steps.filter((s) => s.maxVisibleDead > 0).length,
+      stepsSettled: settled.length,
+      steps: steps.length,
+      maxSettleMs: settled.length ? Math.max(...settled.map((s) => s.settleMs)) : -1,
+      maxSettleFrames: settled.length ? Math.max(...settled.map((s) => s.settleFrames)) : -1,
       minFps: Math.min(...steps.map((s) => s.fps)),
     },
     end: snapshot(),
   };
 }
 
+/**
+ * Forces WebGL context losses and watches every frame for `watchMs`: how often the affected
+ * cards showed a lost context's canvas (a blank box) instead of the poster, and how long until
+ * all of them were live again. Two ways to lose them:
+ * - default: up to `count` live visible cards call the library's loseContextForTesting() (lost
+ *   now, restored by the browser about 0.5 s later);
+ * - `appContexts: N`: the page creates N WebGL contexts of its own (like a map or three.js next
+ *   to the backgrounds), pushing the browser past its limit so that it evicts the oldest ones,
+ *   ours; evicted contexts are not restored. The page's contexts are released at the end.
+ * `centers` are the affected cards' centres in viewport px, for a driver that samples
+ * screenshot pixels during the loss.
+ */
+async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: number } = {}) {
+  const count = opts.count ?? 4;
+  const watchMs = opts.watchMs ?? 2000;
+  const appContexts = Math.max(0, opts.appContexts ?? 0);
+  const liveNow = entries.filter(
+    (e) => e.card.visible && e.cells.getStats().state === 'live' && cardLook(e) === 'live',
+  );
+  // An eviction hits whoever the browser picks: watch every instance that owns a context.
+  const victims =
+    appContexts > 0
+      ? entries.filter((e) => e.cells.getStats().state === 'live')
+      : liveNow.slice(0, count);
+  const before = victims.map((e) => ({ lost: e.lost, restored: e.restored }));
+  const centers = victims
+    .filter((e) => e.card.visible)
+    .map((e) => {
+      const r = e.card.host.getBoundingClientRect();
+      return {
+        index: entries.indexOf(e),
+        x: Math.round(r.left + r.width / 2),
+        y: Math.round(r.top + r.height / 2),
+      };
+    });
+  const c0 = { ...probe.counters };
+  const start = performance.now();
+  const appGl: WebGL2RenderingContext[] = [];
+  if (appContexts > 0) {
+    for (let i = 0; i < appContexts; i++) {
+      const gl = document.createElement('canvas').getContext('webgl2');
+      if (gl) appGl.push(gl);
+    }
+  } else {
+    for (const e of victims) e.cells.loseContextForTesting();
+  }
+  const looks: Record<string, number> = {};
+  const states: Record<string, number> = {};
+  let frames = 0;
+  let framesWithDead = 0;
+  let maxDead = 0;
+  let maxVisibleDead = 0;
+  let allLiveAgainMs = -1;
+  while (performance.now() - start < watchMs) {
+    await nextFrame();
+    frames++;
+    let dead = 0;
+    let back = 0;
+    victims.forEach((e, i) => {
+      const look = cardLook(e);
+      looks[look] = (looks[look] ?? 0) + 1;
+      const st = e.cells.getStats().state;
+      states[st] = (states[st] ?? 0) + 1;
+      if (look === 'dead') dead++;
+      if (look === 'live' && e.restored > (before[i]?.restored ?? 0)) back++;
+    });
+    if (dead > 0) framesWithDead++;
+    maxDead = Math.max(maxDead, dead);
+    let visibleDead = 0;
+    for (const e of entries) if (e.card.visible && cardLook(e) === 'dead') visibleDead++;
+    maxVisibleDead = Math.max(maxVisibleDead, visibleDead);
+    if (allLiveAgainMs < 0 && victims.length > 0 && back === victims.length) {
+      allLiveAgainMs = Math.round(performance.now() - start);
+    }
+  }
+  const c1 = probe.counters;
+  const end = snapshot();
+  for (const gl of appGl) gl.getExtension('WEBGL_lose_context')?.loseContext();
+  return {
+    params,
+    runtimeParams,
+    mode: appContexts > 0 ? `evicted by ${appGl.length} app contexts` : 'loseContextForTesting',
+    watched: victims.length,
+    forced: victims.filter((e, i) => e.lost > (before[i]?.lost ?? 0)).length,
+    centers,
+    frames,
+    /** Card-frames by what the forced cards showed (dead: a lost context's canvas painted). */
+    looks,
+    /** Card-frames by getStats().state of the forced cards. */
+    states,
+    framesWithDead,
+    maxDead,
+    maxVisibleDead,
+    lostEvents: victims.reduce((a, e, i) => a + e.lost - (before[i]?.lost ?? 0), 0),
+    restoredEvents: victims.reduce((a, e, i) => a + e.restored - (before[i]?.restored ?? 0), 0),
+    /** -1: not all of them were live again within watchMs. */
+    allLiveAgainMs,
+    contextChurn: {
+      created: c1.created - c0.created,
+      lost: c1.lost - c0.lost,
+      restored: c1.restored - c0.restored,
+      evicted: c1.evicted - c0.evicted,
+    },
+    end,
+  };
+}
+
+/** Cost of creating the instances (they are created in one task, see mountAll()). */
+function mount() {
+  const start = mountInfo.startAt;
+  const end = start + 5000;
+  const lt = longTasks.filter((t) => t.start >= start - 1 && t.start < end);
+  const lf = longFrames.filter((t) => t.start + t.duration >= start && t.start < end);
+  const maxOf = (v: number[]) => (v.length ? Math.round(Math.max(...v)) : 0);
+  return {
+    syncMs: round(mountInfo.syncMs, 1),
+    longTasks: lt.map((t) => ({ at: Math.round(t.start - start), ms: Math.round(t.duration) })),
+    maxLongTaskMs: maxOf(lt.map((t) => t.duration)),
+    longFrames: lf.map((t) => ({
+      at: Math.round(t.start - start),
+      ms: Math.round(t.duration),
+      blockingMs: Math.round(t.blocking),
+      renderMs: Math.round(t.renderMs),
+      styleLayoutMs: Math.round(t.styleLayoutMs),
+      scripts: t.scripts.map((sc) => `${sc.invoker} ${sc.fn} ${Math.round(sc.ms)}ms`),
+    })),
+    maxLongFrameMs: maxOf(lf.map((t) => t.duration)),
+    maxLongFrameBlockingMs: maxOf(lf.map((t) => t.blocking)),
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // Automation surface + status line
 
-const bench = { params, t0, measure, snapshot, scrollThrough };
+const bench = {
+  params,
+  runtimeParams,
+  get t0() {
+    return t0;
+  },
+  get mounted() {
+    return mountInfo.syncMs >= 0;
+  },
+  measure,
+  snapshot,
+  scrollThrough,
+  mount,
+  lossTest,
+};
 declare global {
   interface Window {
     bench: typeof bench;
@@ -561,6 +908,11 @@ if (params.hud) {
       `${params.mode} n=${params.n} ${params.layout} pauseOffscreen=${params.pauseOffscreen ? 1 : 0}\n` +
       `fps ${fps.toFixed(0)}  cpu ${c.cpu.toFixed(2)} ms  gpu ${c.gpu?.toFixed(2) ?? 'n/a'} ms\n` +
       `live ${s.instances.live}  poster ${s.instances.poster}  ready ${s.instances.ready}\n` +
-      `contexts live ${s.contexts.liveNow} created ${s.contexts.created} lost ${s.contexts.lost}`;
+      `visible ${s.instances.visible}: live ${s.instances.visibleLive}  poster ${s.instances.visiblePoster}  dead ${s.instances.visibleDead}\n` +
+      `contexts live ${s.contexts.liveNow} (peak ${s.contexts.peakLive}) created ${s.contexts.created} lost ${s.contexts.lost}
+` +
+      `states ${Object.entries(s.instances.states)
+        .map(([k, v]) => `${k} ${v}`)
+        .join('  ')}`;
   }, 500);
 }

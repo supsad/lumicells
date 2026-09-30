@@ -18,8 +18,14 @@
                                      mirror: one real LumiCells instance copied the same way
         preset=reference             LumiCells preset (lumicells / mirror)
         pauseOffscreen=1             pause offscreen cards (0 keeps them running)
+        maxContexts=auto|N           LumiCells.configure() context budget (library default: auto)
+        parkAfterMs=N                LumiCells.configure() parking delay
+        createPerFrame=N             LumiCells.configure() engine creations per frame
+        mountDelay=0                 ms before the instances are created (to attach a profiler)
         hud=0                        hide the status line
-      window.bench exposes measure(ms), snapshot() and scrollThrough() for automated runs.
+      The instances are created in a task of their own after the first paint.
+      window.bench exposes measure(ms), snapshot(), scrollThrough(), mount() and lossTest() for
+      automated runs.
     -->
     <style>
       :root {

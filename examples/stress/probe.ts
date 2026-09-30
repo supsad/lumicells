@@ -24,6 +24,12 @@ export interface ContextProbe {
   readonly counters: ContextCounters;
   /** Contexts that exist and are not lost right now. */
   liveNow(): number;
+  /**
+   * Most contexts alive at once since the probe was installed (or since resetPeak()). Sampled
+   * right after every creation and restore, the only moments the count can grow.
+   */
+  peakLive(): number;
+  resetPeak(): void;
   /** The context of a canvas when it was created through getContext. */
   contextOf(canvas: HTMLCanvasElement): GLContext | undefined;
 }
@@ -40,6 +46,18 @@ export function installContextProbe(): ContextProbe {
   const seen = new WeakSet<object>();
   const releasing = new WeakSet<object>();
   const byCanvas = new WeakMap<HTMLCanvasElement, GLContext>();
+  let peak = 0;
+  const liveNow = (): number => {
+    let n = 0;
+    for (const r of refs) {
+      const gl = r.deref();
+      if (gl && !gl.isContextLost()) n++;
+    }
+    return n;
+  };
+  const samplePeak = (): void => {
+    peak = Math.max(peak, liveNow());
+  };
 
   const proto = HTMLCanvasElement.prototype;
   const origGetContext = proto.getContext as unknown as GetContext;
@@ -59,7 +77,11 @@ export function installContextProbe(): ContextProbe {
       this.addEventListener('webglcontextrestored', () => {
         counters.restored++;
         releasing.delete(gl);
+        samplePeak();
       });
+      // A browser eviction marks the victim lost synchronously inside getContext, so this
+      // sample never counts an evicted context.
+      samplePeak();
     }
     return ctx;
   };
@@ -86,13 +108,10 @@ export function installContextProbe(): ContextProbe {
 
   installed = {
     counters,
-    liveNow() {
-      let n = 0;
-      for (const r of refs) {
-        const gl = r.deref();
-        if (gl && !gl.isContextLost()) n++;
-      }
-      return n;
+    liveNow,
+    peakLive: () => peak,
+    resetPeak() {
+      peak = liveNow();
     },
     contextOf(canvas) {
       return byCanvas.get(canvas);
