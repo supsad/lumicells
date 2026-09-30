@@ -1,21 +1,21 @@
 /**
- * Public API types of the core. The facade (PixelLife), the React wrapper and the Web Component
+ * Public API types of the core. The facade (LumiCells), the React wrapper and the Web Component
  * all speak these types, so they are kept in one dependency-free module.
  */
 
 import type {
+  LumiCellsConfig,
+  LumiCellsConfigInput,
   ModulatablePath,
   ParamPath,
-  PixelLifeConfig,
-  PixelLifeConfigInput,
   PresetId,
 } from '../schema';
 
 export type ConfigSource = 'api' | 'stand' | 'attribute' | 'import' | 'preset';
 
-export interface PixelLifeOptions {
+export interface LumiCellsOptions {
   /** Partial config merged over the preset (or defaults). */
-  config?: PixelLifeConfigInput;
+  config?: LumiCellsConfigInput;
   /** Named preset used as the base under `config`. */
   preset?: PresetId;
   /** Start rendering right away (default true). */
@@ -177,7 +177,7 @@ export interface Stats {
 
 export type DebugView = 'final' | 'field' | 'halo' | 'bloom' | 'haze' | 'cells';
 
-export interface PixelLifeEvents {
+export interface LumiCellsEvents {
   ready: undefined;
   /** Reused object, do not retain. */
   frame: { time: number; dt: number };
@@ -190,7 +190,7 @@ export interface PixelLifeEvents {
    * their paths; a change from another source starts a new event, so every event carries only
    * its own source's paths (listeners can safely ignore their own echoes by `source`).
    */
-  config: { config: Readonly<PixelLifeConfig>; changed: ParamPath[]; source: ConfigSource };
+  config: { config: Readonly<LumiCellsConfig>; changed: ParamPath[]; source: ConfigSource };
   quality: { scale: number; quality: QualityTier; reason: 'slow' | 'recovered' | 'locked' };
   warn: { code: string; message: string };
   error: Error;
@@ -200,6 +200,6 @@ export interface PixelLifeEvents {
   destroy: undefined;
 }
 
-export type PixelLifeEventName = keyof PixelLifeEvents;
+export type LumiCellsEventName = keyof LumiCellsEvents;
 
-export type { ModulatablePath, ParamPath, PixelLifeConfig, PixelLifeConfigInput, PresetId };
+export type { LumiCellsConfig, LumiCellsConfigInput, ModulatablePath, ParamPath, PresetId };

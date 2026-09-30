@@ -1,5 +1,5 @@
 /**
- * pixel-life/schema: the pure (no DOM, no GL) config layer. Field factories stay internal
+ * lumicells/schema: the pure (no DOM, no GL) config layer. Field factories stay internal
  * (generic names like `color` or `group` would pollute the package root); their types are public.
  */
 export * from './defaults';

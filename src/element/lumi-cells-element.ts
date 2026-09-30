@@ -1,5 +1,5 @@
 /**
- * <pixel-life>: the Web Component wrapper around the PixelLife facade.
+ * <lumi-cells>: the Web Component wrapper around the LumiCells facade.
  *
  * Properties are the source of truth; the scalar attributes (preset, src, interactive, overflow,
  * paused, transition) feed the same state and only the boolean ones reflect back. The module is
@@ -7,48 +7,48 @@
  * here touches the DOM until an element is constructed.
  */
 
-import { PixelLife } from '../core/pixel-life';
+import { LumiCells } from '../core/lumi-cells';
 import type {
   ConfigSource,
   InfluenceHandle,
   InfluenceOptions,
-  PixelLifeEvents,
+  LumiCellsEvents,
   Stats,
 } from '../core/types';
 import {
   isPresetId,
+  type LumiCellsConfig,
+  type LumiCellsConfigInput,
   normalizePatch,
-  type PixelLifeConfig,
-  type PixelLifeConfigInput,
   type PresetId,
 } from '../schema';
 import {
   ATTR_FOR,
   attrsSignature,
-  DATA_PL_ATTRS,
+  DATA_LC_ATTRS,
   isManaged,
+  type LcAttrs,
   MANAGED_SELECTOR,
-  type PlAttrs,
-  parsePlAttrs,
+  parseLcAttrs,
 } from './data-attrs';
 import { needsRebind } from './rebind';
 import { resolveConfig } from './resolve';
 
-export const PIXEL_LIFE_TAG = 'pixel-life';
+export const LUMI_CELLS_TAG = 'lumi-cells';
 
-export interface PixelLifeElementEventMap {
-  'pl-ready': CustomEvent<{ instance: PixelLife }>;
-  'pl-config': CustomEvent<PixelLifeEvents['config']>;
-  'pl-stats': CustomEvent<Stats>;
-  'pl-error': CustomEvent<Error>;
-  'pl-fallback': CustomEvent<PixelLifeEvents['fallback']>;
+export interface LumiCellsElementEventMap {
+  'lc-ready': CustomEvent<{ instance: LumiCells }>;
+  'lc-config': CustomEvent<LumiCellsEvents['config']>;
+  'lc-stats': CustomEvent<Stats>;
+  'lc-error': CustomEvent<Error>;
+  'lc-fallback': CustomEvent<LumiCellsEvents['fallback']>;
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'pixel-life': PixelLifeElement;
+    'lumi-cells': LumiCellsElement;
   }
-  interface HTMLElementEventMap extends PixelLifeElementEventMap {}
+  interface HTMLElementEventMap extends LumiCellsElementEventMap {}
 }
 
 // Without a DOM (SSR, tests in node) the class still has to evaluate, so the base is a stub.
@@ -86,8 +86,8 @@ function applyStyle(root: ShadowRoot): void {
   root.append(style);
 }
 
-// One MutationObserver per root node serves every <pixel-life> that has an id (the only elements
-// that can own portals, data-pl-for), instead of each element observing the whole document.
+// One MutationObserver per root node serves every <lumi-cells> that has an id (the only elements
+// that can own portals, data-lc-for), instead of each element observing the whole document.
 type RootCallback = (records: MutationRecord[]) => void;
 interface RootWatcher {
   mo: MutationObserver;
@@ -106,7 +106,7 @@ function watchRoot(root: Node, cb: RootCallback): () => void {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: [...DATA_PL_ATTRS],
+      attributeFilter: [...DATA_LC_ATTRS],
     });
     watcher = { mo, subs };
     rootWatchers.set(root, watcher);
@@ -123,7 +123,7 @@ function watchRoot(root: Node, cb: RootCallback): () => void {
 }
 
 interface Binding {
-  attrs: PlAttrs;
+  attrs: LcAttrs;
   sig: string;
   handle: InfluenceHandle | null;
   /** Aborts the pulse/lift listeners. */
@@ -165,7 +165,7 @@ function parseTransitionAttr(value: string | null): number | null {
   return Number.isFinite(n) ? Math.max(0, n) : null;
 }
 
-export class PixelLifeElement extends Base {
+export class LumiCellsElement extends Base {
   static readonly observedAttributes = [
     'preset',
     'src',
@@ -179,7 +179,7 @@ export class PixelLifeElement extends Base {
   #stage!: HTMLDivElement;
 
   // Property state (source of truth).
-  #config: PixelLifeConfigInput | null = null;
+  #config: LumiCellsConfigInput | null = null;
   #preset: PresetId | null = null;
   #src: string | null = null;
   // Tri-state: undefined leaves interaction.* of the config alone.
@@ -188,7 +188,7 @@ export class PixelLifeElement extends Base {
   #paused = false;
   #transition: number | null = null;
 
-  #instance: PixelLife | null = null;
+  #instance: LumiCells | null = null;
   #unsubs: Array<() => void> = [];
   #key = '';
   #active = false;
@@ -199,10 +199,10 @@ export class PixelLifeElement extends Base {
 
   #srcAbort: AbortController | null = null;
   #srcUrl: string | null = null;
-  #srcPatch: PixelLifeConfigInput | null = null;
+  #srcPatch: LumiCellsConfigInput | null = null;
   /** The next flush applies a freshly loaded src patch: no visible crossfade from the default look. */
   #srcInstant = false;
-  // Where the pending change came from, reported as `pl-config` detail.source.
+  // Where the pending change came from, reported as `lc-config` detail.source.
   #pendingSource: ConfigSource = 'attribute';
 
   #bindings = new Map<Element, Binding>();
@@ -229,10 +229,10 @@ export class PixelLifeElement extends Base {
 
   // ---- properties -------------------------------------------------------------------------
 
-  get config(): PixelLifeConfigInput | null {
+  get config(): LumiCellsConfigInput | null {
     return this.#config;
   }
-  set config(value: PixelLifeConfigInput | null) {
+  set config(value: LumiCellsConfigInput | null) {
     this.#config = value ?? null;
     this.#touch('api');
   }
@@ -294,8 +294,8 @@ export class PixelLifeElement extends Base {
     this.#transition = n !== null && Number.isFinite(n) ? Math.max(0, n) : null;
   }
 
-  /** The live PixelLife instance while the element is connected. */
-  get instance(): PixelLife | null {
+  /** The live LumiCells instance while the element is connected. */
+  get instance(): LumiCells | null {
     return this.#instance;
   }
 
@@ -427,29 +427,29 @@ export class PixelLifeElement extends Base {
     else instance.start();
   }
 
-  #createInstance(config: PixelLifeConfig): void {
+  #createInstance(config: LumiCellsConfig): void {
     // autoStart is off so no event can fire before the listeners below are attached.
-    const instance = new PixelLife(this.#stage, { config, autoStart: false });
+    const instance = new LumiCells(this.#stage, { config, autoStart: false });
     this.#instance = instance;
     this.#fallbackNotified = false;
     this.#unsubs = [
-      instance.on('ready', () => this.#emit('pl-ready', { instance })),
-      instance.on('config', (e) => this.#emit('pl-config', e)),
-      instance.on('stats', (e) => this.#emit('pl-stats', { ...e })),
-      instance.on('error', (e) => this.#emit('pl-error', e)),
+      instance.on('ready', () => this.#emit('lc-ready', { instance })),
+      instance.on('config', (e) => this.#emit('lc-config', e)),
+      instance.on('stats', (e) => this.#emit('lc-stats', { ...e })),
+      instance.on('error', (e) => this.#emit('lc-error', e)),
       instance.on('fallback', (e) => {
         // The synchronous notice below (which paused elements rely on) already reported
         // no-webgl2; the facade's own deferred event for it must not be reported again.
         // 'compile' and 'context-lost' still pass.
         if (this.#fallbackNotified && e.reason === 'no-webgl2') return;
         this.#fallbackNotified = true;
-        this.#emit('pl-fallback', e);
+        this.#emit('lc-fallback', e);
       }),
     ];
     // The facade may have decided on the poster-only path during construction.
     if (!instance.supported && !this.#fallbackNotified) {
       this.#fallbackNotified = true;
-      this.#emit('pl-fallback', { reason: 'no-webgl2' });
+      this.#emit('lc-fallback', { reason: 'no-webgl2' });
     }
     this.#startBinding();
   }
@@ -472,9 +472,9 @@ export class PixelLifeElement extends Base {
     this.#dropInstance();
   }
 
-  #emit<K extends keyof PixelLifeElementEventMap>(
+  #emit<K extends keyof LumiCellsElementEventMap>(
     type: K,
-    detail: PixelLifeElementEventMap[K] extends CustomEvent<infer D> ? D : never,
+    detail: LumiCellsElementEventMap[K] extends CustomEvent<infer D> ? D : never,
   ): void {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
@@ -499,7 +499,7 @@ export class PixelLifeElement extends Base {
     this.#srcAbort = ac;
     fetch(url, { signal: ac.signal })
       .then((res) => {
-        if (!res.ok) throw new Error(`pixel-life: "${url}" responded with ${res.status}`);
+        if (!res.ok) throw new Error(`lumicells: "${url}" responded with ${res.status}`);
         return res.json() as Promise<unknown>;
       })
       .then((raw) => {
@@ -508,7 +508,7 @@ export class PixelLifeElement extends Base {
         const { patch, issues } = normalizePatch(raw);
         if (issues.length > 0) {
           console.warn(
-            `[pixel-life] ${issues.length} issue(s) in "${url}":`,
+            `[lumicells] ${issues.length} issue(s) in "${url}":`,
             issues.map((i) => `${i.path}: ${i.message}`),
           );
         }
@@ -519,11 +519,11 @@ export class PixelLifeElement extends Base {
       })
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
-        this.#emit('pl-error', err instanceof Error ? err : new Error(String(err)));
+        this.#emit('lc-error', err instanceof Error ? err : new Error(String(err)));
       });
   }
 
-  // ---- internals: data-pl-* bindings ------------------------------------------------------
+  // ---- internals: data-lc-* bindings ------------------------------------------------------
 
   #startBinding(): void {
     this.#localObserver = new MutationObserver((records) => this.#onLocalMutations(records));
@@ -531,7 +531,7 @@ export class PixelLifeElement extends Base {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: [...DATA_PL_ATTRS],
+      attributeFilter: [...DATA_LC_ATTRS],
     });
     this.#startForwarding();
     this.#rewatchRoot(); // also performs the initial scan
@@ -552,7 +552,7 @@ export class PixelLifeElement extends Base {
     this.#unwatchRoot?.();
     this.#unwatchRoot = null;
     this.#watchedRoot = this.getRootNode();
-    // Only portals (data-pl-for, which need an id) care about mutations outside this element;
+    // Only portals (data-lc-for, which need an id) care about mutations outside this element;
     // an element without an id must not make the browser report every DOM change on the page.
     if (this.id !== '') {
       this.#unwatchRoot = watchRoot(this.#watchedRoot, (records) => this.#onRootMutations(records));
@@ -562,7 +562,7 @@ export class PixelLifeElement extends Base {
 
   /**
    * The stage sits below the slotted content, so pointer events over bubbles never reach it.
-   * Re-dispatch them to the stage (which is the PixelLife host) while interaction is enabled.
+   * Re-dispatch them to the stage (which is the LumiCells host) while interaction is enabled.
    */
   #startForwarding(): void {
     const ac = new AbortController();
@@ -603,7 +603,7 @@ export class PixelLifeElement extends Base {
     }
   }
 
-  /** Who a binding element belongs to: `data-pl-for` names an id, otherwise the nearest ancestor. */
+  /** Who a binding element belongs to: `data-lc-for` names an id, otherwise the nearest ancestor. */
   #owns(el: Element): boolean {
     if (el === this || !el.isConnected) return false;
     const target = el.getAttribute(ATTR_FOR);
@@ -658,7 +658,7 @@ export class PixelLifeElement extends Base {
   }
 
   #onRootMutations(records: MutationRecord[]): void {
-    // Only portals (data-pl-for) are interesting at document level; descendants are handled by
+    // Only portals (data-lc-for) are interesting at document level; descendants are handled by
     // the local observer.
     if (this.id === '') return;
     let sweep = false;
@@ -692,8 +692,8 @@ export class PixelLifeElement extends Base {
       this.#unbind(el);
       return;
     }
-    const attrs = parsePlAttrs(el);
-    // A bare data-pl-for="id" is shorthand for "light this element up".
+    const attrs = parseLcAttrs(el);
+    // A bare data-lc-for="id" is shorthand for "light this element up".
     if (portal && !isManaged(el)) attrs.influence = {};
     const sig = attrsSignature(attrs);
     const current = this.#bindings.get(el);
@@ -783,14 +783,14 @@ export class PixelLifeElement extends Base {
 /**
  * Registers the element (idempotent, no-op without a custom elements registry). Returns the
  * constructor registered under `tag`, if any. Kept out of module scope so importing the module
- * has no side effects; `pixel-life/element/define` calls it.
+ * has no side effects; `lumicells/element/define` calls it.
  */
-export function definePixelLifeElement(
-  tag: string = PIXEL_LIFE_TAG,
-): typeof PixelLifeElement | null {
+export function defineLumiCellsElement(
+  tag: string = LUMI_CELLS_TAG,
+): typeof LumiCellsElement | null {
   if (typeof customElements === 'undefined') return null;
   const existing = customElements.get(tag);
-  if (existing) return existing as typeof PixelLifeElement;
-  customElements.define(tag, PixelLifeElement);
-  return PixelLifeElement;
+  if (existing) return existing as typeof LumiCellsElement;
+  customElements.define(tag, LumiCellsElement);
+  return LumiCellsElement;
 }

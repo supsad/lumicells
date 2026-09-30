@@ -2,7 +2,7 @@
 /**
  * Consumer type check of the built package (`npm run build:lib` first).
  *
- * Copies package.json + dist/lib + dist/types into `<tmp>/node_modules/pixel-life`, exactly the
+ * Copies package.json + dist/lib + dist/types into `<tmp>/node_modules/lumicells`, exactly the
  * layout a consumer gets, and compiles a small file that imports every public entry point with
  * `moduleResolution: nodenext` (the strict ESM resolver) and with `bundler`. The declarations are
  * checked too (no skipLibCheck), so a specifier that only resolves under bundler resolution
@@ -36,39 +36,39 @@ for (const dir of ['dist/lib', 'dist/types']) {
 
 const CONSUMER = `import {
   getDefaults,
-  PixelLife,
-  type PixelLifeConfig,
-  type PixelLifeConfigInput,
+  LumiCells,
+  type LumiCellsConfig,
+  type LumiCellsConfigInput,
   type Stats,
-} from 'pixel-life';
-import { PixelLifeElement } from 'pixel-life/element';
-import 'pixel-life/element/define';
+} from 'lumicells';
+import { LumiCellsElement } from 'lumicells/element';
+import 'lumicells/element/define';
 import {
-  PixelLife as PixelLifeView,
+  LumiCells as LumiCellsView,
   useInfluence,
-  usePixelLifeStats,
-  type PixelLifeProps,
-} from 'pixel-life/react';
-import { schema, type PresetId } from 'pixel-life/schema';
+  useLumiCellsStats,
+  type LumiCellsProps,
+} from 'lumicells/react';
+import { schema, type PresetId } from 'lumicells/schema';
 import { createElement, useRef } from 'react';
 
-const config: PixelLifeConfig = getDefaults();
-const input: PixelLifeConfigInput = { animation: { speed: 2 } };
+const config: LumiCellsConfig = getDefaults();
+const input: LumiCellsConfigInput = { animation: { speed: 2 } };
 const preset: PresetId = 'reference';
 export const readFps = (stats: Stats | null): number | undefined => stats?.fps;
 
-export function makeInstance(host: HTMLElement): PixelLife {
-  return new PixelLife(host, { config: { ...config, ...input } });
+export function makeInstance(host: HTMLElement): LumiCells {
+  return new LumiCells(host, { config: { ...config, ...input } });
 }
 
-export function Hero(props: PixelLifeProps) {
+export function Hero(props: LumiCellsProps) {
   const ref = useRef<HTMLDivElement>(null);
   useInfluence(ref, { type: 'light', padding: 8 });
-  const live = usePixelLifeStats();
-  return createElement(PixelLifeView, { ...props, preset }, createElement('div', { ref }, live?.fps));
+  const live = useLumiCellsStats();
+  return createElement(LumiCellsView, { ...props, preset }, createElement('div', { ref }, live?.fps));
 }
 
-export const el: PixelLifeElement | null = null;
+export const el: LumiCellsElement | null = null;
 export { schema };
 `;
 
@@ -87,10 +87,10 @@ function link(target, path) {
   return true;
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'pixel-life-consumer-'));
+const tmp = mkdtempSync(join(tmpdir(), 'lumicells-consumer-'));
 let failed = false;
 try {
-  const pkg = join(tmp, 'node_modules', 'pixel-life');
+  const pkg = join(tmp, 'node_modules', 'lumicells');
   mkdirSync(pkg, { recursive: true });
   cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
   cpSync(join(root, 'dist', 'lib'), join(pkg, 'dist', 'lib'), { recursive: true });

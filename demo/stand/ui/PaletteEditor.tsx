@@ -229,32 +229,32 @@ export function PaletteEditor({
       path={path}
       disabled={disabled}
       layout="stack"
-      className={cx('plui-pal', className)}
+      className={cx('lcui-pal', className)}
       labelId={`${uid}-l`}
       changed={changed}
       onReset={def ? () => setAll(def) : undefined}
       badge={
-        <span className="plui-pal__count" title="Число цветов / максимум">
+        <span className="lcui-pal__count" title="Число цветов / максимум">
           {n}/{maxStops}
         </span>
       }
     >
-      <div className="plui-pal__main">
+      <div className="lcui-pal__main">
         <div
-          className="plui-pal__bar"
+          className="lcui-pal__bar"
           style={{ background: gradient }}
           onDoubleClick={onBarDouble}
           title="Двойной клик — добавить цвет в этой точке"
           role="img"
           aria-label={`Градиент палитры, ${n} цветов`}
         />
-        <div className="plui-pal__chips" aria-hidden="true">
+        <div className="lcui-pal__chips" aria-hidden="true">
           {value.map((c, i) => (
             <button
               key={ids[i] ?? i}
               type="button"
               tabIndex={-1}
-              className={cx('plui-pal__chip', i === sel && 'is-selected')}
+              className={cx('lcui-pal__chip', i === sel && 'is-selected')}
               style={{ left: `${chipPos(i) * 100}%`, background: isHexColor(c) ? c : '#000' }}
               onClick={() => {
                 setSelected(i);
@@ -265,7 +265,7 @@ export function PaletteEditor({
           ))}
         </div>
 
-        <ol className="plui-pal__list" ref={listRef} aria-labelledby={`${uid}-l`}>
+        <ol className="lcui-pal__list" ref={listRef} aria-labelledby={`${uid}-l`}>
           {value.map((c, i) => {
             const id = ids[i] ?? i;
             const dropCls =
@@ -279,7 +279,7 @@ export function PaletteEditor({
                 key={id}
                 data-stop-id={id}
                 className={cx(
-                  'plui-pal__row',
+                  'lcui-pal__row',
                   i === sel && 'is-selected',
                   drag?.from === i && 'is-dragging',
                   dropCls,
@@ -288,7 +288,7 @@ export function PaletteEditor({
               >
                 <button
                   type="button"
-                  className="plui-pal__grip"
+                  className="lcui-pal__grip"
                   disabled={disabled}
                   aria-label={`Цвет ${i + 1}: переместить (стрелки вверх/вниз или перетаскивание)`}
                   title="Перетащить · стрелки ↑↓"
@@ -334,7 +334,7 @@ export function PaletteEditor({
                     />
                   </svg>
                 </button>
-                <span className="plui-pal__idx" aria-hidden="true">
+                <span className="lcui-pal__idx" aria-hidden="true">
                   {i + 1}
                 </span>
                 <HexField
@@ -343,7 +343,7 @@ export function PaletteEditor({
                   disabled={disabled}
                   aria-label={`Цвет ${i + 1}`}
                 />
-                <span className="plui-pal__acts">
+                <span className="lcui-pal__acts">
                   <IconButton
                     icon="up"
                     label={`Цвет ${i + 1}: выше`}
@@ -379,7 +379,7 @@ export function PaletteEditor({
           })}
         </ol>
 
-        <div className="plui-pal__tools">
+        <div className="lcui-pal__tools">
           <Button
             size="sm"
             icon="plus"
@@ -433,9 +433,9 @@ export function PaletteEditor({
         </div>
 
         {pasteOpen && (
-          <div className="plui-pal__paste">
+          <div className="lcui-pal__paste">
             <textarea
-              className="plui-textarea"
+              className="lcui-textarea"
               rows={3}
               value={pasteText}
               placeholder={'#ff2a4a, #6a3cc8, #0476ff\nили JSON-массив, по одному на строку…'}
@@ -443,14 +443,14 @@ export function PaletteEditor({
               spellCheck={false}
               onChange={(e) => setPasteText(e.target.value)}
             />
-            <div className="plui-pal__pastebar">
+            <div className="lcui-pal__pastebar">
               <span
-                className="plui-pal__pastepreview"
+                className="lcui-pal__pastepreview"
                 style={{
                   background: parsed.length ? paletteGradientCss(parsed, interpolation) : undefined,
                 }}
               />
-              <span className="plui-pal__pastecount">
+              <span className="lcui-pal__pastecount">
                 {parsed.length ? `найдено: ${parsed.length}` : 'нет цветов'}
                 {parsed.length > maxStops && ` (будет взято ${maxStops})`}
               </span>
@@ -471,21 +471,21 @@ export function PaletteEditor({
         )}
 
         {quickOpen && quickPalettes && (
-          <ul className="plui-pal__quick" aria-label="Готовые палитры">
+          <ul className="lcui-pal__quick" aria-label="Готовые палитры">
             {quickPalettes.map((q) => (
               <li key={q.id ?? q.name}>
                 <button
                   type="button"
-                  className="plui-pal__quickitem"
+                  className="lcui-pal__quickitem"
                   disabled={disabled}
                   title={`${q.name}: ${q.colors.length} цв.`}
                   onClick={() => setAll(q.colors)}
                 >
                   <span
-                    className="plui-pal__quickbar"
+                    className="lcui-pal__quickbar"
                     style={{ background: paletteGradientCss(q.colors, interpolation) }}
                   />
-                  <span className="plui-pal__quickname">{q.name}</span>
+                  <span className="lcui-pal__quickname">{q.name}</span>
                 </button>
               </li>
             ))}

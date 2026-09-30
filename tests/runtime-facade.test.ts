@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { HostView } from '../src/core/dom/host';
-import { PixelLife } from '../src/core/pixel-life';
-import type { PixelLifeEvents } from '../src/core/types';
+import { LumiCells } from '../src/core/lumi-cells';
+import type { LumiCellsEvents } from '../src/core/types';
 import { getPresetConfig } from '../src/schema';
 
 // jsdom has no WebGL: the facade must run its no-webgl2 fallback path (poster, handles, events).
@@ -32,13 +32,13 @@ function posterSpy() {
   return vi.spyOn(HostView.prototype, 'showPoster');
 }
 
-describe('PixelLife without WebGL2', () => {
+describe('LumiCells without WebGL2', () => {
   it('reports unsupported, keeps the poster and emits a deferred fallback', async () => {
-    expect(PixelLife.isSupported()).toBe(false);
+    expect(LumiCells.isSupported()).toBe(false);
     const el = host();
     const spy = posterSpy();
-    const pl = new PixelLife(el);
-    const seen: PixelLifeEvents['fallback'][] = [];
+    const pl = new LumiCells(el);
+    const seen: LumiCellsEvents['fallback'][] = [];
     pl.on('fallback', (e) => seen.push(e));
     expect(pl.supported).toBe(false);
     expect(pl.canvas).toBeNull();
@@ -54,7 +54,7 @@ describe('PixelLife without WebGL2', () => {
   });
 
   it('merges defaults < preset < config < interactive', () => {
-    const pl = new PixelLife(host(), {
+    const pl = new LumiCells(host(), {
       preset: 'orb',
       config: { grid: { count: 40 } },
       interactive: true,
@@ -69,8 +69,8 @@ describe('PixelLife without WebGL2', () => {
   });
 
   it('config changes are synchronous; the event is coalesced with the union of paths', async () => {
-    const pl = new PixelLife(host(), { autoStart: false });
-    const events: PixelLifeEvents['config'][] = [];
+    const pl = new LumiCells(host(), { autoStart: false });
+    const events: LumiCellsEvents['config'][] = [];
     pl.on('config', (e) => events.push(e));
     pl.set('modes.sphere.radius', 0.3, { source: 'stand' });
     pl.setConfig({ glow: { bloom: { strength: 1.2 } } }, { source: 'stand' });
@@ -96,8 +96,8 @@ describe('PixelLife without WebGL2', () => {
   });
 
   it('changes from different sources are never attributed to one another', async () => {
-    const pl = new PixelLife(host(), { autoStart: false });
-    const events: PixelLifeEvents['config'][] = [];
+    const pl = new LumiCells(host(), { autoStart: false });
+    const events: LumiCellsEvents['config'][] = [];
     pl.on('config', (e) => events.push(e));
     pl.set('grid.count', 40, { source: 'api' });
     pl.set('background.color', '#ff0000', { source: 'attribute' });
@@ -118,7 +118,7 @@ describe('PixelLife without WebGL2', () => {
   });
 
   it('replaceConfig resets to defaults plus the given config; exportConfig diffs', () => {
-    const pl = new PixelLife(host(), { config: { grid: { gap: 0.4 } }, autoStart: false });
+    const pl = new LumiCells(host(), { config: { grid: { gap: 0.4 } }, autoStart: false });
     pl.replaceConfig({ extends: 'rain' });
     expect(pl.get('grid.gap')).toBe(getPresetConfig('rain').grid.gap);
     const file = pl.exportConfig({ mode: 'diff', base: 'rain' });
@@ -128,7 +128,7 @@ describe('PixelLife without WebGL2', () => {
   });
 
   it('runtime layers work without a GPU and never touch the config', () => {
-    const pl = new PixelLife(host(), { autoStart: false });
+    const pl = new LumiCells(host(), { autoStart: false });
     const m = pl.modulate('modes.sphere.radius', 0.2);
     const inf = pl.addInfluence({ x: 10, y: 10, radius: 20 });
     const el = document.createElement('button');
@@ -152,7 +152,7 @@ describe('PixelLife without WebGL2', () => {
     const el = host();
     el.style.background = 'rgb(1, 2, 3)';
     const spy = posterSpy();
-    const pl = new PixelLife(el);
+    const pl = new LumiCells(el);
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
     const destroyed = vi.fn();
@@ -187,7 +187,7 @@ describe('PixelLife without WebGL2', () => {
   it('keeps a pre-existing positioned host as is', () => {
     const el = host();
     el.style.position = 'absolute';
-    const pl = new PixelLife(el, { autoStart: false });
+    const pl = new LumiCells(el, { autoStart: false });
     expect(el.style.position).toBe('absolute');
     pl.destroy();
     expect(el.style.position).toBe('absolute');
@@ -195,10 +195,10 @@ describe('PixelLife without WebGL2', () => {
 
   it('warns once when more than 8 instances are alive', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const list: PixelLife[] = [];
+    const list: LumiCells[] = [];
     const warns: string[] = [];
     for (let i = 0; i < 10; i++) {
-      const pl = new PixelLife(host(), { autoStart: false });
+      const pl = new LumiCells(host(), { autoStart: false });
       pl.on('warn', (e) => warns.push(e.code));
       list.push(pl);
     }
@@ -211,7 +211,7 @@ describe('PixelLife without WebGL2', () => {
 
   it('listener errors do not break other listeners', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const pl = new PixelLife(host(), { autoStart: false });
+    const pl = new LumiCells(host(), { autoStart: false });
     const ok = vi.fn();
     pl.on('config', () => {
       throw new Error('boom');

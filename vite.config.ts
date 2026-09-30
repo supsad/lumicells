@@ -11,12 +11,12 @@ export default defineConfig({
   resolve: {
     // The demo imports the library by its package name, exactly like a consumer would.
     alias: [
-      { find: /^pixel-life$/, replacement: resolve(root, 'src/core/index.ts') },
-      { find: /^pixel-life\/schema$/, replacement: resolve(root, 'src/schema/index.ts') },
-      { find: /^pixel-life\/react$/, replacement: resolve(root, 'src/react/index.ts') },
-      { find: /^pixel-life\/element$/, replacement: resolve(root, 'src/element/index.ts') },
+      { find: /^lumicells$/, replacement: resolve(root, 'src/core/index.ts') },
+      { find: /^lumicells\/schema$/, replacement: resolve(root, 'src/schema/index.ts') },
+      { find: /^lumicells\/react$/, replacement: resolve(root, 'src/react/index.ts') },
+      { find: /^lumicells\/element$/, replacement: resolve(root, 'src/element/index.ts') },
       {
-        find: /^pixel-life\/element\/define$/,
+        find: /^lumicells\/element\/define$/,
         replacement: resolve(root, 'src/element/define.ts'),
       },
     ],

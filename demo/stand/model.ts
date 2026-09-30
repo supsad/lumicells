@@ -8,11 +8,11 @@ import {
   type GroupDef,
   getPath,
   isGroup,
-  type PixelLifeConfig,
+  type LumiCellsConfig,
   schema,
   type VisibleWhen,
   valueEquals,
-} from 'pixel-life';
+} from 'lumicells';
 
 export interface LeafNode {
   type: 'leaf';
@@ -126,7 +126,7 @@ export function getPanelModel(): PanelModel {
 }
 
 /** One comparison of a `visibleWhen` rule against the live config. */
-export function isWhenMet(cfg: PixelLifeConfig, w: VisibleWhen): boolean {
+export function isWhenMet(cfg: LumiCellsConfig, w: VisibleWhen): boolean {
   const v = getPath(cfg, w.path);
   if (w.eq !== undefined && !valueEquals(v, w.eq)) return false;
   if (w.neq !== undefined && valueEquals(v, w.neq)) return false;
@@ -134,7 +134,7 @@ export function isWhenMet(cfg: PixelLifeConfig, w: VisibleWhen): boolean {
   return true;
 }
 
-export function isChainMet(cfg: PixelLifeConfig, chain: readonly VisibleWhen[]): boolean {
+export function isChainMet(cfg: LumiCellsConfig, chain: readonly VisibleWhen[]): boolean {
   for (const w of chain) if (!isWhenMet(cfg, w)) return false;
   return true;
 }

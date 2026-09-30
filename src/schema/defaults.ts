@@ -1,5 +1,5 @@
 import { type GroupDef, isGroup } from './fields';
-import { CONFIG_VERSION, type PixelLifeConfig, schema } from './schema';
+import { CONFIG_VERSION, type LumiCellsConfig, schema } from './schema';
 
 function build(g: GroupDef): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -13,6 +13,6 @@ function build(g: GroupDef): Record<string, unknown> {
 }
 
 /** A fresh deep copy of the default config (the "reference" look). */
-export function getDefaults(): PixelLifeConfig {
-  return { version: CONFIG_VERSION, ...build(schema) } as PixelLifeConfig;
+export function getDefaults(): LumiCellsConfig {
+  return { version: CONFIG_VERSION, ...build(schema) } as LumiCellsConfig;
 }

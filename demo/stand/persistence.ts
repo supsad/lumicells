@@ -6,24 +6,24 @@
 import {
   type ConfigIssue,
   isPresetId,
+  type LumiCellsConfig,
   normalizeConfig,
-  type PixelLifeConfig,
   type PresetId,
   toConfigFile,
-} from 'pixel-life';
+} from 'lumicells';
 
-export const AUTOSAVE_KEY = 'pixel-life:stand:v1';
-export const UI_KEY = 'pixel-life:stand:ui:v1';
+export const AUTOSAVE_KEY = 'lumicells:stand:v1';
+export const UI_KEY = 'lumicells:stand:ui:v1';
 const HASH_PREFIX = '#c=';
 
 export interface LoadedState {
-  cfg: PixelLifeConfig;
+  cfg: LumiCellsConfig;
   presetId: PresetId;
   issues: ConfigIssue[];
 }
 
 /** The compact form used by autosave and links: only what differs from the preset. */
-function diffOf(cfg: PixelLifeConfig, presetId: PresetId) {
+function diffOf(cfg: LumiCellsConfig, presetId: PresetId) {
   const { $schema: _omit, ...rest } = toConfigFile(cfg, { mode: 'diff', base: presetId });
   return rest;
 }
@@ -55,11 +55,11 @@ function fromBase64Url(text: string): string {
 
 // --------------------------------------------------------------- share link
 
-export function encodeShareHash(cfg: PixelLifeConfig, presetId: PresetId): string {
+export function encodeShareHash(cfg: LumiCellsConfig, presetId: PresetId): string {
   return HASH_PREFIX + toBase64Url(JSON.stringify(diffOf(cfg, presetId)));
 }
 
-export function shareUrl(cfg: PixelLifeConfig, presetId: PresetId): string {
+export function shareUrl(cfg: LumiCellsConfig, presetId: PresetId): string {
   const { origin, pathname, search } = window.location;
   return `${origin}${pathname}${search}${encodeShareHash(cfg, presetId)}`;
 }
@@ -75,7 +75,7 @@ export function decodeShareHash(hash: string): LoadedState | null {
 
 // ----------------------------------------------------------------- autosave
 
-export function saveAutosave(cfg: PixelLifeConfig, presetId: PresetId): void {
+export function saveAutosave(cfg: LumiCellsConfig, presetId: PresetId): void {
   try {
     localStorage.setItem(
       AUTOSAVE_KEY,

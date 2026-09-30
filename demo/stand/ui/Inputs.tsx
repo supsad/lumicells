@@ -35,11 +35,11 @@ export function Switch({ checked, onChange, disabled, id, className, ...aria }: 
       id={id}
       aria-checked={checked}
       disabled={disabled}
-      className={cx('plui-switch', checked && 'is-on', className)}
+      className={cx('lcui-switch', checked && 'is-on', className)}
       onClick={() => onChange(!checked)}
       {...aria}
     >
-      <span className="plui-switch__thumb" />
+      <span className="lcui-switch__thumb" />
     </button>
   );
 }
@@ -56,7 +56,7 @@ export function Toggle(props: ToggleProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-toggle', props.className)}
+      className={cx('lcui-toggle', props.className)}
       htmlFor={id}
       changed={def !== undefined && def !== checked}
       onReset={def !== undefined ? () => onChange(def) : undefined}
@@ -89,15 +89,15 @@ export function Select<T extends string = string>(props: SelectProps<T>) {
   return (
     <Field
       {...props}
-      className={cx('plui-select', props.className)}
+      className={cx('lcui-select', props.className)}
       htmlFor={id}
       changed={def !== undefined && def !== value}
       onReset={def !== undefined ? () => onChange(def) : undefined}
     >
-      <span className="plui-select__wrap">
+      <span className="lcui-select__wrap">
         <select
           id={id}
-          className="plui-select__input"
+          className="lcui-select__input"
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value as T)}
@@ -112,7 +112,7 @@ export function Select<T extends string = string>(props: SelectProps<T>) {
           })}
         </select>
         <svg
-          className="plui-select__chev"
+          className="lcui-select__chev"
           width="10"
           height="10"
           viewBox="0 0 16 16"
@@ -161,7 +161,7 @@ export function Segmented<T extends string = string>(props: SegmentedProps<T>) {
   return (
     <Field
       {...props}
-      className={cx('plui-segmented-field', props.className)}
+      className={cx('lcui-segmented-field', props.className)}
       labelId={`${uid}-l`}
       layout={layout}
       changed={def !== undefined && def !== value}
@@ -169,7 +169,7 @@ export function Segmented<T extends string = string>(props: SegmentedProps<T>) {
     >
       <div
         ref={group}
-        className="plui-segmented"
+        className="lcui-segmented"
         role="radiogroup"
         aria-labelledby={`${uid}-l`}
         aria-disabled={disabled || undefined}
@@ -186,7 +186,7 @@ export function Segmented<T extends string = string>(props: SegmentedProps<T>) {
               tabIndex={on ? 0 : -1}
               disabled={disabled || o.disabled}
               title={o.title}
-              className={cx('plui-segmented__opt', on && 'is-on')}
+              className={cx('lcui-segmented__opt', on && 'is-on')}
               onClick={() => onChange(o.value)}
               onKeyDown={(e) => {
                 const k = e.key;
@@ -256,13 +256,13 @@ export function AngleInput(props: AngleInputProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-angle', props.className)}
+      className={cx('lcui-angle', props.className)}
       labelId={`${uid}-l`}
       changed={def !== undefined && Math.abs(def - value) > 1e-9}
       onReset={def !== undefined ? () => onChange(def) : undefined}
     >
       <div
-        className="plui-angle__dial"
+        className="lcui-angle__dial"
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-labelledby={`${uid}-l`}
@@ -289,20 +289,20 @@ export function AngleInput(props: AngleInputProps) {
         }}
       >
         <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-          <circle className="plui-angle__ring" cx="16" cy="16" r="13" />
+          <circle className="lcui-angle__ring" cx="16" cy="16" r="13" />
           {[0, 90, 180, 270].map((a) => (
             <line
               key={a}
-              className="plui-angle__tick"
+              className="lcui-angle__tick"
               x1={16 + 10.5 * Math.cos((a * Math.PI) / 180)}
               y1={16 + 10.5 * Math.sin((a * Math.PI) / 180)}
               x2={16 + 13 * Math.cos((a * Math.PI) / 180)}
               y2={16 + 13 * Math.sin((a * Math.PI) / 180)}
             />
           ))}
-          <line className="plui-angle__needle" x1="16" y1="16" x2={nx} y2={ny} />
-          <circle className="plui-angle__dot" cx={nx} cy={ny} r="2.6" />
-          <circle className="plui-angle__hub" cx="16" cy="16" r="1.8" />
+          <line className="lcui-angle__needle" x1="16" y1="16" x2={nx} y2={ny} />
+          <circle className="lcui-angle__dot" cx={nx} cy={ny} r="2.6" />
+          <circle className="lcui-angle__hub" cx="16" cy="16" r="1.8" />
         </svg>
       </div>
       <NumberInput
@@ -405,15 +405,15 @@ export function Vec2Pad(props: Vec2PadProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-vec2', props.className)}
+      className={cx('lcui-vec2', props.className)}
       layout="stack"
       labelId={`${uid}-l`}
       changed={changed}
       onReset={def ? () => onChange([def[0], def[1]]) : undefined}
     >
-      <div className="plui-vec2__body">
+      <div className="lcui-vec2__body">
         <div
-          className="plui-vec2__pad"
+          className="lcui-vec2__pad"
           role="application"
           tabIndex={disabled ? -1 : 0}
           aria-roledescription="двумерная панель"
@@ -441,21 +441,21 @@ export function Vec2Pad(props: Vec2PadProps) {
           }}
           {...drag}
         >
-          <span className="plui-vec2__axis plui-vec2__axis--x" />
-          <span className="plui-vec2__axis plui-vec2__axis--y" />
+          <span className="lcui-vec2__axis lcui-vec2__axis--x" />
+          <span className="lcui-vec2__axis lcui-vec2__axis--y" />
           {def && (
             <span
-              className="plui-vec2__default"
+              className="lcui-vec2__default"
               style={{ left: `${dx * 100}%`, top: `${dy * 100}%` }}
             />
           )}
           <span
-            className="plui-vec2__handle"
+            className="lcui-vec2__handle"
             style={{ left: `${hx * 100}%`, top: `${hy * 100}%` }}
           />
         </div>
-        <div className="plui-vec2__inputs">
-          <div className="plui-vec2__axislabel">
+        <div className="lcui-vec2__inputs">
+          <div className="lcui-vec2__axislabel">
             <span aria-hidden="true">X</span>
             <NumberInput
               value={value[0]}
@@ -469,7 +469,7 @@ export function Vec2Pad(props: Vec2PadProps) {
               aria-label={`${typeof props.label === 'string' ? props.label : 'Вектор'}: X`}
             />
           </div>
-          <div className="plui-vec2__axislabel">
+          <div className="lcui-vec2__axislabel">
             <span aria-hidden="true">Y</span>
             <NumberInput
               value={value[1]}
@@ -483,7 +483,7 @@ export function Vec2Pad(props: Vec2PadProps) {
               aria-label={`${typeof props.label === 'string' ? props.label : 'Вектор'}: Y`}
             />
           </div>
-          <span className="plui-vec2__range">
+          <span className="lcui-vec2__range">
             {min}…{max}
           </span>
         </div>
@@ -523,15 +523,15 @@ export function ColorInput(props: ColorInputProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-color', props.className)}
+      className={cx('lcui-color', props.className)}
       htmlFor={`${uid}-h`}
       changed={def !== undefined && normalizeHex(def) !== value.toLowerCase()}
       onReset={def !== undefined ? () => onChange(normalizeHex(def)) : undefined}
     >
-      <label className="plui-swatch" style={{ background: valid }} title="Выбрать цвет">
+      <label className="lcui-swatch" style={{ background: valid }} title="Выбрать цвет">
         <input
           type="color"
-          className="plui-swatch__input"
+          className="lcui-swatch__input"
           value={valid}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value.toLowerCase())}
@@ -540,7 +540,7 @@ export function ColorInput(props: ColorInputProps) {
       </label>
       <input
         id={`${uid}-h`}
-        className={cx('plui-hex', invalid && 'is-invalid')}
+        className={cx('lcui-hex', invalid && 'is-invalid')}
         type="text"
         value={shown}
         disabled={disabled}
@@ -598,10 +598,10 @@ export function HexField({ value, onChange, disabled, inputRef, ...aria }: HexFi
   };
   return (
     <>
-      <label className="plui-swatch plui-swatch--sm" style={{ background: valid }}>
+      <label className="lcui-swatch lcui-swatch--sm" style={{ background: valid }}>
         <input
           type="color"
-          className="plui-swatch__input"
+          className="lcui-swatch__input"
           value={valid}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value.toLowerCase())}
@@ -610,7 +610,7 @@ export function HexField({ value, onChange, disabled, inputRef, ...aria }: HexFi
       </label>
       <input
         ref={inputRef}
-        className={cx('plui-hex plui-hex--sm', invalid && 'is-invalid')}
+        className={cx('lcui-hex lcui-hex--sm', invalid && 'is-invalid')}
         type="text"
         value={draft ?? value}
         disabled={disabled}

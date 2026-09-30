@@ -38,7 +38,7 @@ export function ToastList({
 }: ToastListProps) {
   return (
     <section
-      className={cx('plui-toasts', `plui-toasts--${placement}`, className)}
+      className={cx('lcui-toasts', `lcui-toasts--${placement}`, className)}
       aria-label="Уведомления"
       aria-live="polite"
     >
@@ -60,15 +60,15 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss(id: number)
 
   return (
     <div
-      className={cx('plui-toast', `plui-toast--${tone}`)}
+      className={cx('lcui-toast', `lcui-toast--${tone}`)}
       role={tone === 'error' ? 'alert' : 'status'}
       onPointerEnter={() => setPaused(true)}
       onPointerLeave={() => setPaused(false)}
     >
-      <Icon name={TONE_ICON[tone]} size={14} className="plui-toast__icon" />
-      <div className="plui-toast__body">
-        {item.title && <div className="plui-toast__title">{item.title}</div>}
-        <div className="plui-toast__msg">{item.message}</div>
+      <Icon name={TONE_ICON[tone]} size={14} className="lcui-toast__icon" />
+      <div className="lcui-toast__body">
+        {item.title && <div className="lcui-toast__title">{item.title}</div>}
+        <div className="lcui-toast__msg">{item.message}</div>
       </div>
       <IconButton
         icon="close"

@@ -100,17 +100,17 @@ export function DemoScene(props: DemoSceneProps) {
   }, []);
 
   return (
-    <div ref={rootRef} className={className ? `pl-scene ${className}` : 'pl-scene'}>
-      <div className="pl-scene-stage">
+    <div ref={rootRef} className={className ? `lc-scene ${className}` : 'lc-scene'}>
+      <div className="lc-scene-stage">
         <div
           ref={titleRef}
-          className="pl-scene-title"
+          className="lc-scene-title"
           style={{ left: `${TITLE_CENTER.fx * 100}%`, top: `${TITLE_CENTER.fy * 100}%` }}
         >
-          <span className="pl-scene-title-line">
-            Какие темы <span className="pl-scene-title-hl">тебе</span>
+          <span className="lc-scene-title-line">
+            Какие темы <span className="lc-scene-title-hl">тебе</span>
           </span>
-          <span className="pl-scene-title-line">интересны?</span>
+          <span className="lc-scene-title-line">интересны?</span>
         </div>
         {SCENE_ITEMS.map((item) => {
           const isSelected = selected.has(item.id);

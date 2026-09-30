@@ -171,7 +171,7 @@ export class LiftPass {
     });
     const vao = gl.createVertexArray();
     const buffer = gl.createBuffer();
-    if (!vao || !buffer) throw new Error('[pixel-life] cannot create lift buffers');
+    if (!vao || !buffer) throw new Error('[lumicells] cannot create lift buffers');
     this.vao = vao;
     this.buffer = buffer;
     gl.bindVertexArray(vao);

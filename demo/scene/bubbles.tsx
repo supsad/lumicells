@@ -148,7 +148,7 @@ function slotStyle(item: SceneItem): CSSProperties {
 
 function Slot({ item, children }: { item: SceneItem; children: ReactNode }) {
   return (
-    <div className="pl-scene-slot" style={slotStyle(item)}>
+    <div className="lc-scene-slot" style={slotStyle(item)}>
       {children}
     </div>
   );
@@ -163,15 +163,15 @@ export const TopicBubble = memo(function TopicBubble({ item, selected, ctx }: Bu
       <button
         ref={elRef}
         type="button"
-        className="pl-scene-bubble pl-scene-pill"
+        className="lc-scene-bubble lc-scene-pill"
         data-kind={item.kind}
         data-id={item.id}
         data-selected={selected ? '' : undefined}
         aria-pressed={toggles ? selected : undefined}
         {...handlers}
       >
-        <span className="pl-scene-label">{item.label}</span>
-        {item.caption ? <span className="pl-scene-caption">{item.caption}</span> : null}
+        <span className="lc-scene-label">{item.label}</span>
+        {item.caption ? <span className="lc-scene-caption">{item.caption}</span> : null}
       </button>
     </Slot>
   );
@@ -187,14 +187,14 @@ export const MusicCard = memo(function MusicCard({ item, selected, ctx }: Bubble
       <button
         ref={elRef}
         type="button"
-        className="pl-scene-bubble pl-scene-card"
+        className="lc-scene-bubble lc-scene-card"
         data-kind="card"
         data-id={item.id}
         aria-label={item.label}
         {...handlers}
       >
-        <Headphones className="pl-scene-card-art" />
-        <span className="pl-scene-card-tag">{item.label}</span>
+        <Headphones className="lc-scene-card-art" />
+        <span className="lc-scene-card-tag">{item.label}</span>
       </button>
     </Slot>
   );

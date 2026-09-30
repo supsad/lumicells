@@ -126,7 +126,7 @@ export function createParamLayout(root: GroupDef = schema): ParamLayout {
   const paths: ParamPath[] = [];
   for (const { path, field } of gpuFields) {
     if (field.kind === 'palette') {
-      throw new Error(`pixel-life: palette field '${path}' cannot be packed (use the LUT)`);
+      throw new Error(`lumicells: palette field '${path}' cannot be packed (use the LUT)`);
     }
     const size = slotSize(field);
     const [index, comp] = place(size);
@@ -144,7 +144,7 @@ export function createParamLayout(root: GroupDef = schema): ParamLayout {
 
   const vec4Count = Math.max(1, used.length);
   if (vec4Count > MAX_PARAM_VEC4) {
-    throw new Error(`pixel-life: ${vec4Count} param vec4s exceed the limit of ${MAX_PARAM_VEC4}`);
+    throw new Error(`lumicells: ${vec4Count} param vec4s exceed the limit of ${MAX_PARAM_VEC4}`);
   }
 
   const lines: string[] = [

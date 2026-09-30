@@ -3,15 +3,15 @@
  * the instance 'frame' event (no React state per frame); the numbers come from the 4 Hz stats.
  */
 
-import { usePixelLife, usePixelLifeStats } from 'pixel-life/react';
+import { useLumiCells, useLumiCellsStats } from 'lumicells/react';
 import { useEffect, useRef } from 'react';
 import { Grid, Icon, Readout, StatsGraph, type StatsGraphHandle } from './ui';
 
 const fmt = (v: number, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 
 export function StatsBlock({ open, onToggle }: { open: boolean; onToggle(open: boolean): void }) {
-  const instance = usePixelLife();
-  const stats = usePixelLifeStats();
+  const instance = useLumiCells();
+  const stats = useLumiCellsStats();
   const graph = useRef<StatsGraphHandle>(null);
 
   useEffect(() => {

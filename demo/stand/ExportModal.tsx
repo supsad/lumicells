@@ -1,7 +1,7 @@
 /** Export dialog: the config as JSON (full / diff), TypeScript, React or HTML, plus JSON Schema. */
 
 import {
-  type PixelLifeConfig,
+  type LumiCellsConfig,
   PRESETS,
   type PresetId,
   toConfigFile,
@@ -10,7 +10,7 @@ import {
   toJsonSnippet,
   toReactSnippet,
   toTsSnippet,
-} from 'pixel-life';
+} from 'lumicells';
 import { useMemo, useState } from 'react';
 import { Button, CodeBlock, copyText, Modal, Tabs } from './ui';
 
@@ -34,8 +34,8 @@ const SCOPES = [
 ] as const;
 
 /** Different names, so a full file never overwrites a diff file in the downloads folder. */
-const FULL_FILE_NAME = 'pixel-life.config.json';
-const DIFF_FILE_NAME = 'pixel-life.config.diff.json';
+const FULL_FILE_NAME = 'lumicells.config.json';
+const DIFF_FILE_NAME = 'lumicells.config.diff.json';
 
 const LANGUAGE: Record<Tab, string> = {
   'json-full': 'json',
@@ -60,7 +60,7 @@ export function downloadText(name: string, text: string, mime = 'application/jso
 interface ExportModalProps {
   open: boolean;
   onClose(): void;
-  cfg: PixelLifeConfig;
+  cfg: LumiCellsConfig;
   presetId: PresetId;
   notify(message: string, tone?: 'info' | 'success' | 'error'): void;
 }
@@ -121,7 +121,7 @@ export function ExportModal({ open, onClose, cfg, presetId, notify }: ExportModa
           <Button
             icon="download"
             onClick={() =>
-              downloadText('pixel-life.schema.json', `${JSON.stringify(toJsonSchema(), null, 2)}\n`)
+              downloadText('lumicells.schema.json', `${JSON.stringify(toJsonSchema(), null, 2)}\n`)
             }
             title="JSON Schema для подсказок в редакторе"
           >

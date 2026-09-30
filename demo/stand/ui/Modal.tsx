@@ -76,7 +76,7 @@ function ModalInner({
   return (
     <dialog
       ref={ref}
-      className={cx('plui-modal', `plui-modal--${size}`, className)}
+      className={cx('lcui-modal', `lcui-modal--${size}`, className)}
       aria-labelledby={`${id}-t`}
       aria-describedby={description ? `${id}-d` : undefined}
       onCancel={(e) => {
@@ -88,20 +88,20 @@ function ModalInner({
         if (dismissable && e.target === e.currentTarget) close.current();
       }}
     >
-      <div className="plui-modal__box">
-        <header className="plui-modal__head">
-          <h2 id={`${id}-t`} className="plui-modal__title">
+      <div className="lcui-modal__box">
+        <header className="lcui-modal__head">
+          <h2 id={`${id}-t`} className="lcui-modal__title">
             {title}
           </h2>
           <IconButton icon="close" label="Закрыть" size="sm" onClick={() => close.current()} />
         </header>
         {description && (
-          <p id={`${id}-d`} className="plui-modal__desc">
+          <p id={`${id}-d`} className="lcui-modal__desc">
             {description}
           </p>
         )}
-        <div className="plui-modal__body">{children}</div>
-        {footer && <footer className="plui-modal__foot">{footer}</footer>}
+        <div className="lcui-modal__body">{children}</div>
+        {footer && <footer className="lcui-modal__foot">{footer}</footer>}
       </div>
     </dialog>
   );

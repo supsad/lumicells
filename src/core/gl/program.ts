@@ -43,14 +43,14 @@ export function compileShader(
   label: string,
 ): WebGLShader {
   const shader = gl.createShader(type);
-  if (!shader) throw new ShaderError(`[pixel-life] cannot create shader "${label}"`, '');
+  if (!shader) throw new ShaderError(`[lumicells] cannot create shader "${label}"`, '');
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS) && !gl.isContextLost()) {
     const log = gl.getShaderInfoLog(shader) ?? '';
     gl.deleteShader(shader);
     throw new ShaderError(
-      `[pixel-life] shader "${label}" failed to compile:\n${log}`,
+      `[lumicells] shader "${label}" failed to compile:\n${log}`,
       log,
       numbered(source),
     );
@@ -101,7 +101,7 @@ export function createProgram(
   const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSource, `${label}.vert`);
   const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource, `${label}.frag`);
   const handle = gl.createProgram();
-  if (!handle) throw new ShaderError(`[pixel-life] cannot create program "${label}"`, '');
+  if (!handle) throw new ShaderError(`[lumicells] cannot create program "${label}"`, '');
   gl.attachShader(handle, vs);
   gl.attachShader(handle, fs);
   gl.linkProgram(handle);
@@ -111,7 +111,7 @@ export function createProgram(
   if (!gl.getProgramParameter(handle, gl.LINK_STATUS) && !gl.isContextLost()) {
     const log = gl.getProgramInfoLog(handle) ?? '';
     gl.deleteProgram(handle);
-    throw new ShaderError(`[pixel-life] program "${label}" failed to link:\n${log}`, log);
+    throw new ShaderError(`[lumicells] program "${label}" failed to link:\n${log}`, log);
   }
   return wrapProgram(gl, handle, label);
 }
@@ -141,7 +141,7 @@ export function createProgramAsync(
   const fs = gl.createShader(gl.FRAGMENT_SHADER);
   const handle = gl.createProgram();
   if (!vs || !fs || !handle) {
-    throw new ShaderError(`[pixel-life] cannot create program "${label}"`, '');
+    throw new ShaderError(`[lumicells] cannot create program "${label}"`, '');
   }
   gl.shaderSource(vs, vertexSource);
   gl.shaderSource(fs, fragmentSource);
@@ -163,7 +163,7 @@ export function createProgramAsync(
   };
 
   const fail = (): never => {
-    let message = `[pixel-life] program "${label}" failed to link`;
+    let message = `[lumicells] program "${label}" failed to link`;
     let log = gl.getProgramInfoLog(handle) ?? '';
     let source: string | undefined;
     for (const [shader, src, kind] of [
@@ -172,7 +172,7 @@ export function createProgramAsync(
     ] as const) {
       if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
         log = gl.getShaderInfoLog(shader) ?? '';
-        message = `[pixel-life] shader "${label}.${kind}" failed to compile:\n${log}\n${excerpt(src, log)}`;
+        message = `[lumicells] shader "${label}.${kind}" failed to compile:\n${log}\n${excerpt(src, log)}`;
         source = numbered(src);
         break;
       }

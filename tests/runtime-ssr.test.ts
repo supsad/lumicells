@@ -5,7 +5,7 @@ describe('SSR import', () => {
   it('imports without a DOM and reports WebGL as unsupported', async () => {
     expect(typeof (globalThis as { window?: unknown }).window).toBe('undefined');
     const core = await import('../src/core/index');
-    expect(core.PixelLife.isSupported()).toBe(false);
+    expect(core.LumiCells.isSupported()).toBe(false);
     expect(typeof core.onBeforeFrame).toBe('function');
     expect(core.getDefaults().grid.count).toBe(31);
     // Pure controller modules load too.

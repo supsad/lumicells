@@ -7,11 +7,11 @@
 import {
   getPath,
   getPresetConfig,
+  type LumiCellsConfig,
   normalizeConfig,
-  type PixelLifeConfig,
   type PresetId,
   setPath,
-} from 'pixel-life';
+} from 'lumicells';
 import { createContext, useContext, useSyncExternalStore } from 'react';
 
 /** Tween used while a value is being dragged: feels immediate, still hides steps. */
@@ -21,10 +21,10 @@ const COALESCE_MS = 400;
 const HISTORY_LIMIT = 100;
 
 export interface StandSnapshot {
-  cfg: PixelLifeConfig;
+  cfg: LumiCellsConfig;
   presetId: PresetId;
   /** Resolved config of `presetId`; stable identity, the "default" of every control. */
-  presetCfg: PixelLifeConfig;
+  presetCfg: LumiCellsConfig;
   /** Tween duration (ms) to use for the change that produced this snapshot. */
   transition: number;
   canUndo: boolean;
@@ -34,7 +34,7 @@ export interface StandSnapshot {
 }
 
 interface Entry {
-  cfg: PixelLifeConfig;
+  cfg: LumiCellsConfig;
   presetId: PresetId;
 }
 
@@ -47,7 +47,7 @@ export interface SetOptions {
  * Brings a restored or hot-reloaded config up to the current schema: fields added since it was
  * saved get their defaults (and stale values are clamped), so panel rows never see `undefined`.
  */
-function fresh(cfg: PixelLifeConfig): PixelLifeConfig {
+function fresh(cfg: LumiCellsConfig): LumiCellsConfig {
   return normalizeConfig(cfg).config;
 }
 
@@ -59,7 +59,7 @@ export class StandStore {
   /** Open coalescing group: consecutive edits of one path merge into one history entry. */
   private group: { path: string; timer: number } | null = null;
 
-  constructor(cfg: PixelLifeConfig, presetId: PresetId) {
+  constructor(cfg: LumiCellsConfig, presetId: PresetId) {
     cfg = fresh(cfg);
     this.snap = {
       cfg,
@@ -81,7 +81,7 @@ export class StandStore {
 
   getSnapshot = (): StandSnapshot => this.snap;
 
-  get cfg(): PixelLifeConfig {
+  get cfg(): LumiCellsConfig {
     return this.snap.cfg;
   }
 
@@ -116,7 +116,7 @@ export class StandStore {
 
   /** Replaces the whole config (preset switch, import, reset, load): always a new entry. */
   replace(
-    cfg: PixelLifeConfig,
+    cfg: LumiCellsConfig,
     presetId: PresetId = this.snap.presetId,
     transition?: number,
   ): void {
@@ -174,7 +174,7 @@ export class StandStore {
     this.future.length = 0;
   }
 
-  private publish(cfg: PixelLifeConfig, presetId: PresetId, transition: number): void {
+  private publish(cfg: LumiCellsConfig, presetId: PresetId, transition: number): void {
     const presetCfg =
       presetId === this.snap.presetId ? this.snap.presetCfg : getPresetConfig(presetId);
     this.snap = {

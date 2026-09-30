@@ -1,5 +1,5 @@
 /**
- * Controller: all per-frame state of one PixelLife instance, in pure TypeScript (no DOM, no GL).
+ * Controller: all per-frame state of one LumiCells instance, in pure TypeScript (no DOM, no GL).
  *
  * It owns the config layers (base -> tweened -> modulated), the palette LUT, the phase clock,
  * influences, pulses, lifts, grid geometry and the adaptive quality state, and turns them into
@@ -11,12 +11,12 @@ import {
   diffConfigs,
   getField,
   getPath,
+  type LumiCellsConfig,
+  type LumiCellsConfigInput,
   type ModulatablePath,
   normalizeConfig,
   normalizePatch,
   type ParamPath,
-  type PixelLifeConfig,
-  type PixelLifeConfigInput,
 } from '../../schema';
 import {
   FRAME_FLOATS,
@@ -58,7 +58,7 @@ import { type PulseInit, PulseList } from './pulses';
 import { ParamStore, ScalarTween } from './tween';
 
 export interface ControllerOptions {
-  config?: PixelLifeConfigInput;
+  config?: LumiCellsConfigInput;
   /** Deterministic randomness for tests. */
   random?: () => number;
   /** Reuse a layout (it is pure and identical for every instance). */
@@ -138,7 +138,7 @@ export class Controller {
   geometryChanged = true;
   destroyed = false;
 
-  private config: PixelLifeConfig;
+  private config: LumiCellsConfig;
   private readonly random: () => number;
   private readonly onWarn: ((code: string, message: string) => void) | undefined;
   private readonly sizingMix: ScalarTween;
@@ -213,7 +213,7 @@ export class Controller {
     this.influences.onOverflow = (alive) =>
       this.warn(
         'influence-overflow',
-        `[pixel-life] ${alive} influences are alive but only 64 fit on the GPU; lower-priority ones fade out.`,
+        `[lumicells] ${alive} influences are alive but only 64 fit on the GPU; lower-priority ones fade out.`,
       );
     this.infCtx = {
       geo: this.geo,
@@ -259,19 +259,19 @@ export class Controller {
   // -------------------------------------------------------------------------------------------
   // Config
 
-  getConfig(): Readonly<PixelLifeConfig> {
+  getConfig(): Readonly<LumiCellsConfig> {
     return this.config;
   }
 
   /** Merges a partial config; returns the changed leaf paths (schema order). */
-  setConfig(patch: PixelLifeConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
+  setConfig(patch: LumiCellsConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
     if (this.destroyed) return [];
     const { patch: clean } = normalizePatch(patch);
     return this.commit(normalizeConfig(deepMerge(this.config, clean)).config, opts);
   }
 
   /** Replaces the whole config (missing keys fall back to defaults / `extends`). */
-  replaceConfig(input: PixelLifeConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
+  replaceConfig(input: LumiCellsConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
     if (this.destroyed) return [];
     return this.commit(normalizeConfig(input).config, opts);
   }
@@ -687,7 +687,7 @@ export class Controller {
     this.onWarn?.(code, message);
   }
 
-  private commit(next: PixelLifeConfig, opts: ConfigChangeOptions): ParamPath[] {
+  private commit(next: LumiCellsConfig, opts: ConfigChangeOptions): ParamPath[] {
     const changed = diffConfigs(this.config, next);
     if (changed.length === 0) return changed;
     this.config = next;

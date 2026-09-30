@@ -1,5 +1,5 @@
 /**
- * Deterministic time and randomness for the tuning page. Imported before 'pixel-life' so the
+ * Deterministic time and randomness for the tuning page. Imported before 'lumicells' so the
  * shared ticker sees the patched requestAnimationFrame from its first frame.
  *
  * - `?seed=N`  replaces Math.random with a seeded PRNG (the controller seeds its own generator

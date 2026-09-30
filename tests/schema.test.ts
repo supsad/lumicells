@@ -446,19 +446,19 @@ describe('export', () => {
     const ts = toTsSnippet(file);
     expect(
       ts.startsWith(
-        "import type { PixelLifeConfigInput } from 'pixel-life';\n\nexport const pixelLifeConfig = {",
+        "import type { LumiCellsConfigInput } from 'lumicells';\n\nexport const lumiCellsConfig = {",
       ),
     ).toBe(true);
-    expect(ts).toContain('} satisfies PixelLifeConfigInput;');
+    expect(ts).toContain('} satisfies LumiCellsConfigInput;');
     expect(ts).toContain("palette: ['#ff0000', '#0000ff'],");
     expect(ts).not.toContain('$schema');
     const react = toReactSnippet(file);
-    expect(react).toContain("import { PixelLife } from 'pixel-life/react';");
-    expect(react).toContain('<PixelLife config={pixelLifeConfig} />');
+    expect(react).toContain("import { LumiCells } from 'lumicells/react';");
+    expect(react).toContain('<LumiCells config={lumiCellsConfig} />');
     const html = toHtmlSnippet(file);
     expect(
       html.startsWith(
-        '<pixel-life id="bg"></pixel-life>\n<script type="module">\n  import \'pixel-life/element/define\';\n  document.getElementById(\'bg\').config = {',
+        '<lumi-cells id="bg"></lumi-cells>\n<script type="module">\n  import \'lumicells/element/define\';\n  document.getElementById(\'bg\').config = {',
       ),
     ).toBe(true);
     expect(html.trimEnd().endsWith('};\n</script>')).toBe(true);

@@ -29,10 +29,10 @@ export function Button({
     <button
       type={type}
       className={cx(
-        'plui-btn',
-        `plui-btn--${variant}`,
-        size === 'sm' && 'plui-btn--sm',
-        block && 'plui-btn--block',
+        'lcui-btn',
+        `lcui-btn--${variant}`,
+        size === 'sm' && 'lcui-btn--sm',
+        block && 'lcui-btn--block',
         active && 'is-active',
         className,
       )}
@@ -40,7 +40,7 @@ export function Button({
       {...rest}
     >
       {icon && <Icon name={icon} size={size === 'sm' ? 12 : 14} />}
-      {children != null && <span className="plui-btn__text">{children}</span>}
+      {children != null && <span className="lcui-btn__text">{children}</span>}
     </button>
   );
 }
@@ -69,9 +69,9 @@ export function IconButton({
     <button
       type={type}
       className={cx(
-        'plui-iconbtn',
-        `plui-iconbtn--${size}`,
-        `plui-iconbtn--${variant}`,
+        'lcui-iconbtn',
+        `lcui-iconbtn--${size}`,
+        `lcui-iconbtn--${variant}`,
         active && 'is-active',
         className,
       )}
@@ -97,9 +97,9 @@ export function Badge({ tone = 'neutral', outline, className, children, ...rest 
   return (
     <span
       className={cx(
-        'plui-badge',
-        `plui-badge--${tone}`,
-        outline && 'plui-badge--outline',
+        'lcui-badge',
+        `lcui-badge--${tone}`,
+        outline && 'lcui-badge--outline',
         className,
       )}
       {...rest}
@@ -121,7 +121,7 @@ export function Toolbar({ className, children, onKeyDown, ...rest }: ToolbarProp
     <div
       ref={ref}
       role="toolbar"
-      className={cx('plui-toolbar', className)}
+      className={cx('lcui-toolbar', className)}
       onKeyDown={(e) => {
         onKeyDown?.(e);
         if (e.defaultPrevented) return;
@@ -151,9 +151,9 @@ export function Toolbar({ className, children, onKeyDown, ...rest }: ToolbarProp
 }
 
 export function ToolbarSeparator() {
-  return <hr className="plui-toolbar__sep" aria-orientation="vertical" />;
+  return <hr className="lcui-toolbar__sep" aria-orientation="vertical" />;
 }
 
 export function ToolbarSpacer() {
-  return <span className="plui-toolbar__spacer" />;
+  return <span className="lcui-toolbar__spacer" />;
 }

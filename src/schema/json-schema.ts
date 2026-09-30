@@ -90,9 +90,9 @@ export function toJsonSchema(): Json {
   };
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    $id: 'pixel-life.schema.json',
-    title: 'Pixel Life config',
-    description: 'Конфигурация живого пиксельного фона pixel-life.',
+    $id: 'lumicells.schema.json',
+    title: 'LumiCells config',
+    description: 'Конфигурация живого пиксельного фона LumiCells.',
     type: 'object',
     additionalProperties: false,
     properties,

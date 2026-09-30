@@ -1,11 +1,11 @@
 /**
- * The stage: a frame of the chosen size holding <PixelLife> and, above it, the demo scene.
+ * The stage: a frame of the chosen size holding <LumiCells> and, above it, the demo scene.
  * The frame keeps the same React element across size modes, so switching sizes only resizes the
  * host (the instance is never re-created).
  */
 
-import type { PixelLifeConfig, PixelLife as PixelLifeInstance } from 'pixel-life';
-import { PixelLife } from 'pixel-life/react';
+import type { LumiCellsConfig, LumiCells as LumiCellsInstance } from 'lumicells';
+import { LumiCells } from 'lumicells/react';
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
 import { frameSize, MAX_STAGE, MIN_STAGE, type Prefs } from './prefs';
 import { type SceneBinder, SceneLayer } from './scene-binding';
@@ -13,11 +13,11 @@ import { useSelector, useStore } from './store';
 import { Button, IconButton } from './ui';
 
 interface StageProps {
-  cfg: PixelLifeConfig;
+  cfg: LumiCellsConfig;
   transition: number;
   prefs: Prefs;
   binder: SceneBinder;
-  onInstance(instance: PixelLifeInstance | null): void;
+  onInstance(instance: LumiCellsInstance | null): void;
   onResize(w: number, h: number): void;
   onError(error: Error): void;
 }
@@ -68,7 +68,7 @@ export function Stage({
           data-fullscreen={size ? undefined : ''}
           style={size ? { width: size.w, height: size.h } : undefined}
         >
-          <PixelLife
+          <LumiCells
             ref={onInstance}
             className="stand-host"
             config={cfg}
@@ -76,7 +76,7 @@ export function Stage({
             onError={onError}
           >
             {prefs.scene && <SceneLayer binder={binder} />}
-          </PixelLife>
+          </LumiCells>
           {size && (
             <>
               <span className="stand-frame__size" aria-hidden="true">

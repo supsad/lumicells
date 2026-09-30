@@ -1,6 +1,6 @@
-/** Stand-only preferences (not part of the pixel-life config): stage size, toggles, panel state. */
+/** Stand-only preferences (not part of the lumicells config): stage size, toggles, panel state. */
 
-import type { DebugView } from 'pixel-life';
+import type { DebugView } from 'lumicells';
 
 export type SizeMode = 'full' | 'card' | 'banner' | 'phone' | 'custom';
 

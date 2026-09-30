@@ -1589,7 +1589,7 @@ const transition = num({
 
 /** Root of the schema tree. */
 export const schema = group(
-  { label: 'Pixel Life' },
+  { label: 'LumiCells' },
   {
     grid,
     scene,
@@ -1624,12 +1624,12 @@ export const MODE_IDS = [
 export type ModeId = (typeof MODE_IDS)[number];
 
 /** The complete, normalized config. */
-export type PixelLifeConfig = { version: typeof CONFIG_VERSION } & InferConfig<SchemaTree>;
+export type LumiCellsConfig = { version: typeof CONFIG_VERSION } & InferConfig<SchemaTree>;
 
 type ConfigBody = InferConfig<SchemaTree>;
 
 /** What users write: any subset of the config, optionally based on a preset. */
-export type PixelLifeConfigInput = DeepPartial<ConfigBody> & {
+export type LumiCellsConfigInput = DeepPartial<ConfigBody> & {
   $schema?: string;
   version?: number;
   extends?: PresetId;

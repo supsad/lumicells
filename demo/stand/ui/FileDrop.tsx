@@ -67,7 +67,7 @@ export function FileDrop({
 
   return (
     <label
-      className={cx('plui-drop', over && 'is-over', disabled && 'is-disabled', className)}
+      className={cx('lcui-drop', over && 'is-over', disabled && 'is-disabled', className)}
       onDragEnter={(e) => {
         e.preventDefault();
         depth.current++;
@@ -86,7 +86,7 @@ export function FileDrop({
       }}
     >
       <Icon name="upload" size={18} />
-      <span className="plui-drop__text">
+      <span className="lcui-drop__text">
         {children ?? (
           <>
             Перетащите <b>.json</b> сюда или нажмите, чтобы выбрать
@@ -94,7 +94,7 @@ export function FileDrop({
         )}
       </span>
       <input
-        className="plui-drop__input"
+        className="lcui-drop__input"
         type="file"
         accept={accept}
         disabled={disabled}

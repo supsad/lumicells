@@ -4,8 +4,8 @@ import { defineConfig } from 'vite';
 
 const root = dirname(fileURLToPath(import.meta.url));
 
-// Self-contained <script src> bundle: registers <pixel-life> and exposes the global `PixelLife`
-// (element class, the imperative PixelLife class, presets). Runs after vite.lib.config.ts,
+// Self-contained <script src> bundle: registers <lumi-cells> and exposes the global `LumiCells`
+// (element class, the imperative LumiCells class, presets). Runs after vite.lib.config.ts,
 // which owns (and empties) the output directory, so this config must not empty it again.
 export default defineConfig({
   publicDir: false,
@@ -17,9 +17,9 @@ export default defineConfig({
     minify: true,
     lib: {
       entry: resolve(root, 'src/element/iife.ts'),
-      name: 'PixelLife',
+      name: 'LumiCells',
       formats: ['iife'],
-      fileName: () => 'pixel-life-element.iife.js',
+      fileName: () => 'lumicells-element.iife.js',
     },
   },
 });

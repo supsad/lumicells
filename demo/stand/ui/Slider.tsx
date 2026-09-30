@@ -141,7 +141,7 @@ export function Slider(props: SliderProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-slider', props.className)}
+      className={cx('lcui-slider', props.className)}
       htmlFor={`${uid}-n`}
       labelId={`${uid}-l`}
       changed={num.changed}
@@ -153,7 +153,7 @@ export function Slider(props: SliderProps) {
       }
     >
       <div
-        className="plui-slider__track"
+        className="lcui-slider__track"
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-labelledby={`${uid}-l`}
@@ -164,30 +164,30 @@ export function Slider(props: SliderProps) {
         aria-disabled={disabled || undefined}
         onKeyDown={(e) => !disabled && num.onKey(e, value, onChange)}
         {...drag}
-        style={{ ['--plui-p' as string]: norm }}
+        style={{ ['--lcui-p' as string]: norm }}
       >
-        <div className="plui-slider__rail" />
+        <div className="lcui-slider__rail" />
         {modulated && (
           <div
-            className="plui-slider__mod"
+            className="lcui-slider__mod"
             style={{
               left: `${Math.min(norm, effNorm) * 100}%`,
               width: `${Math.abs(effNorm - norm) * 100}%`,
             }}
           />
         )}
-        <div className="plui-slider__fill" />
+        <div className="lcui-slider__fill" />
         {def !== undefined && (
-          <div className="plui-slider__default" style={{ left: `${num.toNorm(def) * 100}%` }} />
+          <div className="lcui-slider__default" style={{ left: `${num.toNorm(def) * 100}%` }} />
         )}
         {modulated && (
           <div
-            className="plui-slider__eff"
+            className="lcui-slider__eff"
             style={{ left: `${effNorm * 100}%` }}
             title={`Эффективное значение: ${effective?.toFixed(num.decimals)}`}
           />
         )}
-        <div className="plui-slider__thumb" />
+        <div className="lcui-slider__thumb" />
       </div>
       <NumberInput
         id={`${uid}-n`}
@@ -297,7 +297,7 @@ export function Knob(props: KnobProps) {
     <>
       <div
         ref={ref}
-        className="plui-knob__dial"
+        className="lcui-knob__dial"
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-labelledby={`${uid}-l`}
@@ -314,11 +314,11 @@ export function Knob(props: KnobProps) {
         {...drag}
       >
         <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-          <path className="plui-knob__track" d={arc(13, -SWEEP, SWEEP)} />
-          {norm > 0.002 && <path className="plui-knob__value" d={arc(13, -SWEEP, angle(norm))} />}
+          <path className="lcui-knob__track" d={arc(13, -SWEEP, SWEEP)} />
+          {norm > 0.002 && <path className="lcui-knob__value" d={arc(13, -SWEEP, angle(norm))} />}
           {modulated && (
             <path
-              className="plui-knob__mod"
+              className="lcui-knob__mod"
               d={arc(
                 13,
                 Math.min(angle(norm), angle(effNorm)),
@@ -326,8 +326,8 @@ export function Knob(props: KnobProps) {
               )}
             />
           )}
-          <circle className="plui-knob__cap" cx="16" cy="16" r="9" />
-          <line className="plui-knob__needle" x1={ix} y1={iy} x2={tx} y2={ty} />
+          <circle className="lcui-knob__cap" cx="16" cy="16" r="9" />
+          <line className="lcui-knob__needle" x1={ix} y1={iy} x2={tx} y2={ty} />
         </svg>
       </div>
       <NumberInput
@@ -347,7 +347,7 @@ export function Knob(props: KnobProps) {
   return (
     <Field
       {...props}
-      className={cx('plui-knob', `plui-knob--${layout}`, props.className)}
+      className={cx('lcui-knob', `lcui-knob--${layout}`, props.className)}
       labelId={`${uid}-l`}
       layout={layout === 'stack' ? 'stack' : 'row'}
       changed={num.changed}

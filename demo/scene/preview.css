@@ -1,6 +1,6 @@
 /* Layout of the scene preview page only. Not part of the scene itself. */
 
-.pl-preview {
+.lc-preview {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -8,14 +8,14 @@
   padding: 16px;
 }
 
-.pl-preview-bar {
+.lc-preview-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
 
-.pl-preview-bar button {
+.lc-preview-bar button {
   font: inherit;
   color: #e8ebff;
   background: #1c2038;
@@ -25,12 +25,12 @@
   cursor: pointer;
 }
 
-.pl-preview-count {
+.lc-preview-count {
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
 
-.pl-preview-frame {
+.lc-preview-frame {
   position: relative;
   width: 690px;
   height: 690px;
@@ -40,7 +40,7 @@
   background: #000032;
 }
 
-.pl-preview-frame.is-full {
+.lc-preview-frame.is-full {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -49,7 +49,7 @@
   max-width: none;
 }
 
-.pl-preview-exit {
+.lc-preview-exit {
   position: absolute;
   right: 12px;
   top: 12px;
@@ -64,7 +64,7 @@
   cursor: pointer;
 }
 
-.pl-preview-log {
+.lc-preview-log {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -80,7 +80,7 @@
 
 /* ---- static approximation of the reference background (a centered square, like the scene stage) ---- */
 
-.pl-preview-bg {
+.lc-preview-bg {
   position: absolute;
   inset: 0;
   margin: auto;
@@ -88,7 +88,7 @@
   height: 100cqmin;
 }
 
-.pl-preview-art {
+.lc-preview-art {
   position: absolute;
   inset: 0;
   background:
@@ -111,7 +111,7 @@
 }
 
 /* 31 x 31 cell grid: the gap is 27% of the pitch */
-.pl-preview-grid {
+.lc-preview-grid {
   position: absolute;
   inset: 0;
   background-image:

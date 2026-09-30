@@ -1,14 +1,14 @@
-import { getPath, getPresetConfig, type PixelLifeConfig } from 'pixel-life';
+import { getPath, getPresetConfig, type LumiCellsConfig } from 'lumicells';
 import { describe, expect, it } from 'vitest';
 import { StandStore } from '../demo/stand/store';
 
 /** A config as an older session would have stored it: one group lacks a field. */
-function stale(): PixelLifeConfig {
+function stale(): LumiCellsConfig {
   const cfg = structuredClone(getPresetConfig('reference')) as unknown as Record<string, unknown>;
   const modes = cfg.modes as Record<string, Record<string, unknown>>;
   delete modes.sphere?.radius;
   delete cfg.grid;
-  return cfg as unknown as PixelLifeConfig;
+  return cfg as unknown as LumiCellsConfig;
 }
 
 describe('StandStore normalization', () => {
@@ -29,7 +29,7 @@ describe('StandStore normalization', () => {
   it('fills missing fields when undo restores an old entry', () => {
     const store = new StandStore(stale(), 'reference');
     // Simulate a stale history entry (recorded before the schema gained the field).
-    (store as unknown as { past: { cfg: PixelLifeConfig; presetId: string }[] }).past.push({
+    (store as unknown as { past: { cfg: LumiCellsConfig; presetId: string }[] }).past.push({
       cfg: stale(),
       presetId: 'reference',
     });

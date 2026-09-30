@@ -1,5 +1,5 @@
 /**
- * Dev-only switches for the tuning page (imported before 'pixel-life' creates anything).
+ * Dev-only switches for the tuning page (imported before 'lumicells' creates anything).
  *
  * - `?ldr=1`        hides EXT_color_buffer_float / EXT_color_buffer_half_float, so the engine
  *                   takes its RGBA8 (sqrt-encoded) fallback targets, like a device without float

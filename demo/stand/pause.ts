@@ -14,14 +14,14 @@
  * with a "мод." badge). Disposing the modulators on resume returns everything to the config.
  */
 
-import type { ModulatablePath, PixelLife } from 'pixel-life';
+import type { LumiCells, ModulatablePath } from 'lumicells';
 import { useEffect } from 'react';
 import type { ModulationTracker } from './modulation';
 
 export const PAUSE_PATHS: readonly ModulatablePath[] = ['animation.speed', 'lift.amount'];
 
 export function usePauseModulators(
-  instance: PixelLife | null,
+  instance: LumiCells | null,
   tracker: ModulationTracker,
   paused: boolean,
 ): void {

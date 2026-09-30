@@ -12,19 +12,19 @@ import {
 } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PixelLife as Core } from '../src/core/pixel-life';
+import { LumiCells as Core } from '../src/core/lumi-cells';
 import {
-  PixelLife,
+  LumiCells,
   useInfluence,
+  useLumiCells,
+  useLumiCellsEvent,
+  useLumiCellsStats,
   useModulator,
-  usePixelLife,
-  usePixelLifeEvent,
-  usePixelLifeStats,
   usePulse,
 } from '../src/react/index';
 
 // Recording double for the facade (jsdom has no WebGL2); covers the wrapper's own logic.
-vi.mock('../src/core/pixel-life', () => {
+vi.mock('../src/core/lumi-cells', () => {
   class Handle {
     disposed = false;
     updates: unknown[] = [];
@@ -42,10 +42,10 @@ vi.mock('../src/core/pixel-life', () => {
       this.dispose();
     }
   }
-  class FakePixelLife {
-    static instances: FakePixelLife[] = [];
+  class FakeLumiCells {
+    static instances: FakeLumiCells[] = [];
     static supported = true;
-    readonly supported = FakePixelLife.supported;
+    readonly supported = FakeLumiCells.supported;
     destroyed = false;
     running = false;
     replaced: Array<{ config: any; opts: any }> = [];
@@ -57,7 +57,7 @@ vi.mock('../src/core/pixel-life', () => {
       readonly host: HTMLElement,
       readonly options: any,
     ) {
-      FakePixelLife.instances.push(this);
+      FakeLumiCells.instances.push(this);
     }
     replaceConfig(config: any, opts: any) {
       this.replaced.push({ config, opts });
@@ -106,7 +106,7 @@ vi.mock('../src/core/pixel-life', () => {
       this.pulses.push(o);
     }
   }
-  return { PixelLife: FakePixelLife };
+  return { LumiCells: FakeLumiCells };
 });
 
 interface Fake {
@@ -144,9 +144,9 @@ afterEach(() => {
 
 const render = (node: ReactNode) => act(() => root.render(node));
 
-describe('<PixelLife>', () => {
+describe('<LumiCells>', () => {
   it('creates one instance on mount, starts it, and destroys it on unmount', () => {
-    render(createElement(PixelLife, { preset: 'orb' }));
+    render(createElement(LumiCells, { preset: 'orb' }));
     const inst = live()[0] as Fake;
     expect(FakeClass.instances).toHaveLength(1);
     expect(inst.host).toBe(container.firstElementChild);
@@ -159,7 +159,7 @@ describe('<PixelLife>', () => {
   });
 
   it('is StrictMode-safe: the discarded instance is destroyed, exactly one stays live', () => {
-    render(createElement(StrictMode, null, createElement(PixelLife, { preset: 'orb' })));
+    render(createElement(StrictMode, null, createElement(LumiCells, { preset: 'orb' })));
     expect(FakeClass.instances.length).toBeGreaterThanOrEqual(2);
     expect(live()).toHaveLength(1);
     expect(live()[0]?.running).toBe(true);
@@ -170,7 +170,7 @@ describe('<PixelLife>', () => {
 
   it('replaces the config only when the normalized content changes', () => {
     const view = (config: object, extra: object = {}) =>
-      createElement(PixelLife, { config, ...extra });
+      createElement(LumiCells, { config, ...extra });
     render(view({ animation: { speed: 2 } }));
     const inst = live()[0] as Fake;
     expect(inst.replaced).toHaveLength(0);
@@ -188,7 +188,7 @@ describe('<PixelLife>', () => {
 
   it('merges defaults < preset < config and maps the shortcut props', () => {
     render(
-      createElement(PixelLife, {
+      createElement(LumiCells, {
         preset: 'orb',
         config: { modes: { sphere: { hole: 0.5 } } },
         interactive: true,
@@ -202,23 +202,23 @@ describe('<PixelLife>', () => {
     expect(cfg.interaction.click).toBe(true);
     expect(cfg.render.overflow).toBe(64);
 
-    render(createElement(PixelLife, { overflow: 12 }));
+    render(createElement(LumiCells, { overflow: 12 }));
     expect(live()[0]?.replaced.at(-1)?.config.render.overflow).toBe(12);
   });
 
   it('follows the paused prop', () => {
-    render(createElement(PixelLife, { paused: true }));
+    render(createElement(LumiCells, { paused: true }));
     const inst = live()[0] as Fake;
     expect(inst.running).toBe(false);
-    render(createElement(PixelLife, { paused: false }));
+    render(createElement(LumiCells, { paused: false }));
     expect(inst.running).toBe(true);
-    render(createElement(PixelLife, { paused: true }));
+    render(createElement(LumiCells, { paused: true }));
     expect(inst.running).toBe(false);
   });
 
   it('exposes the instance through the ref prop (null when unmounted)', () => {
     const ref: { current: unknown } = { current: undefined };
-    render(createElement(PixelLife, { ref: ref as RefObject<Core> }));
+    render(createElement(LumiCells, { ref: ref as RefObject<Core> }));
     expect(ref.current).toBe(live()[0]);
     act(() => root.unmount());
     expect(ref.current).toBeNull();
@@ -226,9 +226,9 @@ describe('<PixelLife>', () => {
   });
 
   it('shows the poster until ready, renders children above it and drops the poster on ready', () => {
-    render(createElement(PixelLife, null, createElement('span', { id: 'kid' }, 'hi')));
+    render(createElement(LumiCells, null, createElement('span', { id: 'kid' }, 'hi')));
     const host = container.firstElementChild as HTMLElement;
-    expect(host.querySelector('[data-pixel-life-poster]')).not.toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).not.toBeNull();
     const kid = host.querySelector('#kid') as HTMLElement;
     const wrapper = kid.parentElement as HTMLElement;
     expect(wrapper.style.zIndex).toBe('1');
@@ -236,15 +236,15 @@ describe('<PixelLife>', () => {
     expect(host.style.position).toBe('relative');
 
     act(() => live()[0]?.emit('ready'));
-    expect(host.querySelector('[data-pixel-life-poster]')).toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).toBeNull();
   });
 
   it('renders the fallback when WebGL2 is unavailable, keeping the poster', () => {
     FakeClass.supported = false;
-    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'no gl') }));
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'no gl') }));
     const host = container.firstElementChild as HTMLElement;
     expect(host.querySelector('#fb')).not.toBeNull();
-    expect(host.querySelector('[data-pixel-life-poster]')).not.toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).not.toBeNull();
 
     // A late 'ready' must not hide the fallback state.
     act(() => live()[0]?.emit('ready'));
@@ -252,7 +252,7 @@ describe('<PixelLife>', () => {
   });
 
   it('shows the fallback on a fallback event', () => {
-    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
     const host = container.firstElementChild as HTMLElement;
     expect(host.querySelector('#fb')).toBeNull();
     act(() => live()[0]?.emit('fallback', { reason: 'compile' }));
@@ -260,26 +260,26 @@ describe('<PixelLife>', () => {
   });
 
   it('a context-loss fallback ends on contextrestored (node and poster go away)', () => {
-    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
     const host = container.firstElementChild as HTMLElement;
     const inst = live()[0] as Fake;
     act(() => inst.emit('ready'));
-    expect(host.querySelector('[data-pixel-life-poster]')).toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).toBeNull();
 
     act(() => {
       inst.emit('contextlost');
       inst.emit('fallback', { reason: 'context-lost' });
     });
     expect(host.querySelector('#fb')).not.toBeNull();
-    expect(host.querySelector('[data-pixel-life-poster]')).not.toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).not.toBeNull();
 
     act(() => inst.emit('contextrestored'));
     expect(host.querySelector('#fb')).toBeNull();
-    expect(host.querySelector('[data-pixel-life-poster]')).toBeNull();
+    expect(host.querySelector('[data-lumicells-poster]')).toBeNull();
   });
 
   it('compile and no-webgl2 fallbacks are sticky across contextrestored', () => {
-    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
     const host = container.firstElementChild as HTMLElement;
     const inst = live()[0] as Fake;
     act(() => inst.emit('fallback', { reason: 'compile' }));
@@ -289,7 +289,7 @@ describe('<PixelLife>', () => {
     act(() => root.unmount());
     FakeClass.supported = false;
     root = createRoot(container);
-    render(createElement(PixelLife, { fallback: createElement('em', { id: 'fb' }, 'x') }));
+    render(createElement(LumiCells, { fallback: createElement('em', { id: 'fb' }, 'x') }));
     act(() => live()[0]?.emit('contextrestored'));
     expect((container.firstElementChild as HTMLElement).querySelector('#fb')).not.toBeNull();
   });
@@ -299,8 +299,8 @@ describe('<PixelLife>', () => {
     const second = vi.fn();
     const onError = vi.fn();
     const onStats = vi.fn();
-    render(createElement(PixelLife, { onReady: first, onError, onStats }));
-    render(createElement(PixelLife, { onReady: second, onError, onStats }));
+    render(createElement(LumiCells, { onReady: first, onError, onStats }));
+    render(createElement(LumiCells, { onReady: second, onError, onStats }));
     const inst = live()[0] as Fake;
     act(() => {
       inst.emit('ready');
@@ -316,7 +316,7 @@ describe('<PixelLife>', () => {
 
   it('passes className, style and DOM attributes to the host', () => {
     render(
-      createElement(PixelLife, {
+      createElement(LumiCells, {
         className: 'bg',
         style: { height: 100 },
         id: 'host',
@@ -342,7 +342,7 @@ describe('hooks', () => {
       return createElement(tag, { ref: ref as RefObject<HTMLDivElement> }, 'b');
     }
     const view = (strength: number) =>
-      createElement(PixelLife, null, createElement(Bubble, { strength }));
+      createElement(LumiCells, null, createElement(Bubble, { strength }));
 
     render(view(1));
     const inst = live()[0] as Fake;
@@ -374,7 +374,7 @@ describe('hooks', () => {
       handles.push(useInfluence(ref, current as any) as { current: unknown });
       return createElement('div', { ref });
     }
-    const view = () => createElement(PixelLife, null, createElement(Bubble));
+    const view = () => createElement(LumiCells, null, createElement(Bubble));
     render(view());
     const inst = live()[0] as Fake;
     expect(inst.binds).toHaveLength(1);
@@ -411,7 +411,7 @@ describe('hooks', () => {
       useInfluence(ref);
       return createElement('div', { ref });
     }
-    render(createElement(StrictMode, null, createElement(PixelLife, null, createElement(Bubble))));
+    render(createElement(StrictMode, null, createElement(LumiCells, null, createElement(Bubble))));
     const inst = live()[0] as Fake;
     expect(inst.binds.filter((b) => !b.disposed)).toHaveLength(1);
   });
@@ -422,7 +422,7 @@ describe('hooks', () => {
       useModulator('animation.energy', source, { blend: 'mul' });
       return null;
     }
-    render(createElement(PixelLife, null, createElement(Mod, { source: () => value })));
+    render(createElement(LumiCells, null, createElement(Mod, { source: () => value })));
     const inst = live()[0] as Fake;
     expect(inst.modulators).toHaveLength(1);
     expect(inst.modulators[0]?.opts.blend).toBe('mul');
@@ -432,10 +432,10 @@ describe('hooks', () => {
     expect(inst.modulators[0]?.source()).toBe(5);
 
     // A new inline function must not re-register; a numeric source is read live as well.
-    render(createElement(PixelLife, null, createElement(Mod, { source: () => 9 })));
+    render(createElement(LumiCells, null, createElement(Mod, { source: () => 9 })));
     expect(inst.modulators).toHaveLength(1);
     expect(inst.modulators[0]?.source()).toBe(9);
-    render(createElement(PixelLife, null, createElement(Mod, { source: 3 })));
+    render(createElement(LumiCells, null, createElement(Mod, { source: 3 })));
     expect(inst.modulators).toHaveLength(1);
     expect(inst.modulators[0]?.source()).toBe(3);
 
@@ -451,30 +451,30 @@ describe('hooks', () => {
       seen.push(pulse);
       return createElement('button', { type: 'button', onClick: () => pulse({ x: 1, y: 2 }) });
     }
-    render(createElement(PixelLife, null, createElement(Btn)));
+    render(createElement(LumiCells, null, createElement(Btn)));
     act(() => (container.querySelector('button') as HTMLButtonElement).click());
     expect(live()[0]?.pulses).toEqual([{ x: 1, y: 2 }]);
     expect(new Set(seen).size).toBe(1); // same identity across the re-render caused by the instance
   });
 
-  it('usePixelLife provides the instance to descendants (null before mount)', () => {
+  it('useLumiCells provides the instance to descendants (null before mount)', () => {
     const seen: Array<Core | null> = [];
     function Probe() {
-      seen.push(usePixelLife());
+      seen.push(useLumiCells());
       return null;
     }
-    render(createElement(PixelLife, null, createElement(Probe)));
+    render(createElement(LumiCells, null, createElement(Probe)));
     expect(seen[0]).toBeNull();
     expect(seen.at(-1)).toBe(live()[0]);
   });
 
-  it('usePixelLifeStats returns fresh snapshots from stats events', () => {
+  it('useLumiCellsStats returns fresh snapshots from stats events', () => {
     const seen: unknown[] = [];
     function Probe() {
-      seen.push(usePixelLifeStats());
+      seen.push(useLumiCellsStats());
       return null;
     }
-    render(createElement(PixelLife, null, createElement(Probe)));
+    render(createElement(LumiCells, null, createElement(Probe)));
     expect(seen.at(-1)).toBeNull();
     const shared = { fps: 60 };
     act(() => live()[0]?.emit('stats', shared));
@@ -485,17 +485,17 @@ describe('hooks', () => {
     expect(seen[seen.length - 1]).not.toBe(shared);
   });
 
-  it('usePixelLifeEvent subscribes once and calls the latest handler', () => {
+  it('useLumiCellsEvent subscribes once and calls the latest handler', () => {
     const calls: string[] = [];
     function Probe({ tag }: { tag: string }) {
-      usePixelLifeEvent('resize', () => calls.push(tag));
+      useLumiCellsEvent('resize', () => calls.push(tag));
       useEffect(() => {}, []);
       return null;
     }
-    render(createElement(PixelLife, null, createElement(Probe, { tag: 'a' })));
+    render(createElement(LumiCells, null, createElement(Probe, { tag: 'a' })));
     const inst = live()[0] as Fake;
     expect(inst.listeners.get('resize')?.size).toBe(1);
-    render(createElement(PixelLife, null, createElement(Probe, { tag: 'b' })));
+    render(createElement(LumiCells, null, createElement(Probe, { tag: 'b' })));
     expect(inst.listeners.get('resize')?.size).toBe(1);
     act(() => inst.emit('resize', {}));
     expect(calls).toEqual(['b']);

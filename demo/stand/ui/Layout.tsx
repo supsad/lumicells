@@ -63,20 +63,20 @@ export function Section({
   return (
     <section
       id={id}
-      className={cx('plui-section', `plui-section--l${level}`, className)}
+      className={cx('lcui-section', `lcui-section--l${level}`, className)}
       data-open={open}
       data-dimmed={dimmed || undefined}
     >
-      <div className="plui-section__head">
+      <div className="lcui-section__head">
         <button
           type="button"
-          className="plui-section__toggle"
+          className="lcui-section__toggle"
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={toggle}
         >
-          <Icon name="chevron" size={12} className="plui-section__chev" />
-          <span className="plui-section__title">{title}</span>
+          <Icon name="chevron" size={12} className="lcui-section__chev" />
+          <span className="lcui-section__title">{title}</span>
           {advanced && (
             <Badge tone="neutral" outline title="Расширенные настройки">
               доп.
@@ -84,10 +84,10 @@ export function Section({
           )}
           {badge}
         </button>
-        {actions && <div className="plui-section__actions">{actions}</div>}
+        {actions && <div className="lcui-section__actions">{actions}</div>}
       </div>
-      {header && <div className="plui-section__slot">{header}</div>}
-      <div className="plui-section__body" id={bodyId} hidden={!open}>
+      {header && <div className="lcui-section__slot">{header}</div>}
+      <div className="lcui-section__body" id={bodyId} hidden={!open}>
         {children}
       </div>
     </section>
@@ -116,12 +116,12 @@ export function SearchInput({
 }: SearchInputProps) {
   const ref = useRef<HTMLInputElement>(null);
   return (
-    <div className={cx('plui-search', className)}>
-      <Icon name="search" size={13} className="plui-search__icon" />
+    <div className={cx('lcui-search', className)}>
+      <Icon name="search" size={13} className="lcui-search__icon" />
       <input
         ref={ref}
         type="search"
-        className="plui-search__input"
+        className="lcui-search__input"
         value={value}
         placeholder={placeholder}
         aria-label={ariaLabel}
@@ -135,7 +135,7 @@ export function SearchInput({
           }
         }}
       />
-      {count !== undefined && value && <span className="plui-search__count">{count}</span>}
+      {count !== undefined && value && <span className="lcui-search__count">{count}</span>}
       {value && (
         <IconButton
           icon="close"
@@ -205,22 +205,22 @@ export function Panel({
   const arrow = collapsed === (side === 'right') ? 'chevron-left' : 'chevron-right';
   return (
     <aside
-      className={cx('plui-panel', `plui-panel--${side}`, collapsed && 'is-collapsed', className)}
+      className={cx('lcui-panel', `lcui-panel--${side}`, collapsed && 'is-collapsed', className)}
       style={{
-        ['--plui-panel-w' as string]: typeof width === 'number' ? `${width}px` : width,
+        ['--lcui-panel-w' as string]: typeof width === 'number' ? `${width}px` : width,
         ...style,
       }}
       aria-label={ariaLabel ?? titleText}
     >
-      <header className="plui-panel__head">
+      <header className="lcui-panel__head">
         {!collapsed && (
-          <div className="plui-panel__titles">
-            {title && <h2 className="plui-panel__title">{title}</h2>}
-            {subtitle && <div className="plui-panel__subtitle">{subtitle}</div>}
+          <div className="lcui-panel__titles">
+            {title && <h2 className="lcui-panel__title">{title}</h2>}
+            {subtitle && <div className="lcui-panel__subtitle">{subtitle}</div>}
           </div>
         )}
-        {collapsed && title && <span className="plui-panel__rail-title">{title}</span>}
-        {!collapsed && headerActions && <div className="plui-panel__actions">{headerActions}</div>}
+        {collapsed && title && <span className="lcui-panel__rail-title">{title}</span>}
+        {!collapsed && headerActions && <div className="lcui-panel__actions">{headerActions}</div>}
         <IconButton
           icon={arrow}
           label={collapsed ? 'Развернуть панель' : 'Свернуть панель'}
@@ -228,10 +228,10 @@ export function Panel({
           onClick={() => setCollapsed(!collapsed)}
         />
       </header>
-      <div className="plui-panel__content" hidden={collapsed}>
-        {search && <div className="plui-panel__search">{search}</div>}
-        <div className="plui-panel__body">{children}</div>
-        {footer && <footer className="plui-panel__foot">{footer}</footer>}
+      <div className="lcui-panel__content" hidden={collapsed}>
+        {search && <div className="lcui-panel__search">{search}</div>}
+        <div className="lcui-panel__body">{children}</div>
+        {footer && <footer className="lcui-panel__foot">{footer}</footer>}
       </div>
     </aside>
   );
@@ -247,8 +247,8 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
 export function Grid({ columns = 3, className, style, children, ...rest }: GridProps) {
   return (
     <div
-      className={cx('plui-grid', className)}
-      style={{ ['--plui-cols' as string]: columns, ...style }}
+      className={cx('lcui-grid', className)}
+      style={{ ['--lcui-cols' as string]: columns, ...style }}
       {...rest}
     >
       {children}
@@ -257,7 +257,7 @@ export function Grid({ columns = 3, className, style, children, ...rest }: GridP
 }
 
 export function Divider({ className }: { className?: string }) {
-  return <hr className={cx('plui-divider', className)} />;
+  return <hr className={cx('lcui-divider', className)} />;
 }
 
 export interface ReadoutProps {
@@ -271,13 +271,13 @@ export interface ReadoutProps {
 /** Label / monospace value row for stats. */
 export function Readout({ label, value, tone = 'default', className }: ReadoutProps) {
   return (
-    <div className={cx('plui-readout', `plui-readout--${tone}`, className)}>
-      <span className="plui-readout__label">{label}</span>
-      <span className="plui-readout__value">{value}</span>
+    <div className={cx('lcui-readout', `lcui-readout--${tone}`, className)}>
+      <span className="lcui-readout__label">{label}</span>
+      <span className="lcui-readout__value">{value}</span>
     </div>
   );
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="plui-empty">{children}</div>;
+  return <div className="lcui-empty">{children}</div>;
 }

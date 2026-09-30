@@ -1,5 +1,5 @@
-import type { PixelLifeConfig, PixelLife as PixelLifeInstance, PresetId } from 'pixel-life';
-import { PixelLifeContext } from 'pixel-life/react';
+import type { LumiCellsConfig, LumiCells as LumiCellsInstance, PresetId } from 'lumicells';
+import { LumiCellsContext } from 'lumicells/react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ExportModal } from './stand/ExportModal';
 import { hotkeyOf } from './stand/hotkeys';
@@ -27,7 +27,7 @@ import { copyText, ToastList, useToasts } from './stand/ui';
 declare global {
   interface Window {
     /** Dev-only handles for checks from the console / browser automation. */
-    __pixelLife?: PixelLifeInstance | null;
+    __lumiCells?: LumiCellsInstance | null;
     __standStore?: StandStore;
   }
 }
@@ -40,15 +40,15 @@ export function App() {
     return new StandStore(init.cfg, init.presetId);
   });
   const [tracker] = useState(() => new ModulationTracker());
-  const [instance, setInstance] = useState<PixelLifeInstance | null>(null);
+  const [instance, setInstance] = useState<LumiCellsInstance | null>(null);
 
   return (
     <StoreContext.Provider value={store}>
       <ModulationContext.Provider value={tracker}>
-        {/* The stats block and toolbar live outside <PixelLife>, so the instance is shared here. */}
-        <PixelLifeContext.Provider value={instance}>
+        {/* The stats block and toolbar live outside <LumiCells>, so the instance is shared here. */}
+        <LumiCellsContext.Provider value={instance}>
           <Stand store={store} tracker={tracker} instance={instance} setInstance={setInstance} />
-        </PixelLifeContext.Provider>
+        </LumiCellsContext.Provider>
       </ModulationContext.Provider>
     </StoreContext.Provider>
   );
@@ -73,8 +73,8 @@ function notifyShared(
 interface StandProps {
   store: StandStore;
   tracker: ModulationTracker;
-  instance: PixelLifeInstance | null;
-  setInstance(instance: PixelLifeInstance | null): void;
+  instance: LumiCellsInstance | null;
+  setInstance(instance: LumiCellsInstance | null): void;
 }
 
 function Stand({ store, tracker, instance, setInstance }: StandProps) {
@@ -136,7 +136,7 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    window.__pixelLife = instance;
+    window.__lumiCells = instance;
     window.__standStore = store;
   }, [instance, store]);
 
@@ -268,7 +268,7 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
   }, [store, notify]);
 
   const applyImport = useCallback(
-    (config: PixelLifeConfig, presetId: PresetId | null) => {
+    (config: LumiCellsConfig, presetId: PresetId | null) => {
       store.replace(config, presetId ?? store.getSnapshot().presetId);
       notify('Настройки применены', 'success');
     },

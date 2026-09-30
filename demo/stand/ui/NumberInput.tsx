@@ -63,10 +63,10 @@ export function NumberInput({
   };
 
   return (
-    <span className={cx('plui-num', invalid && 'is-invalid', className)}>
+    <span className={cx('lcui-num', invalid && 'is-invalid', className)}>
       <input
         id={id}
-        className="plui-num__input"
+        className="lcui-num__input"
         type="text"
         inputMode="decimal"
         autoComplete="off"
@@ -96,7 +96,7 @@ export function NumberInput({
         }}
       />
       {unit && (
-        <span className="plui-num__unit" title={unit}>
+        <span className="lcui-num__unit" title={unit}>
           {unit}
         </span>
       )}

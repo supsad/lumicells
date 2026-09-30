@@ -6,7 +6,7 @@
  */
 
 import { hexToRgb, samplePalette } from '../core/color';
-import type { PixelLifeConfig } from './schema';
+import type { LumiCellsConfig } from './schema';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (n: number) => `${r2(n)}%`;
@@ -35,7 +35,7 @@ function blob(x: number, y: number, size: number, color: string): string {
 /**
  * CSS `background` value approximating the look of `cfg` (layers top to bottom, base color last).
  */
-export function posterCss(cfg: PixelLifeConfig): string {
+export function posterCss(cfg: LumiCellsConfig): string {
   const layers: string[] = [];
   const bg = cfg.background.color;
   const pal = cfg.color.palette;

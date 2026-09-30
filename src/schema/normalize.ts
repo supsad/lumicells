@@ -18,7 +18,7 @@ import {
 } from './fields';
 import { cloneData, deepMerge, isPlainObject } from './paths';
 import { PRESET_IDS, PRESETS, type PresetId } from './presets';
-import { CONFIG_VERSION, type PixelLifeConfig, type PixelLifeConfigInput, schema } from './schema';
+import { CONFIG_VERSION, type LumiCellsConfig, type LumiCellsConfigInput, schema } from './schema';
 
 export type ConfigIssueCode =
   | 'unknown-key'
@@ -362,10 +362,10 @@ function checkRoot(raw: unknown, issues: ConfigIssue[]): Record<string, unknown>
   return {};
 }
 
-const presetCache = new Map<PresetId, PixelLifeConfig>();
+const presetCache = new Map<PresetId, LumiCellsConfig>();
 
 /** Fully resolved config of a preset (defaults + preset patch). Returns a fresh copy. */
-export function getPresetConfig(id: PresetId): PixelLifeConfig {
+export function getPresetConfig(id: PresetId): LumiCellsConfig {
   let cfg = presetCache.get(id);
   if (!cfg) {
     const preset = PRESETS[id];
@@ -373,7 +373,7 @@ export function getPresetConfig(id: PresetId): PixelLifeConfig {
     // cannot leak into a live config (tests assert presets produce no issues).
     const merged = deepMerge(getDefaults() as unknown, preset?.config ?? {});
     const body = sanitizeGroup(schema, merged as Record<string, unknown>, getDefaults(), '', []);
-    cfg = { ...body, version: CONFIG_VERSION } as PixelLifeConfig;
+    cfg = { ...body, version: CONFIG_VERSION } as LumiCellsConfig;
     presetCache.set(id, cfg);
   }
   return cloneData(cfg);
@@ -383,14 +383,14 @@ export function getPresetConfig(id: PresetId): PixelLifeConfig {
  * Full normalization: `extends` preset (if any), then the input over it, with every value checked
  * against the schema. Never throws.
  */
-export function normalizeConfig(raw: unknown): { config: PixelLifeConfig; issues: ConfigIssue[] } {
+export function normalizeConfig(raw: unknown): { config: LumiCellsConfig; issues: ConfigIssue[] } {
   const issues: ConfigIssue[] = [];
   let obj = checkRoot(raw, issues);
   obj = migrate(obj, issues);
   const ext = checkExtends(obj, issues);
   const base = (ext ? getPresetConfig(ext) : getDefaults()) as unknown as Record<string, unknown>;
   const body = sanitizeGroup(schema, obj, base, '', issues);
-  return { config: { version: CONFIG_VERSION, ...body } as PixelLifeConfig, issues };
+  return { config: { version: CONFIG_VERSION, ...body } as LumiCellsConfig, issues };
 }
 
 /** Strict check: any issue (even a harmless coercion) makes the config invalid. */
@@ -405,7 +405,7 @@ export function validateConfig(raw: unknown): { ok: boolean; issues: ConfigIssue
  * `extends` is kept when it names a known preset.
  */
 export function normalizePatch(raw: unknown): {
-  patch: PixelLifeConfigInput;
+  patch: LumiCellsConfigInput;
   issues: ConfigIssue[];
 } {
   const issues: ConfigIssue[] = [];
@@ -413,6 +413,6 @@ export function normalizePatch(raw: unknown): {
   obj = migrate(obj, issues);
   const ext = checkExtends(obj, issues);
   const body = sanitizeGroup(schema, obj, undefined, '', issues);
-  const patch = (ext ? { extends: ext, ...body } : body) as PixelLifeConfigInput;
+  const patch = (ext ? { extends: ext, ...body } : body) as LumiCellsConfigInput;
   return { patch, issues };
 }

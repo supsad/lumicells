@@ -12,7 +12,7 @@
 
 import type { Controller, LiftRequest, PulseRequest } from '../controller/controller';
 import { type Influence, SPACE_HOST } from '../controller/influences';
-import type { PixelLifeConfig } from '../types';
+import type { LumiCellsConfig } from '../types';
 
 const MAX_CLICKS = 8;
 /** Minimum time between hover lifts, ms. */
@@ -53,7 +53,7 @@ export class PointerInteraction {
     return (this.inside && this.pointerOn) || this.clickCount > 0;
   }
 
-  configure(cfg: PixelLifeConfig['interaction']): void {
+  configure(cfg: LumiCellsConfig['interaction']): void {
     const pointer = cfg.pointer;
     const click = cfg.click;
     this.liftOn = pointer && cfg.pointerLift;

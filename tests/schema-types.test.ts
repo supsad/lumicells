@@ -1,11 +1,11 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
   FieldAt,
+  LumiCellsConfig,
+  LumiCellsConfigInput,
   ModulatablePath,
   ParamPath,
   ParamValue,
-  PixelLifeConfig,
-  PixelLifeConfigInput,
   PresetId,
 } from '../src/schema';
 import { getDefaults, type PRESETS } from '../src/schema';
@@ -37,12 +37,12 @@ describe('schema types', () => {
   });
 
   it('config and input shapes', () => {
-    expectTypeOf<PixelLifeConfig['version']>().toEqualTypeOf<1>();
-    expectTypeOf<PixelLifeConfig['modes']['life']['rule']>().toEqualTypeOf<
+    expectTypeOf<LumiCellsConfig['version']>().toEqualTypeOf<1>();
+    expectTypeOf<LumiCellsConfig['modes']['life']['rule']>().toEqualTypeOf<
       'conway' | 'highlife' | 'daynight' | 'seeds'
     >();
     expectTypeOf<PresetId>().toEqualTypeOf<keyof typeof PRESETS>();
-    const input: PixelLifeConfigInput = {
+    const input: LumiCellsConfigInput = {
       extends: 'orb',
       version: 1,
       $schema: 'x',
@@ -50,12 +50,12 @@ describe('schema types', () => {
       scene: { center: [0, 0] },
     };
     // @ts-expect-error unknown enum value
-    const bad1: PixelLifeConfigInput = { color: { mapping: 'diagonal' } };
+    const bad1: LumiCellsConfigInput = { color: { mapping: 'diagonal' } };
     // @ts-expect-error unknown preset
-    const bad2: PixelLifeConfigInput = { extends: 'nope' };
+    const bad2: LumiCellsConfigInput = { extends: 'nope' };
     // @ts-expect-error tuples are leaves, not partial
-    const bad3: PixelLifeConfigInput = { scene: { center: [0] } };
-    const full: PixelLifeConfig = getDefaults();
+    const bad3: LumiCellsConfigInput = { scene: { center: [0] } };
+    const full: LumiCellsConfig = getDefaults();
     void [input, bad1, bad2, bad3, full];
   });
 });

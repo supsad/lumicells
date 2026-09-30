@@ -1,5 +1,5 @@
 /**
- * Look-tuning page: one PixelLife host (default = 'reference' look) next to the reference image,
+ * Look-tuning page: one LumiCells host (default = 'reference' look) next to the reference image,
  * with deterministic time so screenshots can be compared run to run.
  *
  * URL options:
@@ -23,11 +23,11 @@ import './virtual-time';
 import './dev-flags';
 import {
   type DebugView,
-  type PixelLifeConfigInput,
-  PixelLife as PixelLifeCore,
+  type LumiCellsConfigInput,
+  LumiCells as LumiCellsCore,
   type PresetId,
-} from 'pixel-life';
-import { PixelLife as PixelLifeReact } from 'pixel-life/react';
+} from 'lumicells';
+import { LumiCells as LumiCellsReact } from 'lumicells/react';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ModulationTracker } from '../../demo/stand/modulation';
@@ -42,15 +42,15 @@ const withScene = q.get('scene') === '1';
 const debug = (q.get('debug') ?? 'final') as DebugView;
 const preset = (q.get('preset') ?? undefined) as PresetId | undefined;
 
-let patch: PixelLifeConfigInput = {};
+let patch: LumiCellsConfigInput = {};
 try {
   const raw = q.get('cfg');
-  if (raw) patch = JSON.parse(raw) as PixelLifeConfigInput;
+  if (raw) patch = JSON.parse(raw) as LumiCellsConfigInput;
 } catch (err) {
   console.error('[tune] bad cfg JSON', err);
 }
 if (q.get('lifts') === '0') patch = { ...patch, lift: { ...patch.lift, enabled: false } };
-const config: PixelLifeConfigInput = preset ? { ...patch, extends: preset } : patch;
+const config: LumiCellsConfigInput = preset ? { ...patch, extends: preset } : patch;
 
 const host = document.getElementById('host') as HTMLElement;
 host.style.width = `${hostW}px`;
@@ -61,10 +61,10 @@ ref.style.height = `${Math.min(hostW, hostH)}px`;
 if (q.get('ref') === '0') ref.hidden = true;
 
 interface TuneApi {
-  pl: PixelLifeCore | null;
+  pl: LumiCellsCore | null;
   done: boolean;
   time: number;
-  setConfig(p: PixelLifeConfigInput): void;
+  setConfig(p: LumiCellsConfigInput): void;
 }
 
 const api: TuneApi = {
@@ -85,7 +85,7 @@ const tintScale = Number(q.get('tint') ?? 1);
 const shadowScale = Number(q.get('shadow') ?? 1);
 const shadowPad = q.get('shpad');
 
-function attach(pl: PixelLifeCore): void {
+function attach(pl: LumiCellsCore): void {
   api.pl = pl;
   if (lightScale !== 1 || tintScale !== 1 || shadowScale !== 1 || shadowPad !== null) {
     const bind = pl.bindElement.bind(pl);
@@ -128,12 +128,12 @@ if (withScene) {
   const root = createRoot(host);
   root.render(
     createElement(
-      PixelLifeReact,
+      LumiCellsReact,
       {
         config,
         transition: 0,
         style: { width: '100%', height: '100%', background: '#000032' },
-        ref: (inst: PixelLifeCore | null) => {
+        ref: (inst: LumiCellsCore | null) => {
           tracker.setInstance(inst);
           if (inst && api.pl !== inst) attach(inst);
         },
@@ -142,5 +142,5 @@ if (withScene) {
     ),
   );
 } else {
-  attach(new PixelLifeCore(host, { config }));
+  attach(new LumiCellsCore(host, { config }));
 }

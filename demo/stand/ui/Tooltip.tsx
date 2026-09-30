@@ -98,7 +98,7 @@ export function Tooltip({
     // biome-ignore lint/a11y/noStaticElementInteractions: hover/focus only reveal the tooltip; the wrapped child is the interactive element
     <span
       ref={wrap}
-      className={cx('plui-tip', className)}
+      className={cx('lcui-tip', className)}
       aria-describedby={open ? id : undefined}
       onPointerEnter={(e) => e.pointerType === 'mouse' && show(false)}
       onPointerLeave={hide}
@@ -113,12 +113,12 @@ export function Tooltip({
             ref={tip}
             id={id}
             role="tooltip"
-            className={cx('plui-tooltip', pos && 'is-placed')}
+            className={cx('lcui-tooltip', pos && 'is-placed')}
             data-placement={pos?.placement ?? placement}
             style={{
               left: pos?.left ?? 0,
               top: pos?.top ?? 0,
-              ['--plui-arrow-x' as string]: `${pos?.arrowX ?? 0}px`,
+              ['--lcui-arrow-x' as string]: `${pos?.arrowX ?? 0}px`,
             }}
           >
             {content}
@@ -139,7 +139,7 @@ export interface HintProps {
 export function Hint({ children, placement, label = 'Подсказка' }: HintProps) {
   return (
     <Tooltip content={children} placement={placement}>
-      <button type="button" className="plui-hint" aria-label={label}>
+      <button type="button" className="lcui-hint" aria-label={label}>
         <Icon name="info" size={12} />
       </button>
     </Tooltip>

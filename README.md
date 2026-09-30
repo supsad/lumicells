@@ -1,4 +1,4 @@
-# Pixel Life
+# LumiCells
 
 Живой фон из неоновых пикселей на WebGL2 со стендом настройки и конфигурационным файлом.
 
@@ -6,9 +6,9 @@
 
 Что входит в проект:
 
-- **Ядро** (`pixel-life`): класс `PixelLife`, TypeScript, ноль зависимостей.
-- **React-обёртка** (`pixel-life/react`): компонент `<PixelLife>` и хуки.
-- **Web Component** (`pixel-life/element`): тег `<pixel-life>` для любого стека, в том числе чистого HTML.
+- **Ядро** (`lumicells`): класс `LumiCells`, TypeScript, ноль зависимостей.
+- **React-обёртка** (`lumicells/react`): компонент `<LumiCells>` и хуки.
+- **Web Component** (`lumicells/element`): тег `<lumi-cells>` для любого стека, в том числе чистого HTML.
 - **Стенд** на Vite: ручки для всех параметров, пресеты, экспорт и импорт конфига, демо-сцена с баблами.
 
 ## Быстрый старт
@@ -23,7 +23,7 @@ npm run dev
 | Адрес | Что там |
 | --- | --- |
 | `/` | Стенд с панелью настроек и демо-сценой |
-| `/examples/web-component.html` | Web Component в чистом HTML, декларативная привязка через `data-pl-*` |
+| `/examples/web-component.html` | Web Component в чистом HTML, декларативная привязка через `data-lc-*` |
 | `/examples/core-basic.html` | Ядро без фреймворков, вылет пикселей за границы карточки |
 | `/examples/engine-harness.html` | Отладка движка: проходы по отдельности, замер времени кадра |
 
@@ -32,15 +32,15 @@ npm run dev
 ### React
 
 ```tsx
-import { PixelLife, useInfluence } from 'pixel-life/react';
+import { LumiCells, useInfluence } from 'lumicells/react';
 import { type ReactNode, useRef } from 'react';
-import config from './pixel-life.config.json';
+import config from './lumicells.config.json';
 
 export function Hero() {
   return (
-    <PixelLife config={config} interactive style={{ height: '100vh' }}>
+    <LumiCells config={config} interactive style={{ height: '100vh' }}>
       <Bubble color="#ee2848">путешествия</Bubble>
-    </PixelLife>
+    </LumiCells>
   );
 }
 
@@ -58,12 +58,12 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 
 | Хук | Зачем |
 | --- | --- |
-| `usePixelLife()` | Экземпляр `PixelLife` из ближайшего компонента. `null` только на сервере, до монтирования и после размонтирования. Без WebGL2 экземпляр всё равно отдаётся: проверяйте `instance.supported` или используйте проп `fallback` |
+| `useLumiCells()` | Экземпляр `LumiCells` из ближайшего компонента. `null` только на сервере, до монтирования и после размонтирования. Без WebGL2 экземпляр всё равно отдаётся: проверяйте `instance.supported` или используйте проп `fallback` |
 | `useInfluence(ref, opts)` | Превращает элемент в источник света, тени или подъёма пикселей |
 | `useModulator(path, source, opts)` | Ведёт числовой параметр от значения или функции |
 | `usePulse()` | Стабильная функция для запуска волны |
-| `usePixelLifeStats()` | Статистика кадра, обновляется 4 раза в секунду |
-| `usePixelLifeEvent(type, handler)` | Подписка на событие экземпляра |
+| `useLumiCellsStats()` | Статистика кадра, обновляется 4 раза в секунду |
+| `useLumiCellsEvent(type, handler)` | Подписка на событие экземпляра |
 
 Компонент рендерится на сервере (SSR) статичным постером, WebGL создаётся только в браузере.
 
@@ -73,14 +73,14 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 
 ```html
 <script type="module">
-  import 'pixel-life/element/define';
+  import 'lumicells/element/define';
 </script>
 
-<pixel-life id="bg" preset="reference" interactive style="height: 100vh">
-  <button data-pl-influence data-pl-color="#0481f5" data-pl-pulse="click" data-pl-lift="hover">
+<lumi-cells id="bg" preset="reference" interactive style="height: 100vh">
+  <button data-lc-influence data-lc-color="#0481f5" data-lc-pulse="click" data-lc-lift="hover">
     наука
   </button>
-</pixel-life>
+</lumi-cells>
 
 <script type="module">
   // Конфиг удобнее задавать свойством, чем JSON в атрибуте.
@@ -88,7 +88,7 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 </script>
 ```
 
-Без сборщика подключается одним файлом `dist/lib/pixel-life-element.iife.js`, он регистрирует тег и кладёт API в глобальный `PixelLife`.
+Без сборщика подключается одним файлом `dist/lib/lumicells-element.iife.js`, он регистрирует тег и кладёт API в глобальный `LumiCells`.
 
 Атрибуты элемента: `preset`, `src` (URL файла конфига), `interactive`, `overflow`, `paused`, `transition`. Свойства: `config`, `preset`, `paused`, `interactive`, `overflow`, `transition`, `instance` (только чтение).
 
@@ -96,22 +96,22 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 
 | Атрибут | Значение |
 | --- | --- |
-| `data-pl-influence` | Элемент влияет на фон. Значение задаёт тип: `light` (по умолчанию), `shadow`, `lift`, `seed`, `repel` |
-| `data-pl-color`, `data-pl-color-mix` | Цвет подсветки и доля его смешения с палитрой |
-| `data-pl-strength`, `data-pl-falloff`, `data-pl-padding`, `data-pl-priority` | Сила, мягкость края в клетках, отступ в px, приоритет |
-| `data-pl-track` | `auto` или `frame`: как часто перечитывать положение |
-| `data-pl-pulse` | `click` или `hover`: волна от элемента |
-| `data-pl-lift` | `hover` или `click`: подъём пикселей у элемента |
-| `data-pl-for="bg"` | Привязать элемент вне тега (например, из портала) к `<pixel-life id="bg">` |
+| `data-lc-influence` | Элемент влияет на фон. Значение задаёт тип: `light` (по умолчанию), `shadow`, `lift`, `seed`, `repel` |
+| `data-lc-color`, `data-lc-color-mix` | Цвет подсветки и доля его смешения с палитрой |
+| `data-lc-strength`, `data-lc-falloff`, `data-lc-padding`, `data-lc-priority` | Сила, мягкость края в клетках, отступ в px, приоритет |
+| `data-lc-track` | `auto` или `frame`: как часто перечитывать положение |
+| `data-lc-pulse` | `click` или `hover`: волна от элемента |
+| `data-lc-lift` | `hover` или `click`: подъём пикселей у элемента |
+| `data-lc-for="bg"` | Привязать элемент вне тега (например, из портала) к `<lumi-cells id="bg">` |
 
-События: `pl-ready`, `pl-config`, `pl-stats`, `pl-error`, `pl-fallback`.
+События: `lc-ready`, `lc-config`, `lc-stats`, `lc-error`, `lc-fallback`.
 
 ### Без фреймворков
 
 ```ts
-import { PixelLife } from 'pixel-life';
+import { LumiCells } from 'lumicells';
 
-const pl = new PixelLife(document.querySelector('#hero')!, { preset: 'reference' });
+const pl = new LumiCells(document.querySelector('#hero')!, { preset: 'reference' });
 
 const bubble = document.querySelector('#bubble')!;
 pl.bindElement(bubble, { type: 'light', color: '#ee2848', colorMix: 0.6 });
@@ -126,11 +126,11 @@ pl.destroy();
 
 ## Конфигурационный файл
 
-Стенд экспортирует `pixel-life.config.json`:
+Стенд экспортирует `lumicells.config.json`:
 
 ```json
 {
-  "$schema": "./pixel-life.schema.json",
+  "$schema": "./lumicells.schema.json",
   "version": 1,
   "extends": "reference",
   "grid": { "count": 36, "gap": 0.25 },
@@ -139,7 +139,7 @@ pl.destroy();
 ```
 
 - Файл можно сохранить полностью или только разницей относительно пресета (`extends`). Полный файл не поменяется, если позже изменятся дефолты библиотеки.
-- `pixel-life.schema.json` собирается вместе с пакетом (`pixel-life/schema.json`), редактор по нему подсказывает поля и диапазоны.
+- `lumicells.schema.json` собирается вместе с пакетом (`lumicells/schema.json`), редактор по нему подсказывает поля и диапазоны.
 - `normalizeConfig(raw)` никогда не бросает исключение: чинит типы, обрезает диапазоны, выкидывает неизвестные ключи и возвращает список замечаний с путями. `validateConfig(raw)` строже и подходит для проверки в CI.
 - Кроме JSON стенд отдаёт готовые сниппеты для TypeScript, React и HTML.
 
@@ -173,7 +173,7 @@ h.dispose();
 - `frame` читает каждый кадр;
 - `manual` не трогает DOM, координаты передаёт ваш код через `update({ x, y, w, h })`.
 
-Элементы, которые двигает JS, лучше анимировать в `onBeforeFrame` из `pixel-life`, тогда подсветка не отстаёт даже на кадр.
+Элементы, которые двигает JS, лучше анимировать в `onBeforeFrame` из `lumicells`, тогда подсветка не отстаёт даже на кадр.
 
 **События** (`pulse`, `lift`). Разовая волна из точки и подъём пикселей в точке.
 
@@ -231,7 +231,7 @@ src/core
   controller    твины, модуляции, влияния, волны, всплывающие пиксели, адаптивное качество (без DOM и GL)
   engine        WebGL2: проходы life, field, bloom, composite, lift и GLSL-режимы
   dom           canvas и его размер, слежение за элементами, указатель
-  pixel-life.ts фасад PixelLife
+  lumi-cells.ts фасад LumiCells
 src/react       компонент и хуки
 src/element     Web Component
 demo            стенд и демо-сцена

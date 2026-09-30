@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 // biome-ignore-all lint/suspicious/noExplicitAny: loosely typed recording doubles and config probes
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PixelLife } from '../src/core/pixel-life';
-import { parsePlAttrs } from '../src/element/data-attrs';
-import { definePixelLifeElement, PixelLifeElement } from '../src/element/index';
+import { LumiCells } from '../src/core/lumi-cells';
+import { parseLcAttrs } from '../src/element/data-attrs';
+import { defineLumiCellsElement, LumiCellsElement } from '../src/element/index';
 import { needsRebind } from '../src/element/rebind';
 
 // The facade needs WebGL2, which jsdom does not have. A recording double stands in for it, so
 // these tests cover the element's own logic (state, lifecycle, binding) independent of the runtime.
-vi.mock('../src/core/pixel-life', () => {
+vi.mock('../src/core/lumi-cells', () => {
   class Handle {
     disposed = false;
     updates: unknown[] = [];
@@ -27,13 +27,13 @@ vi.mock('../src/core/pixel-life', () => {
     }
   }
 
-  class FakePixelLife {
-    static instances: FakePixelLife[] = [];
+  class FakeLumiCells {
+    static instances: FakeLumiCells[] = [];
     static supported = true;
     static isSupported() {
-      return FakePixelLife.supported;
+      return FakeLumiCells.supported;
     }
-    readonly supported = FakePixelLife.supported;
+    readonly supported = FakeLumiCells.supported;
     destroyed = false;
     running = false;
     replaced: Array<{ config: any; opts: any }> = [];
@@ -46,7 +46,7 @@ vi.mock('../src/core/pixel-life', () => {
       readonly host: HTMLElement,
       readonly options: any,
     ) {
-      FakePixelLife.instances.push(this);
+      FakeLumiCells.instances.push(this);
     }
     getConfig() {
       return { interaction: this.interaction };
@@ -97,7 +97,7 @@ vi.mock('../src/core/pixel-life', () => {
       this.lifts.push(o);
     }
   }
-  return { PixelLife: FakePixelLife };
+  return { LumiCells: FakeLumiCells };
 });
 
 interface Fake {
@@ -113,7 +113,7 @@ interface Fake {
   listeners: Map<string, Set<(e: any) => void>>;
   emit(type: string, detail?: unknown): void;
 }
-const FakeClass = PixelLife as unknown as {
+const FakeClass = LumiCells as unknown as {
   instances: Fake[];
   supported: boolean;
 };
@@ -121,15 +121,15 @@ const FakeClass = PixelLife as unknown as {
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 const live = () => FakeClass.instances.filter((i) => !i.destroyed);
 
-function mount(html: string): PixelLifeElement {
+function mount(html: string): LumiCellsElement {
   const holder = document.createElement('div');
   holder.innerHTML = html;
   document.body.append(holder);
-  return holder.querySelector('pixel-life') as PixelLifeElement;
+  return holder.querySelector('lumi-cells') as LumiCellsElement;
 }
 
 beforeAll(() => {
-  definePixelLifeElement();
+  defineLumiCellsElement();
 });
 
 beforeEach(() => {
@@ -145,12 +145,12 @@ afterEach(async () => {
 
 describe('registration', () => {
   it('registers once and is idempotent', () => {
-    expect(customElements.get('pixel-life')).toBe(PixelLifeElement);
-    expect(definePixelLifeElement()).toBe(PixelLifeElement);
+    expect(customElements.get('lumi-cells')).toBe(LumiCellsElement);
+    expect(defineLumiCellsElement()).toBe(LumiCellsElement);
   });
 
   it('builds a shadow root with a stage and a slot above it', () => {
-    const el = document.createElement('pixel-life');
+    const el = document.createElement('lumi-cells');
     const root = el.shadowRoot;
     expect(root?.querySelector('.stage')).not.toBeNull();
     expect(root?.querySelector('.content slot')).not.toBeNull();
@@ -159,7 +159,7 @@ describe('registration', () => {
 
 describe('attributes and properties', () => {
   it('creates the instance on the stage with the resolved config, not started before listeners', async () => {
-    const el = mount('<pixel-life preset="orb" interactive overflow></pixel-life>');
+    const el = mount('<lumi-cells preset="orb" interactive overflow></lumi-cells>');
     await flush();
     const inst = live()[0];
     expect(inst).toBeDefined();
@@ -176,18 +176,18 @@ describe('attributes and properties', () => {
   });
 
   it('maps overflow attribute values', async () => {
-    mount('<pixel-life overflow="32"></pixel-life>');
+    mount('<lumi-cells overflow="32"></lumi-cells>');
     await flush();
     expect(live()[0]?.options.config.render.overflow).toBe(32);
     document.body.replaceChildren();
     await flush();
-    mount('<pixel-life overflow="false"></pixel-life>');
+    mount('<lumi-cells overflow="false"></lumi-cells>');
     await flush();
     expect(live()[0]?.options.config.render.overflow).toBe(0);
   });
 
   it('applies property changes through replaceConfig once, and only for real changes', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     expect(inst.replaced).toHaveLength(0);
@@ -221,7 +221,7 @@ describe('attributes and properties', () => {
   });
 
   it('passes transition to replaceConfig and ignores garbage values', async () => {
-    const el = mount('<pixel-life transition="250"></pixel-life>');
+    const el = mount('<lumi-cells transition="250"></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     expect(el.transition).toBe(250);
@@ -233,7 +233,7 @@ describe('attributes and properties', () => {
   });
 
   it('config wins over preset, preset wins over defaults; unknown preset is ignored', async () => {
-    const el = mount('<pixel-life preset="nope"></pixel-life>');
+    const el = mount('<lumi-cells preset="nope"></lumi-cells>');
     await flush();
     expect(el.preset).toBeNull();
     const inst = live()[0] as Fake;
@@ -245,7 +245,7 @@ describe('attributes and properties', () => {
   });
 
   it('re-setting the same preset attribute value wins over a property override', async () => {
-    const el = mount('<pixel-life preset="orb"></pixel-life>');
+    const el = mount('<lumi-cells preset="orb"></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     expect(inst.options.config.modes.sphere.hole).toBe(0);
@@ -262,7 +262,7 @@ describe('attributes and properties', () => {
   });
 
   it('reflects boolean properties to attributes and back without echo loops', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
 
@@ -285,7 +285,7 @@ describe('attributes and properties', () => {
   });
 
   it('an unset interactive leaves interaction.* of the config alone', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     el.config = { interaction: { pointer: true } };
     await flush();
     expect(live()[0]?.options.config.interaction.pointer).toBe(true);
@@ -296,15 +296,15 @@ describe('attributes and properties', () => {
   });
 
   it('captures properties assigned before the element was upgraded', async () => {
-    const tag = 'pixel-life-upgrade';
-    const el = document.createElement(tag) as PixelLifeElement;
+    const tag = 'lumi-cells-upgrade';
+    const el = document.createElement(tag) as LumiCellsElement;
     el.config = { animation: { speed: 3 } };
     (el as any).paused = true;
     (el as any).preset = 'orb';
     expect(Object.hasOwn(el, 'config')).toBe(true);
     document.body.append(el);
 
-    customElements.define(tag, class extends PixelLifeElement {});
+    customElements.define(tag, class extends LumiCellsElement {});
     await flush();
 
     expect(Object.hasOwn(el, 'config')).toBe(false);
@@ -319,7 +319,7 @@ describe('attributes and properties', () => {
 
 describe('lifecycle', () => {
   it('survives being moved within the document (no destroy/recreate)', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     const inst = el.instance;
     const other = document.createElement('section');
@@ -332,7 +332,7 @@ describe('lifecycle', () => {
   });
 
   it('destroys on removal and rebuilds on re-insertion', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     const first = FakeClass.instances[0] as Fake;
     el.remove();
@@ -349,7 +349,7 @@ describe('lifecycle', () => {
   });
 
   it('a config set right after append() is part of the first config', async () => {
-    const el = document.createElement('pixel-life') as PixelLifeElement;
+    const el = document.createElement('lumi-cells') as LumiCellsElement;
     document.body.append(el);
     el.config = { animation: { speed: 2 } };
     await flush();
@@ -359,7 +359,7 @@ describe('lifecycle', () => {
   });
 
   it('recreates the instance if it was destroyed from the outside', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     (el.instance as unknown as Fake).destroyed = true;
     el.config = { animation: { speed: 2 } };
@@ -371,11 +371,11 @@ describe('lifecycle', () => {
 
 describe('events', () => {
   it('re-dispatches facade events as bubbling CustomEvents', async () => {
-    const el = mount('<pixel-life id="a"></pixel-life>');
+    const el = mount('<lumi-cells id="a"></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     const seen: Record<string, unknown> = {};
-    for (const type of ['pl-ready', 'pl-config', 'pl-stats', 'pl-error', 'pl-fallback']) {
+    for (const type of ['lc-ready', 'lc-config', 'lc-stats', 'lc-error', 'lc-fallback']) {
       document.addEventListener(type, (e) => {
         seen[type] = (e as CustomEvent).detail;
       });
@@ -386,18 +386,18 @@ describe('events', () => {
     const err = new Error('boom');
     inst.emit('error', err);
     inst.emit('fallback', { reason: 'compile' });
-    expect((seen['pl-ready'] as { instance: unknown }).instance).toBe(el.instance);
-    expect(seen['pl-config']).toMatchObject({ source: 'api' });
-    expect(seen['pl-stats']).toEqual({ fps: 60 });
-    expect(seen['pl-error']).toBe(err);
-    expect(seen['pl-fallback']).toEqual({ reason: 'compile' });
+    expect((seen['lc-ready'] as { instance: unknown }).instance).toBe(el.instance);
+    expect(seen['lc-config']).toMatchObject({ source: 'api' });
+    expect(seen['lc-stats']).toEqual({ fps: 60 });
+    expect(seen['lc-error']).toBe(err);
+    expect(seen['lc-fallback']).toEqual({ reason: 'compile' });
   });
 
-  it('reports pl-fallback once when WebGL2 is unavailable', async () => {
+  it('reports lc-fallback once when WebGL2 is unavailable', async () => {
     FakeClass.supported = false;
     const seen: unknown[] = [];
-    document.addEventListener('pl-fallback', (e) => seen.push((e as CustomEvent).detail));
-    mount('<pixel-life></pixel-life>');
+    document.addEventListener('lc-fallback', (e) => seen.push((e as CustomEvent).detail));
+    mount('<lumi-cells></lumi-cells>');
     await flush();
     await flush();
     // The synchronous notice and the facade's deferred event are one report, not two.
@@ -417,8 +417,8 @@ describe('events', () => {
   it('a paused element without WebGL2 is still notified once at mount', async () => {
     FakeClass.supported = false;
     const seen: unknown[] = [];
-    document.addEventListener('pl-fallback', (e) => seen.push((e as CustomEvent).detail));
-    mount('<pixel-life paused></pixel-life>');
+    document.addEventListener('lc-fallback', (e) => seen.push((e as CustomEvent).detail));
+    mount('<lumi-cells paused></lumi-cells>');
     await flush();
     expect(seen).toEqual([{ reason: 'no-webgl2' }]);
   });
@@ -434,7 +434,7 @@ describe('src', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const el = mount('<pixel-life src="/c.json"></pixel-life>');
+    const el = mount('<lumi-cells src="/c.json"></lumi-cells>');
     await flush();
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -454,7 +454,7 @@ describe('src', () => {
       'fetch',
       vi.fn(async () => okResponse({ animation: { speed: 3 } })),
     );
-    const el = mount('<pixel-life src="/c.json" transition="250"></pixel-life>');
+    const el = mount('<lumi-cells src="/c.json" transition="250"></lumi-cells>');
     await flush();
     await flush();
     const inst = live()[0] as Fake;
@@ -477,7 +477,7 @@ describe('src', () => {
         return new Promise<Response>(() => {});
       }),
     );
-    const el = mount('<pixel-life src="/a.json"></pixel-life>');
+    const el = mount('<lumi-cells src="/a.json"></lumi-cells>');
     await flush();
     el.src = '/b.json';
     el.setAttribute('src', '/a.json'); // old === new === '/a.json'
@@ -490,7 +490,7 @@ describe('src', () => {
       'fetch',
       vi.fn(async () => okResponse({ animation: { speed: 3 } })),
     );
-    mount('<pixel-life preset="life" src="/c.json"></pixel-life>');
+    mount('<lumi-cells preset="life" src="/c.json"></lumi-cells>');
     await flush();
     await flush();
     const inst = live()[0] as Fake;
@@ -508,7 +508,7 @@ describe('src', () => {
         return new Promise<Response>(() => {});
       }),
     );
-    const el = mount('<pixel-life src="/a.json"></pixel-life>');
+    const el = mount('<lumi-cells src="/a.json"></lumi-cells>');
     await flush();
     el.src = '/b.json';
     expect(signals).toHaveLength(2);
@@ -519,14 +519,14 @@ describe('src', () => {
     expect(signals[1]?.aborted).toBe(true);
   });
 
-  it('reports fetch failures as pl-error and keeps running', async () => {
+  it('reports fetch failures as lc-error and keeps running', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 404 }) as Response),
     );
     const errors: Error[] = [];
-    document.addEventListener('pl-error', (e) => errors.push((e as CustomEvent<Error>).detail));
-    mount('<pixel-life src="/missing.json"></pixel-life>');
+    document.addEventListener('lc-error', (e) => errors.push((e as CustomEvent<Error>).detail));
+    mount('<lumi-cells src="/missing.json"></lumi-cells>');
     await flush();
     await flush();
     expect(errors).toHaveLength(1);
@@ -535,59 +535,59 @@ describe('src', () => {
   });
 });
 
-describe('data-pl-* parsing', () => {
+describe('data-lc-* parsing', () => {
   const attrs = (html: string) => {
     const d = document.createElement('div');
     d.innerHTML = html;
-    return parsePlAttrs(d.firstElementChild as Element);
+    return parseLcAttrs(d.firstElementChild as Element);
   };
 
-  it('returns null influence without data-pl-influence', () => {
+  it('returns null influence without data-lc-influence', () => {
     expect(attrs('<i></i>').influence).toBeNull();
   });
 
   it('parses and clamps numbers, ignores garbage', () => {
     const a = attrs(
-      '<i data-pl-influence data-pl-strength="9" data-pl-falloff="-4" data-pl-priority="abc" data-pl-padding="12"></i>',
+      '<i data-lc-influence data-lc-strength="9" data-lc-falloff="-4" data-lc-priority="abc" data-lc-padding="12"></i>',
     ).influence;
     expect(a).toEqual({ strength: 2, falloff: 0.2, padding: 12 });
   });
 
   it('validates colors with isHexColor and defaults colorMix to 1 when a color is set', () => {
-    expect(attrs('<i data-pl-influence data-pl-color="#F00"></i>').influence).toEqual({
+    expect(attrs('<i data-lc-influence data-lc-color="#F00"></i>').influence).toEqual({
       color: '#ff0000',
       colorMix: 1,
     });
-    expect(attrs('<i data-pl-influence data-pl-color="red"></i>').influence).toEqual({});
+    expect(attrs('<i data-lc-influence data-lc-color="red"></i>').influence).toEqual({});
     expect(
-      attrs('<i data-pl-influence data-pl-color="#00f" data-pl-color-mix="0.3"></i>').influence,
+      attrs('<i data-lc-influence data-lc-color="#00f" data-lc-color-mix="0.3"></i>').influence,
     ).toEqual({ color: '#0000ff', colorMix: 0.3 });
   });
 
   it('validates enums: type (attribute value shorthand), track, pulse, lift', () => {
-    expect(attrs('<i data-pl-influence="shadow"></i>').influence).toEqual({ type: 'shadow' });
-    expect(attrs('<i data-pl-influence="shadow" data-pl-type="repel"></i>').influence?.type).toBe(
+    expect(attrs('<i data-lc-influence="shadow"></i>').influence).toEqual({ type: 'shadow' });
+    expect(attrs('<i data-lc-influence="shadow" data-lc-type="repel"></i>').influence?.type).toBe(
       'repel',
     );
-    expect(attrs('<i data-pl-influence data-pl-type="nope"></i>').influence).toEqual({});
-    expect(attrs('<i data-pl-influence data-pl-track="frame"></i>').influence?.track).toBe('frame');
+    expect(attrs('<i data-lc-influence data-lc-type="nope"></i>').influence).toEqual({});
+    expect(attrs('<i data-lc-influence data-lc-track="frame"></i>').influence?.track).toBe('frame');
     expect(
-      attrs('<i data-pl-influence data-pl-track="manual"></i>').influence?.track,
+      attrs('<i data-lc-influence data-lc-track="manual"></i>').influence?.track,
     ).toBeUndefined();
-    expect(attrs('<i data-pl-pulse="hover"></i>').pulse).toBe('hover');
-    expect(attrs('<i data-pl-pulse="tap"></i>').pulse).toBeNull();
-    expect(attrs('<i data-pl-lift="click"></i>').lift).toBe('click');
-    expect(attrs('<i data-pl-influence="false"></i>').influence).toBeNull();
+    expect(attrs('<i data-lc-pulse="hover"></i>').pulse).toBe('hover');
+    expect(attrs('<i data-lc-pulse="tap"></i>').pulse).toBeNull();
+    expect(attrs('<i data-lc-lift="click"></i>').lift).toBe('click');
+    expect(attrs('<i data-lc-influence="false"></i>').influence).toBeNull();
   });
 });
 
 describe('auto-binding', () => {
   it('binds descendants and applies parsed options', async () => {
     mount(
-      `<pixel-life>
-        <div id="d" data-pl-influence data-pl-strength="9" data-pl-color="#f00"></div>
+      `<lumi-cells>
+        <div id="d" data-lc-influence data-lc-strength="9" data-lc-color="#f00"></div>
         <p id="plain"></p>
-      </pixel-life>`,
+      </lumi-cells>`,
     );
     await flush();
     const inst = live()[0] as Fake;
@@ -597,27 +597,27 @@ describe('auto-binding', () => {
   });
 
   it('binds elements added later, updates on attribute change, disposes on removal', async () => {
-    const el = mount('<pixel-life></pixel-life>');
+    const el = mount('<lumi-cells></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     const child = document.createElement('div');
-    child.setAttribute('data-pl-influence', '');
+    child.setAttribute('data-lc-influence', '');
     el.append(child);
     await flush();
     expect(inst.handles).toHaveLength(1);
     const handle = inst.handles[0] as Fake['handles'][number];
 
-    child.setAttribute('data-pl-strength', '1.5');
+    child.setAttribute('data-lc-strength', '1.5');
     await flush();
     expect(handle.updates).toEqual([{ strength: 1.5 }]);
     expect(inst.handles).toHaveLength(1); // updated in place, never re-added
 
-    child.removeAttribute('data-pl-strength');
+    child.removeAttribute('data-lc-strength');
     await flush();
     expect(inst.handles).toHaveLength(2); // a removed key cannot be unset: rebind
     expect(handle.disposed).toBe(true);
 
-    child.setAttribute('data-pl-track', 'frame');
+    child.setAttribute('data-lc-track', 'frame');
     await flush();
     expect(inst.handles).toHaveLength(3); // track is fixed at bind time
 
@@ -627,7 +627,7 @@ describe('auto-binding', () => {
   });
 
   it('disposes bindings when the element is torn down', async () => {
-    const el = mount('<pixel-life><div data-pl-influence></div></pixel-life>');
+    const el = mount('<lumi-cells><div data-lc-influence></div></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     el.remove();
@@ -635,14 +635,14 @@ describe('auto-binding', () => {
     expect(inst.handles.every((h) => h.disposed)).toBe(true);
   });
 
-  it('binds portals through data-pl-for anywhere in the document', async () => {
-    mount('<pixel-life id="bg"></pixel-life>');
+  it('binds portals through data-lc-for anywhere in the document', async () => {
+    mount('<lumi-cells id="bg"></lumi-cells>');
     const outside = document.createElement('div');
-    outside.setAttribute('data-pl-for', 'bg');
-    outside.setAttribute('data-pl-influence', '');
+    outside.setAttribute('data-lc-for', 'bg');
+    outside.setAttribute('data-lc-influence', '');
     const stranger = document.createElement('div');
-    stranger.setAttribute('data-pl-for', 'other');
-    stranger.setAttribute('data-pl-influence', '');
+    stranger.setAttribute('data-lc-for', 'other');
+    stranger.setAttribute('data-lc-influence', '');
     document.body.append(outside, stranger);
     await flush();
     const inst = live()[0] as Fake;
@@ -653,10 +653,10 @@ describe('auto-binding', () => {
     expect(inst.handles[0]?.disposed).toBe(true);
   });
 
-  it('a bare data-pl-for is shorthand for an influence', async () => {
-    mount('<pixel-life id="bg"></pixel-life>');
+  it('a bare data-lc-for is shorthand for an influence', async () => {
+    mount('<lumi-cells id="bg"></lumi-cells>');
     const outside = document.createElement('div');
-    outside.setAttribute('data-pl-for', 'bg');
+    outside.setAttribute('data-lc-for', 'bg');
     document.body.append(outside);
     await flush();
     expect(live()[0]?.handles).toHaveLength(1);
@@ -664,20 +664,20 @@ describe('auto-binding', () => {
 
   it('binds portals that existed before the element connected', async () => {
     const outside = document.createElement('div');
-    outside.setAttribute('data-pl-for', 'late');
-    outside.setAttribute('data-pl-influence', '');
+    outside.setAttribute('data-lc-for', 'late');
+    outside.setAttribute('data-lc-influence', '');
     document.body.append(outside);
-    mount('<pixel-life id="late"></pixel-life>');
+    mount('<lumi-cells id="late"></lumi-cells>');
     await flush();
     expect(live()[0]?.handles.map((h) => h.el)).toEqual([outside]);
   });
 
   it('nested elements own their own descendants', async () => {
     mount(
-      `<pixel-life id="outer">
-        <div id="a" data-pl-influence></div>
-        <pixel-life id="inner"><div id="b" data-pl-influence></div></pixel-life>
-      </pixel-life>`,
+      `<lumi-cells id="outer">
+        <div id="a" data-lc-influence></div>
+        <lumi-cells id="inner"><div id="b" data-lc-influence></div></lumi-cells>
+      </lumi-cells>`,
     );
     await flush();
     const byHost = new Map(
@@ -690,12 +690,12 @@ describe('auto-binding', () => {
     expect(byHost.get('inner')).toEqual(['b']);
   });
 
-  it('data-pl-pulse and data-pl-lift trigger the instance', async () => {
+  it('data-lc-pulse and data-lc-lift trigger the instance', async () => {
     mount(
-      `<pixel-life>
-        <button id="p" data-pl-pulse="click" data-pl-color="#f00" data-pl-strength="1.5">p</button>
-        <button id="l" data-pl-lift="hover">l</button>
-      </pixel-life>`,
+      `<lumi-cells>
+        <button id="p" data-lc-pulse="click" data-lc-color="#f00" data-lc-strength="1.5">p</button>
+        <button id="l" data-lc-lift="hover">l</button>
+      </lumi-cells>`,
     );
     await flush();
     const inst = live()[0] as Fake;
@@ -714,14 +714,14 @@ describe('auto-binding', () => {
     expect(inst.lifts).toEqual([{ x: 5, y: 6, space: 'client' }]);
 
     // Removing the attribute detaches the listener.
-    p.removeAttribute('data-pl-pulse');
+    p.removeAttribute('data-lc-pulse');
     await flush();
     p.dispatchEvent(new MouseEvent('click', { clientX: 1, clientY: 1, detail: 1 }));
     expect(inst.pulses).toHaveLength(1);
   });
 
   it('forwards pointer events from slotted content to the stage while interactive', async () => {
-    const el = mount('<pixel-life><div id="c"></div></pixel-life>');
+    const el = mount('<lumi-cells><div id="c"></div></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
     const stage = el.shadowRoot?.querySelector('.stage') as HTMLElement;
@@ -747,14 +747,14 @@ describe('document-wide observer', () => {
     const observe = vi.spyOn(MutationObserver.prototype, 'observe');
     const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect');
     try {
-      const el = mount('<pixel-life></pixel-life>');
+      const el = mount('<lumi-cells></lumi-cells>');
       await flush();
       expect(documentObserves(observe)).toBe(0);
 
       el.id = 'bg';
       expect(documentObserves(observe)).toBe(1);
       const outside = document.createElement('div');
-      outside.setAttribute('data-pl-for', 'bg');
+      outside.setAttribute('data-lc-for', 'bg');
       document.body.append(outside);
       await flush();
       expect(live()[0]?.handles.map((h) => h.el)).toEqual([outside]);
@@ -774,7 +774,7 @@ describe('document-wide observer', () => {
   });
 
   it('still binds descendants of an element without an id', async () => {
-    mount('<pixel-life><div data-pl-influence></div></pixel-life>');
+    mount('<lumi-cells><div data-lc-influence></div></lumi-cells>');
     await flush();
     expect(live()[0]?.handles).toHaveLength(1);
   });

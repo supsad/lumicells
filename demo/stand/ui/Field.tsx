@@ -49,16 +49,16 @@ export function Field({
   const title = typeof label === 'string' ? label : undefined;
   return (
     <div
-      className={cx('plui-field', `plui-field--${layout}`, className)}
+      className={cx('lcui-field', `lcui-field--${layout}`, className)}
       data-disabled={disabled || undefined}
       data-changed={changed || undefined}
     >
-      <div className="plui-field__row">
-        <div className="plui-field__labelwrap">
+      <div className="lcui-field__row">
+        <div className="lcui-field__labelwrap">
           <label
             id={labelId}
             htmlFor={htmlFor}
-            className="plui-field__label"
+            className="lcui-field__label"
             title={onReset ? `${title ?? ''}${title ? ' — ' : ''}двойной клик: сбросить` : title}
             onDoubleClick={() => !disabled && changed && onReset?.()}
           >
@@ -68,7 +68,7 @@ export function Field({
           {onReset && (
             <button
               type="button"
-              className="plui-field__reset"
+              className="lcui-field__reset"
               onClick={onReset}
               disabled={disabled || !changed}
               tabIndex={changed && !disabled ? 0 : -1}
@@ -79,7 +79,7 @@ export function Field({
             </button>
           )}
         </div>
-        <div className="plui-field__control">{children}</div>
+        <div className="lcui-field__control">{children}</div>
       </div>
       {(hint || path) && <FieldPop hint={hint} path={path} />}
     </div>
@@ -90,12 +90,12 @@ function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
   const id = useId();
   const [copied, flash] = useFlash();
   return (
-    <div className="plui-field__pop" id={id}>
-      {hint && <div className="plui-field__hint">{hint}</div>}
+    <div className="lcui-field__pop" id={id}>
+      {hint && <div className="lcui-field__hint">{hint}</div>}
       {path && (
         <button
           type="button"
-          className={cx('plui-path', copied && 'is-done')}
+          className={cx('lcui-path', copied && 'is-done')}
           onClick={async () => {
             if (await copyText(path)) flash();
           }}
@@ -113,7 +113,7 @@ function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
 export function ModulatedBadge({ effective, decimals }: { effective: number; decimals: number }) {
   return (
     <span
-      className="plui-modbadge"
+      className="lcui-modbadge"
       title={`Значение изменяется модуляцией. Эффективное: ${effective.toFixed(decimals)}`}
     >
       мод.

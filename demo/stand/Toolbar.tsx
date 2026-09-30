@@ -1,7 +1,7 @@
 /** Toolbar above the stage: preset, stage size, toggles, debug view, history and file actions. */
 
-import { diffConfigs, PRESET_IDS, PRESETS, type PresetId } from 'pixel-life';
-import { usePixelLife } from 'pixel-life/react';
+import { diffConfigs, PRESET_IDS, PRESETS, type PresetId } from 'lumicells';
+import { useLumiCells } from 'lumicells/react';
 import { memo, type ReactNode } from 'react';
 import { DEBUG_VIEWS, MAX_STAGE, MIN_STAGE, type Prefs, SIZE_MODES, type SizeMode } from './prefs';
 import { useSelector, useStore } from './store';
@@ -19,7 +19,7 @@ interface ToolbarProps {
 
 function Glyph({ d }: { d: string }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="plui-icon">
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="lcui-icon">
       <path
         d={d}
         fill="none"
@@ -87,7 +87,7 @@ export const StandToolbar = memo(function StandToolbar({
   onCopyLink,
 }: ToolbarProps) {
   const store = useStore();
-  const instance = usePixelLife();
+  const instance = useLumiCells();
   const presetId = useSelector((s) => s.presetId);
   const changed = useSelector((s) => diffConfigs(s.cfg, s.presetCfg).length);
   const canUndo = useSelector((s) => s.canUndo);

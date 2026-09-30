@@ -9,30 +9,30 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react';
-import type { PixelLife } from '../core/pixel-life';
+import type { LumiCells } from '../core/lumi-cells';
 import type {
   BindElementOptions,
   InfluenceHandle,
   InfluenceOptions,
+  LumiCellsEvents,
   ModulatablePath,
   ModulateOptions,
   ModulationSource,
-  PixelLifeEvents,
   PulseOptions,
   Stats,
 } from '../core/types';
 import { needsRebind } from '../element/rebind';
-import { PixelLifeContext } from './context';
+import { LumiCellsContext } from './context';
 
 const NO_OPTIONS: BindElementOptions = {};
 
 /**
- * The instance of the nearest <PixelLife>; null only on the server, before mount and after
+ * The instance of the nearest <LumiCells>; null only on the server, before mount and after
  * unmount. It is provided even when WebGL2 is unavailable: check `instance.supported` (or use
  * the component's `fallback` prop) to pick a static variant.
  */
-export function usePixelLife(): PixelLife | null {
-  return useContext(PixelLifeContext);
+export function useLumiCells(): LumiCells | null {
+  return useContext(LumiCellsContext);
 }
 
 function shallowEqual(a: object, b: object): boolean {
@@ -46,7 +46,7 @@ function shallowEqual(a: object, b: object): boolean {
 }
 
 interface Bound {
-  instance: PixelLife;
+  instance: LumiCells;
   el: Element;
   handle: InfluenceHandle;
   opts: BindElementOptions;
@@ -63,7 +63,7 @@ export function useInfluence(
   ref: RefObject<Element | null>,
   opts: BindElementOptions = NO_OPTIONS,
 ): RefObject<InfluenceHandle | null> {
-  const instance = usePixelLife();
+  const instance = useLumiCells();
   const bound = useRef<Bound | null>(null);
   const handleRef = useRef<InfluenceHandle | null>(null);
 
@@ -124,7 +124,7 @@ export function useModulator(
   source: ModulationSource,
   opts?: ModulateOptions,
 ): void {
-  const instance = usePixelLife();
+  const instance = useLumiCells();
   const sourceRef = useRef(source);
   useEffect(() => {
     sourceRef.current = source;
@@ -145,7 +145,7 @@ export function useModulator(
 
 /** Stable callback that emits a pulse (no-op while there is no instance). */
 export function usePulse(): (opts: PulseOptions) => void {
-  const instance = usePixelLife();
+  const instance = useLumiCells();
   const ref = useRef(instance);
   useEffect(() => {
     ref.current = instance;
@@ -155,7 +155,7 @@ export function usePulse(): (opts: PulseOptions) => void {
   }, []);
 }
 
-function createStatsStore(instance: PixelLife | null) {
+function createStatsStore(instance: LumiCells | null) {
   let snapshot: Stats | null = null;
   let off: (() => void) | null = null;
   const listeners = new Set<() => void>();
@@ -184,18 +184,18 @@ function createStatsStore(instance: PixelLife | null) {
 const getServerStats = (): Stats | null => null;
 
 /** Latest stats (about 4 Hz), or null until the first sample. */
-export function usePixelLifeStats(): Stats | null {
-  const instance = usePixelLife();
+export function useLumiCellsStats(): Stats | null {
+  const instance = useLumiCells();
   const store = useMemo(() => createStatsStore(instance), [instance]);
   return useSyncExternalStore(store.subscribe, store.getSnapshot, getServerStats);
 }
 
 /** Subscribes to an instance event; the handler may change every render without resubscribing. */
-export function usePixelLifeEvent<K extends keyof PixelLifeEvents>(
+export function useLumiCellsEvent<K extends keyof LumiCellsEvents>(
   type: K,
-  handler: (event: PixelLifeEvents[K]) => void,
+  handler: (event: LumiCellsEvents[K]) => void,
 ): void {
-  const instance = usePixelLife();
+  const instance = useLumiCells();
   const handlerRef = useRef(handler);
   useEffect(() => {
     handlerRef.current = handler;

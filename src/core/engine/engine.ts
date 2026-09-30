@@ -96,7 +96,7 @@ export class Engine {
       gl = canvas.getContext('webgl2', { ...attrs, failIfMajorPerformanceCaveat: false });
       caveat = !!gl;
     }
-    if (!gl) throw new EngineError('no-webgl2', '[pixel-life] WebGL2 is not available');
+    if (!gl) throw new EngineError('no-webgl2', '[lumicells] WebGL2 is not available');
     this.gl = gl;
     this.caps = probeCaps(gl, opts.forceRgba8 ?? false);
     this.softwareFallback = caveat || this.caps.software;
@@ -110,7 +110,7 @@ export class Engine {
       const missing = missingParamMacros(opts.paramsPrelude);
       if (missing.length > 0) {
         console.warn(
-          `[pixel-life] params prelude lacks ${missing.length} macro(s), using defaults: ${missing.join(', ')}`,
+          `[lumicells] params prelude lacks ${missing.length} macro(s), using defaults: ${missing.join(', ')}`,
         );
       }
     }
@@ -142,7 +142,7 @@ export class Engine {
     this.paramsUbo = gl.createBuffer();
     this.frameUbo = gl.createBuffer();
     if (!this.paramsUbo || !this.frameUbo)
-      throw new Error('[pixel-life] cannot create uniform buffers');
+      throw new Error('[lumicells] cannot create uniform buffers');
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.paramsUbo);
     gl.bufferData(gl.UNIFORM_BUFFER, this.paramsFloats * 4, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.frameUbo);
@@ -281,7 +281,7 @@ export class Engine {
     // Life: keep the automaton across grid changes (center-aligned remap), then step/reset.
     const life0 = res.life[0];
     const life1 = res.life[1];
-    if (!life0 || !life1) throw new Error('[pixel-life] life targets missing');
+    if (!life0 || !life1) throw new Error('[lumicells] life targets missing');
     if (change === 2) {
       if (res.orphanLife && res.prevW > 0) {
         p.life.run(LIFE_MODE_REMAP, res.orphanLife.tex, life0.fb, W, H, res.prevW, res.prevH, f);
@@ -303,7 +303,7 @@ export class Engine {
     const lifeCur = res.life[res.lifeCur];
     const { fieldFb, bloom, bloomTmp, haze, hazeTmp, glow } = res;
     if (!fieldFb || !lifeCur || !bloom || !bloomTmp || !haze || !hazeTmp || !glow) {
-      throw new Error('[pixel-life] cell targets missing');
+      throw new Error('[lumicells] cell targets missing');
     }
     p.field.run(fieldFb, W, H, lifeCur.tex);
     // The glow passes run only when the composite shows their result: not with both strengths
@@ -455,7 +455,7 @@ export class Engine {
       gl.deleteBuffer(this.frameUbo);
       gl.deleteTexture(this.lutTex);
     } catch (err) {
-      console.warn('[pixel-life] engine dispose failed', err);
+      console.warn('[lumicells] engine dispose failed', err);
     }
     this.passes = null;
     this.res = null;

@@ -6,7 +6,7 @@
  * Exposed for automated checks: window.pl, window.card, window.recreate(n), window.bench().
  */
 
-import { type InfluenceHandle, onBeforeFrame, PixelLife, type Stats } from 'pixel-life';
+import { type InfluenceHandle, LumiCells, onBeforeFrame, type Stats } from 'lumicells';
 
 const bg = document.getElementById('bg') as HTMLElement;
 const title = document.getElementById('title') as HTMLElement;
@@ -56,8 +56,8 @@ onBeforeFrame((now) => {
 // -------------------------------------------------------------------------------------------
 // Instances
 
-function createMain(): PixelLife {
-  const pl = new PixelLife(bg, { config: { interaction: { pointer: pointerOn } } });
+function createMain(): LumiCells {
+  const pl = new LumiCells(bg, { config: { interaction: { pointer: pointerOn } } });
   const handles: InfluenceHandle[] = [];
   for (const b of bubbles) {
     handles.push(
@@ -95,8 +95,8 @@ function createMain(): PixelLife {
   return pl;
 }
 
-function createCard(): PixelLife {
-  const pl = new PixelLife(cardHost, {
+function createCard(): LumiCells {
+  const pl = new LumiCells(cardHost, {
     config: {
       grid: { count: 14 },
       render: { overflow: 60 },
@@ -208,4 +208,4 @@ document.getElementById('btn-pointer')?.addEventListener('click', () => {
   pl.set('interaction.pointer', pointerOn);
 });
 
-Object.assign(window, { pl, card, recreate, bench, PixelLife });
+Object.assign(window, { pl, card, recreate, bench, LumiCells });

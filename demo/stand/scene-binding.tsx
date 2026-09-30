@@ -14,8 +14,8 @@
  * remembers the elements and attaches influences whenever an instance shows up.
  */
 
-import type { BindElementOptions, InfluenceHandle, PixelLife } from 'pixel-life';
-import { usePixelLife } from 'pixel-life/react';
+import type { BindElementOptions, InfluenceHandle, LumiCells } from 'lumicells';
+import { useLumiCells } from 'lumicells/react';
 import { memo, useEffect } from 'react';
 import { type BubbleInfo, DemoScene, type DemoSceneProps } from '../scene';
 import type { ModulationTracker, TrackedModulator } from './modulation';
@@ -49,15 +49,15 @@ function centerOf(el: Element): { x: number; y: number } {
 
 /** Center of the whole scene (the composition center), in client px. */
 function sceneCenter(el: Element): { x: number; y: number } {
-  return centerOf(el.closest('.pl-scene') ?? el);
+  return centerOf(el.closest('.lc-scene') ?? el);
 }
 
 function scenePhase(el: Element): string | undefined {
-  return el.closest<HTMLElement>('.pl-scene')?.dataset.phase;
+  return el.closest<HTMLElement>('.lc-scene')?.dataset.phase;
 }
 
 export class SceneBinder {
-  instance: PixelLife | null = null;
+  instance: LumiCells | null = null;
   /** Number of bubbles under the pointer; feeds the energy modulator. */
   hoveredCount = 0;
 
@@ -70,7 +70,7 @@ export class SceneBinder {
   constructor(private tracker: ModulationTracker) {}
 
   /** Called by <SceneLayer> when the WebGL instance appears, changes or goes away. */
-  setInstance(instance: PixelLife | null): void {
+  setInstance(instance: LumiCells | null): void {
     this.detachAll();
     this.instance = instance;
     if (!instance) return;
@@ -270,9 +270,9 @@ export class SceneBinder {
   };
 }
 
-/** Renders the demo scene inside <PixelLife> and connects it to the instance from context. */
+/** Renders the demo scene inside <LumiCells> and connects it to the instance from context. */
 export const SceneLayer = memo(function SceneLayer({ binder }: { binder: SceneBinder }) {
-  const pl = usePixelLife();
+  const pl = useLumiCells();
   useEffect(() => {
     binder.setInstance(pl);
     return () => binder.setInstance(null);

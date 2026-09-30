@@ -4,7 +4,7 @@
  * so every modulator created by the stand goes through `tracker.modulate`.
  */
 
-import type { ModulatablePath, ModulateOptions, ModulationSource, PixelLife } from 'pixel-life';
+import type { LumiCells, ModulatablePath, ModulateOptions, ModulationSource } from 'lumicells';
 import { createContext, useContext, useSyncExternalStore } from 'react';
 
 const POLL_MS = 250; // 4 Hz: enough for a readout, invisible next to the render loop
@@ -14,13 +14,13 @@ export interface TrackedModulator {
 }
 
 export class ModulationTracker {
-  private instance: PixelLife | null = null;
+  private instance: LumiCells | null = null;
   private counts = new Map<string, number>();
   private values = new Map<string, number>();
   private listeners = new Set<() => void>();
   private timer = 0;
 
-  setInstance(instance: PixelLife | null): void {
+  setInstance(instance: LumiCells | null): void {
     this.instance = instance;
     this.values.clear();
     this.syncTimer();
@@ -28,7 +28,7 @@ export class ModulationTracker {
 
   /** `instance.modulate` plus bookkeeping. Dispose the result, not the raw handle. */
   modulate(
-    instance: PixelLife,
+    instance: LumiCells,
     path: ModulatablePath,
     source: ModulationSource,
     opts?: ModulateOptions,

@@ -1,42 +1,42 @@
 {
-  "name": "pixel-life",
+  "name": "lumicells",
   "version": "0.1.0",
   "description": "Живой пиксельный фон на WebGL2: ядро без зависимостей, React-обёртка, Web Component и стенд настройки",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
-  "main": "./dist/lib/pixel-life.js",
-  "module": "./dist/lib/pixel-life.js",
+  "main": "./dist/lib/lumicells.js",
+  "module": "./dist/lib/lumicells.js",
   "types": "./dist/types/core/index.d.ts",
-  "unpkg": "./dist/lib/pixel-life-element.iife.js",
-  "jsdelivr": "./dist/lib/pixel-life-element.iife.js",
+  "unpkg": "./dist/lib/lumicells-element.iife.js",
+  "jsdelivr": "./dist/lib/lumicells-element.iife.js",
   "exports": {
     ".": {
       "types": "./dist/types/core/index.d.ts",
-      "import": "./dist/lib/pixel-life.js",
-      "default": "./dist/lib/pixel-life.js"
+      "import": "./dist/lib/lumicells.js",
+      "default": "./dist/lib/lumicells.js"
     },
     "./schema": {
       "types": "./dist/types/schema/index.d.ts",
-      "import": "./dist/lib/pixel-life-schema.js",
-      "default": "./dist/lib/pixel-life-schema.js"
+      "import": "./dist/lib/lumicells-schema.js",
+      "default": "./dist/lib/lumicells-schema.js"
     },
     "./react": {
       "types": "./dist/types/react/index.d.ts",
-      "import": "./dist/lib/pixel-life-react.js",
-      "default": "./dist/lib/pixel-life-react.js"
+      "import": "./dist/lib/lumicells-react.js",
+      "default": "./dist/lib/lumicells-react.js"
     },
     "./element": {
       "types": "./dist/types/element/index.d.ts",
-      "import": "./dist/lib/pixel-life-element.js",
-      "default": "./dist/lib/pixel-life-element.js"
+      "import": "./dist/lib/lumicells-element.js",
+      "default": "./dist/lib/lumicells-element.js"
     },
     "./element/define": {
       "types": "./dist/types/element/define.d.ts",
-      "import": "./dist/lib/pixel-life-element-define.js",
-      "default": "./dist/lib/pixel-life-element-define.js"
+      "import": "./dist/lib/lumicells-element-define.js",
+      "default": "./dist/lib/lumicells-element-define.js"
     },
-    "./schema.json": "./dist/lib/pixel-life.schema.json",
+    "./schema.json": "./dist/lib/lumicells.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
@@ -46,8 +46,8 @@
   "sideEffects": [
     "./src/element/define.ts",
     "./src/element/iife.ts",
-    "./dist/lib/pixel-life-element-define.js",
-    "./dist/lib/pixel-life-element.iife.js"
+    "./dist/lib/lumicells-element-define.js",
+    "./dist/lib/lumicells-element.iife.js"
   ],
   "scripts": {
     "dev": "vite",

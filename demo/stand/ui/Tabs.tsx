@@ -64,9 +64,9 @@ export function Tabs({
   return (
     <Ctx.Provider value={ctx}>
       <div
-        className={cx('plui-tabs', `plui-tabs--${variant}`, fill && 'plui-tabs--fill', className)}
+        className={cx('lcui-tabs', `lcui-tabs--${variant}`, fill && 'lcui-tabs--fill', className)}
       >
-        <div className="plui-tabs__list" role="tablist" aria-label={ariaLabel}>
+        <div className="lcui-tabs__list" role="tablist" aria-label={ariaLabel}>
           {items.map((it, i) => {
             const selected = it.id === value;
             return (
@@ -79,7 +79,7 @@ export function Tabs({
                 aria-controls={`${base}-panel-${it.id}`}
                 tabIndex={selected ? 0 : -1}
                 disabled={it.disabled}
-                className={cx('plui-tab', selected && 'is-selected')}
+                className={cx('lcui-tab', selected && 'is-selected')}
                 onClick={() => onChange(it.id)}
                 onKeyDown={(e) => {
                   if (e.key === 'ArrowRight') focusTab(1, i);
@@ -92,7 +92,7 @@ export function Tabs({
               >
                 {it.icon && <Icon name={it.icon} size={12} />}
                 <span>{it.label}</span>
-                {it.badge != null && <span className="plui-tab__badge">{it.badge}</span>}
+                {it.badge != null && <span className="lcui-tab__badge">{it.badge}</span>}
               </button>
             );
           })}
@@ -121,7 +121,7 @@ export function TabPanel({ value, children, className, keepMounted }: TabPanelPr
       id={ctx ? `${ctx.base}-panel-${value}` : undefined}
       aria-labelledby={ctx ? `${ctx.base}-tab-${value}` : undefined}
       hidden={!active}
-      className={cx('plui-tabpanel', className)}
+      className={cx('lcui-tabpanel', className)}
     >
       {children}
     </div>

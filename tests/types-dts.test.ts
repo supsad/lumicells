@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function fixture(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'pl-dts-'));
+  const dir = mkdtempSync(join(tmpdir(), 'lc-dts-'));
   dirs.push(dir);
   for (const [name, text] of Object.entries(files)) {
     const full = join(dir, name);
@@ -31,13 +31,13 @@ describe('fix-dts (node16/nodenext-safe declarations)', () => {
     const dir = fixture({
       'core/index.d.ts': [
         "export * from '../schema';",
-        "export { PixelLife } from './pixel-life';",
+        "export { LumiCells } from './lumi-cells';",
         "export type * from './types';",
         "import './side';",
-        'export declare const x: import("./pixel-life").PixelLife;',
+        'export declare const x: import("./lumi-cells").LumiCells;',
       ].join('\n'),
-      'core/pixel-life.d.ts':
-        "import type { Stats } from '../core/types';\nexport declare class PixelLife {}",
+      'core/lumi-cells.d.ts':
+        "import type { Stats } from '../core/types';\nexport declare class LumiCells {}",
       'core/types.d.ts': 'export interface Stats {}',
       'core/side.d.ts': 'export {};',
       'schema/index.d.ts': "export * from './schema';",
@@ -49,10 +49,10 @@ describe('fix-dts (node16/nodenext-safe declarations)', () => {
     expect(readFileSync(join(dir, 'core/index.d.ts'), 'utf8')).toBe(
       [
         "export * from '../schema/index.js';",
-        "export { PixelLife } from './pixel-life.js';",
+        "export { LumiCells } from './lumi-cells.js';",
         "export type * from './types.js';",
         "import './side.js';",
-        'export declare const x: import("./pixel-life.js").PixelLife;',
+        'export declare const x: import("./lumi-cells.js").LumiCells;',
       ].join('\n'),
     );
     expect(readFileSync(join(dir, 'schema/schema.d.ts'), 'utf8')).toContain(

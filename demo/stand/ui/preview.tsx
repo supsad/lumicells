@@ -64,13 +64,13 @@ const QUICK = [
   { name: 'Моно', colors: ['#ffffff'] },
 ];
 
-const SNIPPET = `import type { PixelLifeConfigInput } from 'pixel-life';
+const SNIPPET = `import type { LumiCellsConfigInput } from 'lumicells';
 
-export const pixelLifeConfig = {
+export const lumiCellsConfig = {
   grid: { columns: 31, gap: 0.27 },
   modes: { sphere: { weight: 1, radius: 0.66 } },
   color: { palette: ['#7a1d5a', '#f21239', '#0476ff'] },
-} satisfies PixelLifeConfigInput;
+} satisfies LumiCellsConfigInput;
 `;
 
 /** Generated controls: checks that ~120 rows stay usable and searchable. */
@@ -190,7 +190,7 @@ function App() {
     <div className="pv-stage">
       <main className="pv-main">
         <header className="pv-head">
-          <h1>Pixel Life — набор контролов</h1>
+          <h1>LumiCells — набор контролов</h1>
           <p>
             Все компоненты стенда. Панель справа — рабочий образец с поиском и 120 сгенерированными
             параметрами.
@@ -321,7 +321,7 @@ function App() {
             <CodeBlock
               code={SNIPPET}
               language="ts"
-              title="pixel-life.config.ts"
+              title="lumicells.config.ts"
               onCopy={() => toasts.push('Скопировано', { tone: 'success', duration: 1500 })}
             />
           </Card>
@@ -404,7 +404,7 @@ function App() {
       <div className="pv-dock">
         <Panel
           title="Стенд"
-          subtitle="pixel-life · образец панели"
+          subtitle="LumiCells · образец панели"
           side="right"
           width={360}
           collapsed={collapsed}

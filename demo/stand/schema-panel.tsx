@@ -13,7 +13,7 @@ import {
   PRESET_IDS,
   PRESETS,
   type Vec2Field,
-} from 'pixel-life';
+} from 'lumicells';
 import {
   createContext,
   memo,

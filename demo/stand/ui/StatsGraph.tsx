@@ -22,7 +22,7 @@ export interface StatsGraphProps {
   warnAbove?: number;
   decimals?: number;
   height?: number;
-  /** CSS color overriding the accent (defaults to --plui-azure). */
+  /** CSS color overriding the accent (defaults to --lcui-azure). */
   color?: string;
   className?: string;
 }
@@ -37,12 +37,12 @@ interface Palette {
 function readPalette(el: HTMLElement, color: string | undefined): Palette {
   const cs = getComputedStyle(el);
   const v = (name: string, fb: string) => cs.getPropertyValue(name).trim() || fb;
-  const line = color ?? v('--plui-azure', '#0476ff');
+  const line = color ?? v('--lcui-azure', '#0476ff');
   return {
     line,
-    fillTop: color ?? v('--plui-azure', '#0476ff'),
-    warn: v('--plui-accent', '#f21239'),
-    guide: v('--plui-border-strong', 'rgba(255,255,255,0.25)'),
+    fillTop: color ?? v('--lcui-azure', '#0476ff'),
+    warn: v('--lcui-accent', '#f21239'),
+    guide: v('--lcui-border-strong', 'rgba(255,255,255,0.25)'),
   };
 }
 
@@ -254,22 +254,22 @@ export function StatsGraph({
   }, [min, max, warnAbove, decimals, color, guidesKey, schedule]);
 
   return (
-    <div ref={root} className={cx('plui-stats', className)}>
-      <div className="plui-stats__head">
-        <span className="plui-stats__label">{label}</span>
-        <span className="plui-stats__value">
+    <div ref={root} className={cx('lcui-stats', className)}>
+      <div className="lcui-stats__head">
+        <span className="lcui-stats__label">{label}</span>
+        <span className="lcui-stats__value">
           <span ref={valueEl}>—</span>
-          {unit && <span className="plui-stats__unit">{unit}</span>}
+          {unit && <span className="lcui-stats__unit">{unit}</span>}
         </span>
       </div>
       <canvas
         ref={canvas}
-        className="plui-stats__canvas"
+        className="lcui-stats__canvas"
         style={{ height }}
         role="img"
         aria-label={`График: ${label}`}
       />
-      <span ref={rangeEl} className="plui-stats__range" />
+      <span ref={rangeEl} className="lcui-stats__range" />
     </div>
   );
 }

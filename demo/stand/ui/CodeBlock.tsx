@@ -32,13 +32,13 @@ export function CodeBlock({
     }
   };
   return (
-    <figure className={cx('plui-code', className)}>
-      <figcaption className="plui-code__head">
-        <span className="plui-code__title">{title ?? language ?? 'code'}</span>
-        {title && language && <span className="plui-code__lang">{language}</span>}
+    <figure className={cx('lcui-code', className)}>
+      <figcaption className="lcui-code__head">
+        <span className="lcui-code__title">{title ?? language ?? 'code'}</span>
+        {title && language && <span className="lcui-code__lang">{language}</span>}
         <button
           type="button"
-          className={cx('plui-code__copy', copied && 'is-done')}
+          className={cx('lcui-code__copy', copied && 'is-done')}
           onClick={doCopy}
           aria-label="Скопировать код"
         >
@@ -47,7 +47,7 @@ export function CodeBlock({
         </button>
       </figcaption>
       <pre
-        className={cx('plui-code__pre', wrap && 'is-wrap')}
+        className={cx('lcui-code__pre', wrap && 'is-wrap')}
         style={{ maxHeight }}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard reachable
         tabIndex={0}

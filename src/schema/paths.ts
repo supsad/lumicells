@@ -4,7 +4,7 @@
  */
 
 import { type FieldDef, type GroupDef, isGroup, type SchemaNode } from './fields';
-import { type ParamPath, type ParamValue, type PixelLifeConfig, schema } from './schema';
+import { type LumiCellsConfig, type ParamPath, type ParamValue, schema } from './schema';
 
 export type SchemaVisitor = (
   node: SchemaNode,
@@ -79,7 +79,7 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-export function getPath<P extends ParamPath>(cfg: PixelLifeConfig, path: P): ParamValue<P>;
+export function getPath<P extends ParamPath>(cfg: LumiCellsConfig, path: P): ParamValue<P>;
 export function getPath(cfg: unknown, path: string): unknown;
 export function getPath(cfg: unknown, path: string): unknown {
   let cur: unknown = cfg;

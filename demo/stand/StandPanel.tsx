@@ -27,7 +27,7 @@ export const StandPanel = memo(function StandPanel({ prefs, patchPrefs }: StandP
 
   return (
     <Panel
-      title="Pixel Life"
+      title="LumiCells"
       subtitle="Стенд: параметры строятся из схемы"
       width={380}
       collapsed={prefs.panelCollapsed}

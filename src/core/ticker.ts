@@ -1,5 +1,5 @@
 /**
- * One requestAnimationFrame loop shared by every PixelLife instance on the page.
+ * One requestAnimationFrame loop shared by every LumiCells instance on the page.
  *
  * Several backgrounds (cards, hero, modal) cost a single rAF callback and see the same timestamp,
  * so their animations stay in phase. Each frame runs in three strict phases:

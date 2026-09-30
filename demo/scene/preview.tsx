@@ -12,9 +12,9 @@ const frameSize = Number.isFinite(sizeParam) && sizeParam >= 100 ? sizeParam : 6
 /** Static CSS stand-in for the WebGL background, only to judge the scene against the reference. */
 function StaticBackground({ grid }: { grid: boolean }) {
   return (
-    <div className="pl-preview-bg">
-      <div className="pl-preview-art" />
-      {grid ? <div className="pl-preview-grid" /> : null}
+    <div className="lc-preview-bg">
+      <div className="lc-preview-art" />
+      {grid ? <div className="lc-preview-grid" /> : null}
     </div>
   );
 }
@@ -60,8 +60,8 @@ function Preview() {
   const label = (i: BubbleInfo) => `${i.label}${i.selected ? ' (выбрано)' : ''}`;
 
   return (
-    <div className="pl-preview">
-      <div className="pl-preview-bar">
+    <div className="lc-preview">
+      <div className="lc-preview-bar">
         <button type="button" onClick={toggleFull}>
           {full ? 'Выйти из полного экрана' : 'Полный экран'}
         </button>
@@ -71,11 +71,11 @@ function Preview() {
         <label>
           <input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> сетка
         </label>
-        <span className="pl-preview-count">bubbles mounted: {mounted}</span>
+        <span className="lc-preview-count">bubbles mounted: {mounted}</span>
       </div>
       <div
         ref={frameRef}
-        className={full ? 'pl-preview-frame is-full' : 'pl-preview-frame'}
+        className={full ? 'lc-preview-frame is-full' : 'lc-preview-frame'}
         style={full ? undefined : { width: frameSize, height: frameSize }}
       >
         <StaticBackground grid={grid} />
@@ -97,12 +97,12 @@ function Preview() {
           }}
         />
         {full ? (
-          <button type="button" className="pl-preview-exit" onClick={toggleFull}>
+          <button type="button" className="lc-preview-exit" onClick={toggleFull}>
             Esc
           </button>
         ) : null}
       </div>
-      <ul className="pl-preview-log">
+      <ul className="lc-preview-log">
         {log.map((l, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: append-only debug log
           <li key={`${i}-${l}`}>{l}</li>

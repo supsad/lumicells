@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pixel Life — Web Component</title>
+    <title>LumiCells — Web Component</title>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
@@ -149,7 +149,7 @@
         text-align: center;
       }
 
-      /* A portal: lives outside <pixel-life>, bound through data-pl-for="hero". */
+      /* A portal: lives outside <lumi-cells>, bound through data-lc-for="hero". */
       .portal {
         display: inline-block;
         padding: 10px 18px;
@@ -180,79 +180,79 @@
   <body>
     <main>
       <header>
-        <h1>&lt;pixel-life&gt; без фреймворка</h1>
+        <h1>&lt;lumi-cells&gt; без фреймворка</h1>
         <p>
           Обычный HTML: тег, атрибуты <code>preset</code>, <code>interactive</code>,
-          <code>src</code> и декларативная привязка элементов через <code>data-pl-*</code>.
+          <code>src</code> и декларативная привязка элементов через <code>data-lc-*</code>.
         </p>
       </header>
 
       <section>
         <h2>1. Сцена из HTML-пузырей</h2>
         <p>
-          Каждый пузырь с <code>data-pl-influence</code> подсвечивает сетку под собой,
-          <code>data-pl-pulse="click"</code> запускает круг по клику,
-          <code>data-pl-lift="hover"</code> поднимает пиксели при наведении. Цвет света
-          (<code>data-pl-color</code>) синих пузырей светлее их заливки, чтобы они не сливались с
+          Каждый пузырь с <code>data-lc-influence</code> подсвечивает сетку под собой,
+          <code>data-lc-pulse="click"</code> запускает круг по клику,
+          <code>data-lc-lift="hover"</code> поднимает пиксели при наведении. Цвет света
+          (<code>data-lc-color</code>) синих пузырей светлее их заливки, чтобы они не сливались с
           собственной подсветкой.
         </p>
         <div class="row">
-          <pixel-life id="hero" preset="reference" interactive>
+          <lumi-cells id="hero" preset="reference" interactive>
             <p class="title">выбери, что тебе <mark>интересно</mark></p>
 
             <button type="button"
               class="bubble big blue"
               style="left: 68%; top: 68%"
-              data-pl-influence
-              data-pl-color="#39b8ff"
-              data-pl-strength="0.9"
-              data-pl-pulse="click"
-              data-pl-lift="hover"
+              data-lc-influence
+              data-lc-color="#39b8ff"
+              data-lc-strength="0.9"
+              data-lc-pulse="click"
+              data-lc-lift="hover"
             >
               наука
             </button>
             <button type="button"
               class="bubble"
               style="left: 68%; top: 26%"
-              data-pl-influence
-              data-pl-pulse="click"
-              data-pl-lift="hover"
+              data-lc-influence
+              data-lc-pulse="click"
+              data-lc-lift="hover"
             >
               путешествия
             </button>
             <button type="button"
               class="bubble"
               style="left: 28%; top: 30%"
-              data-pl-influence
-              data-pl-pulse="click"
-              data-pl-lift="hover"
+              data-lc-influence
+              data-lc-pulse="click"
+              data-lc-lift="hover"
             >
               музыка
             </button>
             <button type="button"
               class="bubble"
               style="left: 22%; top: 60%"
-              data-pl-influence="shadow"
-              data-pl-falloff="3"
-              data-pl-pulse="click"
+              data-lc-influence="shadow"
+              data-lc-falloff="3"
+              data-lc-pulse="click"
             >
               тишина
             </button>
             <button type="button"
               class="bubble blue"
               style="left: 40%; top: 80%"
-              data-pl-influence
-              data-pl-color="#39b8ff"
-              data-pl-strength="0.8"
-              data-pl-pulse="click"
-              data-pl-lift="hover"
+              data-lc-influence
+              data-lc-color="#39b8ff"
+              data-lc-strength="0.8"
+              data-lc-pulse="click"
+              data-lc-lift="hover"
             >
               назад
             </button>
-          </pixel-life>
+          </lumi-cells>
 
-          <div class="portal" data-pl-for="hero" data-pl-influence data-pl-pulse="click">
-            Я вне тега: <code>data-pl-for="hero"</code>
+          <div class="portal" data-lc-for="hero" data-lc-influence data-lc-pulse="click">
+            Я вне тега: <code>data-lc-for="hero"</code>
           </div>
         </div>
       </section>
@@ -260,23 +260,23 @@
       <section>
         <h2>2. Второй экземпляр и конфиг из файла</h2>
         <div class="row">
-          <pixel-life id="card" preset="pulse">
+          <lumi-cells id="card" preset="pulse">
             <div class="inner">
               <strong>Пульсация</strong>
               <span>Пресет <code>pulse</code> — круги расходятся от центра.</span>
-              <button type="button" data-pl-pulse="click" data-pl-color="#c43db2">Запустить круг</button>
+              <button type="button" data-lc-pulse="click" data-lc-color="#c43db2">Запустить круг</button>
             </div>
-          </pixel-life>
+          </lumi-cells>
 
           <!-- src is fetched next to the page; the file only lists what differs from the preset. -->
-          <pixel-life id="from-file" src="./pixel-life.config.json">
+          <lumi-cells id="from-file" src="./lumicells.config.json">
             <div class="inner">
               <div>
                 <strong>Конфиг из файла</strong>
-                <p><code>&lt;pixel-life src="./pixel-life.config.json"&gt;</code></p>
+                <p><code>&lt;lumi-cells src="./lumicells.config.json"&gt;</code></p>
               </div>
             </div>
-          </pixel-life>
+          </lumi-cells>
         </div>
       </section>
 
@@ -305,7 +305,7 @@
     </main>
 
     <script type="module">
-      import 'pixel-life/element/define';
+      import 'lumicells/element/define';
 
       const hero = document.getElementById('hero');
       const log = document.getElementById('log');
@@ -315,15 +315,15 @@
       };
 
       // Events are plain CustomEvents and bubble, so one listener on the document sees them all.
-      for (const type of ['pl-ready', 'pl-config', 'pl-error', 'pl-fallback']) {
+      for (const type of ['lc-ready', 'lc-config', 'lc-error', 'lc-fallback']) {
         document.addEventListener(type, (e) => {
           const detail = e.detail;
           const extra =
-            type === 'pl-config'
+            type === 'lc-config'
               ? `${detail.source}: ${detail.changed.length} параметров`
-              : type === 'pl-error'
+              : type === 'lc-error'
                 ? detail.message
-                : type === 'pl-fallback'
+                : type === 'lc-fallback'
                   ? detail.reason
                   : '';
           write(`${type} #${e.target.id} ${extra}`);

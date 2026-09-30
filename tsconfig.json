@@ -17,11 +17,11 @@
     "noEmit": true,
     "types": ["vite/client"],
     "paths": {
-      "pixel-life": ["./src/core/index.ts"],
-      "pixel-life/schema": ["./src/schema/index.ts"],
-      "pixel-life/react": ["./src/react/index.ts"],
-      "pixel-life/element": ["./src/element/index.ts"],
-      "pixel-life/element/define": ["./src/element/define.ts"]
+      "lumicells": ["./src/core/index.ts"],
+      "lumicells/schema": ["./src/schema/index.ts"],
+      "lumicells/react": ["./src/react/index.ts"],
+      "lumicells/element": ["./src/element/index.ts"],
+      "lumicells/element/define": ["./src/element/define.ts"]
     }
   },
   "include": ["src", "demo", "tests"]

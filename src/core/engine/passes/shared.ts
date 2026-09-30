@@ -78,7 +78,7 @@ export class LazyProgram {
   }
 
   get(): Program {
-    if (!this.program) throw new Error('[pixel-life] program used before link');
+    if (!this.program) throw new Error('[lumicells] program used before link');
     return this.program;
   }
 

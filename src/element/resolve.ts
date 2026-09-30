@@ -9,9 +9,9 @@
 import {
   type ConfigIssue,
   deepMerge,
+  type LumiCellsConfig,
+  type LumiCellsConfigInput,
   normalizeConfig,
-  type PixelLifeConfig,
-  type PixelLifeConfigInput,
   type PresetId,
   stableStringify,
 } from '../schema';
@@ -30,14 +30,14 @@ export function overflowToPx(value: boolean | number | null | undefined): number
 export interface ResolveInput {
   preset?: PresetId | null;
   /** Patches applied over the preset, later layers win (e.g. fetched file, then inline config). */
-  layers?: ReadonlyArray<PixelLifeConfigInput | null | undefined>;
+  layers?: ReadonlyArray<LumiCellsConfigInput | null | undefined>;
   /** Shortcut for `interaction.pointer` + `interaction.click`; undefined leaves them alone. */
   interactive?: boolean;
   overflow?: boolean | number | null;
 }
 
 export interface ResolvedConfig {
-  config: PixelLifeConfig;
+  config: LumiCellsConfig;
   /** stableStringify of the normalized config: equal keys mean "nothing to apply". */
   key: string;
   issues: ConfigIssue[];
@@ -45,7 +45,7 @@ export interface ResolvedConfig {
 
 /** Merge order: defaults < preset < layers < shortcut props. Never throws. */
 export function resolveConfig(input: ResolveInput): ResolvedConfig {
-  let raw: PixelLifeConfigInput = input.preset ? { extends: input.preset } : {};
+  let raw: LumiCellsConfigInput = input.preset ? { extends: input.preset } : {};
   for (const layer of input.layers ?? []) {
     if (layer) raw = deepMerge(raw, layer);
   }

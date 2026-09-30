@@ -1,5 +1,5 @@
 /**
- * PixelLife facade: the only class consumers construct.
+ * LumiCells facade: the only class consumers construct.
  *
  * Wires the pure Controller (config layers, tweens, influences, lifts, adaptive quality) to the
  * DOM (host sizing, element tracking, pointer, visibility) and to the GL Engine, all driven by
@@ -15,11 +15,11 @@
 
 import {
   deepMerge,
+  type LumiCellsConfig,
+  type LumiCellsConfigFile,
+  type LumiCellsConfigInput,
   type ParamPath,
   type ParamValue,
-  type PixelLifeConfig,
-  type PixelLifeConfigFile,
-  type PixelLifeConfigInput,
   type PresetId,
   posterCss,
   setPath,
@@ -46,17 +46,17 @@ import type {
   InfluenceOptions,
   InfluenceUpdate,
   LiftOptions,
+  LumiCellsEvents,
+  LumiCellsOptions,
   ModulatablePath,
   ModulateOptions,
   ModulationSource,
   ModulatorHandle,
-  PixelLifeEvents,
-  PixelLifeOptions,
   PulseOptions,
   Stats,
 } from './types';
 
-type Listener<K extends keyof PixelLifeEvents> = (event: PixelLifeEvents[K]) => void;
+type Listener<K extends keyof LumiCellsEvents> = (event: LumiCellsEvents[K]) => void;
 
 let supportedMemo: boolean | undefined;
 let liveInstances = 0;
@@ -76,7 +76,7 @@ interface ConfigBatch {
   paths: Set<ParamPath>;
 }
 
-export class PixelLife {
+export class LumiCells {
   /** Whether WebGL2 is available. Memoized; always false on the server. */
   static isSupported(): boolean {
     if (supportedMemo !== undefined) return supportedMemo;
@@ -116,7 +116,7 @@ export class PixelLife {
   #fallbackSent = false;
   #readyEmitted = false;
   #drawnSinceMount = false;
-  #listeners = new Map<keyof PixelLifeEvents, Set<Listener<never>>>();
+  #listeners = new Map<keyof LumiCellsEvents, Set<Listener<never>>>();
   /** Ordered per-source batches: consecutive calls of one source merge, another starts anew. */
   #pending: ConfigBatch[] = [];
   #flushQueued = false;
@@ -158,10 +158,10 @@ export class PixelLife {
     softwareFallback: false,
   };
 
-  constructor(host: HTMLElement, options: PixelLifeOptions = {}) {
+  constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
     this.host = host;
     // Merge order: defaults < preset < config (< the `interactive` shortcut).
-    const base: PixelLifeConfigInput = options.preset ? { extends: options.preset } : {};
+    const base: LumiCellsConfigInput = options.preset ? { extends: options.preset } : {};
     let input = options.config ? deepMerge(base, options.config) : base;
     if (options.interactive !== undefined) {
       input = deepMerge(input, {
@@ -188,7 +188,7 @@ export class PixelLife {
     liveInstances++;
     if (liveInstances > INSTANCE_WARN && !manyWarned) {
       manyWarned = true;
-      const message = `[pixel-life] ${liveInstances} live instances: each owns a WebGL context (browsers keep ~16). Destroy unused ones.`;
+      const message = `[lumicells] ${liveInstances} live instances: each owns a WebGL context (browsers keep ~16). Destroy unused ones.`;
       console.warn(message);
       queueMicrotask(() => this.#emit('warn', { code: 'too-many-instances', message }));
     }
@@ -200,7 +200,7 @@ export class PixelLife {
   }
 
   get supported(): boolean {
-    return PixelLife.isSupported();
+    return LumiCells.isSupported();
   }
 
   /** The canvas of this instance (a new element per instance), null before start / after destroy. */
@@ -211,23 +211,23 @@ export class PixelLife {
   // -------------------------------------------------------------------------------------------
   // Config
 
-  getConfig(): Readonly<PixelLifeConfig> {
+  getConfig(): Readonly<LumiCellsConfig> {
     return this.#controller.getConfig();
   }
 
-  setConfig(patch: PixelLifeConfigInput, opts: ConfigUpdateOptions = {}): void {
+  setConfig(patch: LumiCellsConfigInput, opts: ConfigUpdateOptions = {}): void {
     if (this.#destroyed) return;
     this.#afterConfig(this.#controller.setConfig(patch, opts), opts.source);
   }
 
-  replaceConfig(config: PixelLifeConfigInput, opts: ConfigUpdateOptions = {}): void {
+  replaceConfig(config: LumiCellsConfigInput, opts: ConfigUpdateOptions = {}): void {
     if (this.#destroyed) return;
     this.#afterConfig(this.#controller.replaceConfig(config, opts), opts.source);
   }
 
   set<P extends ParamPath>(path: P, value: ParamValue<P>, opts: ConfigUpdateOptions = {}): void {
     if (this.#destroyed) return;
-    this.setConfig(setPath({}, path, value) as PixelLifeConfigInput, opts);
+    this.setConfig(setPath({}, path, value) as LumiCellsConfigInput, opts);
   }
 
   get<P extends ParamPath>(path: P): ParamValue<P> {
@@ -243,7 +243,7 @@ export class PixelLife {
 
   exportConfig(
     opts: { mode?: 'full' | 'diff'; base?: 'defaults' | PresetId } = {},
-  ): PixelLifeConfigFile {
+  ): LumiCellsConfigFile {
     return toConfigFile(this.#controller.getConfig(), opts);
   }
 
@@ -343,7 +343,7 @@ export class PixelLife {
   // -------------------------------------------------------------------------------------------
   // Events
 
-  on<K extends keyof PixelLifeEvents>(type: K, fn: Listener<K>): () => void {
+  on<K extends keyof LumiCellsEvents>(type: K, fn: Listener<K>): () => void {
     if (this.#destroyed) return () => {};
     let set = this.#listeners.get(type);
     if (!set) {
@@ -473,7 +473,7 @@ export class PixelLife {
       queueMicrotask(() =>
         this.#emit('warn', {
           code: 'software-webgl',
-          message: `[pixel-life] WebGL runs on a software rasterizer (${engine.caps.renderer || 'unknown'}): low quality, 0.5 Mpx budget.`,
+          message: `[lumicells] WebGL runs on a software rasterizer (${engine.caps.renderer || 'unknown'}): low quality, 0.5 Mpx budget.`,
         }),
       );
     }
@@ -833,7 +833,7 @@ export class PixelLife {
     io.observe(this.host);
   }
 
-  #sendFallback(reason: PixelLifeEvents['fallback']['reason']): void {
+  #sendFallback(reason: LumiCellsEvents['fallback']['reason']): void {
     if (this.#fallbackSent && reason !== 'context-lost') return;
     this.#fallbackSent = true;
     // Deferred: listeners attached right after construction still receive it.
@@ -842,7 +842,7 @@ export class PixelLife {
     });
   }
 
-  #emit<K extends keyof PixelLifeEvents>(type: K, event: PixelLifeEvents[K]): void {
+  #emit<K extends keyof LumiCellsEvents>(type: K, event: LumiCellsEvents[K]): void {
     const set = this.#listeners.get(type);
     if (!set || set.size === 0) return;
     for (const fn of set) {

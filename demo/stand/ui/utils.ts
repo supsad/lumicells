@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-/** Joins truthy class names; every component root starts with a `plui-` class. */
+/** Joins truthy class names; every component root starts with a `lcui-` class. */
 export function cx(...parts: Array<string | false | null | undefined>): string {
   let out = '';
   for (const p of parts) if (p) out += out ? ` ${p}` : p;

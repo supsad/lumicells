@@ -15,8 +15,8 @@ import {
   getField,
   getLeafPaths,
   getPath,
+  type LumiCellsConfig,
   type ParamPath,
-  type PixelLifeConfig,
 } from '../../schema';
 import type { ParamLayout, ParamSlot } from './layout';
 import { hexToOklabInto, oklabToLinearInto, shortestArcDeg, TAU, wrap } from './math';
@@ -103,7 +103,7 @@ export class ParamStore {
 
   constructor(
     readonly layout: ParamLayout,
-    config: PixelLifeConfig,
+    config: LumiCellsConfig,
   ) {
     this.params = new Float32Array(layout.floatCount);
     let off = 0;
@@ -152,7 +152,7 @@ export class ParamStore {
   /** Entry id for a path (resolve once, then read with `num(id)` every frame). */
   id(path: ParamPath): number {
     const e = this.byPath.get(path);
-    if (!e) throw new Error(`[pixel-life] unknown parameter '${path}'`);
+    if (!e) throw new Error(`[lumicells] unknown parameter '${path}'`);
     return e.id;
   }
 
@@ -161,7 +161,7 @@ export class ParamStore {
   }
 
   /** Snaps every value to `config` (no tweens) and rewrites the whole ParamsBlock. */
-  reset(config: PixelLifeConfig): void {
+  reset(config: LumiCellsConfig): void {
     this.activeCount = 0;
     for (const e of this.entries) {
       e.active = false;

@@ -23,7 +23,7 @@ export function createTexture(
   data: ArrayBufferView | null = null,
 ): WebGLTexture {
   const tex = gl.createTexture();
-  if (!tex) throw new Error('[pixel-life] cannot create texture');
+  if (!tex) throw new Error('[lumicells] cannot create texture');
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
@@ -55,7 +55,7 @@ function checkComplete(gl: WebGL2RenderingContext): void {
   const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
   if (status !== gl.FRAMEBUFFER_COMPLETE && !gl.isContextLost()) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    throw new Error(`[pixel-life] framebuffer incomplete: 0x${status.toString(16)}`);
+    throw new Error(`[lumicells] framebuffer incomplete: 0x${status.toString(16)}`);
   }
 }
 
@@ -69,7 +69,7 @@ export function createRenderTarget(
   const h = Math.max(1, Math.floor(height));
   const texture = createTexture(gl, w, h, options);
   const framebuffer = gl.createFramebuffer();
-  if (!framebuffer) throw new Error('[pixel-life] cannot create framebuffer');
+  if (!framebuffer) throw new Error('[lumicells] cannot create framebuffer');
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
   checkComplete(gl);
@@ -89,7 +89,7 @@ export function createMrtFramebuffer(
   textures: readonly WebGLTexture[],
 ): WebGLFramebuffer {
   const fb = gl.createFramebuffer();
-  if (!fb) throw new Error('[pixel-life] cannot create framebuffer');
+  if (!fb) throw new Error('[lumicells] cannot create framebuffer');
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   const buffers: GLenum[] = [];
   for (let i = 0; i < textures.length; i++) {

@@ -40,7 +40,7 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
 export function Icon({ name, size = 14, className, ...rest }: IconProps) {
   return (
     <svg
-      className={cx('plui-icon', className)}
+      className={cx('lcui-icon', className)}
       width={size}
       height={size}
       viewBox="0 0 16 16"

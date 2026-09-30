@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { PerfController } from '../src/core/controller/perf';
 import { OFF_INF } from '../src/core/engine/frame-block';
 import type { FrameInputs } from '../src/core/engine/types';
-import { PixelLife } from '../src/core/pixel-life';
-import type { PixelLifeEvents } from '../src/core/types';
+import { LumiCells } from '../src/core/lumi-cells';
+import type { LumiCellsEvents } from '../src/core/types';
 
 const fake = vi.hoisted(() => {
   interface Opts {
@@ -98,7 +98,7 @@ class FakeIO {
 let canvasSize = { w: 400, h: 300 };
 
 beforeAll(() => {
-  // WebGL2 "available" for PixelLife.isSupported(); the fake engine never touches it.
+  // WebGL2 "available" for LumiCells.isSupported(); the fake engine never touches it.
   HTMLCanvasElement.prototype.getContext = (() => ({
     getExtension: () => null,
   })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
@@ -120,13 +120,13 @@ beforeAll(() => {
   });
 });
 
-const live: PixelLife[] = [];
+const live: LumiCells[] = [];
 const hosts: HTMLElement[] = [];
-function create(opts: ConstructorParameters<typeof PixelLife>[1] = {}): PixelLife {
+function create(opts: ConstructorParameters<typeof LumiCells>[1] = {}): LumiCells {
   const el = document.createElement('div');
   document.body.appendChild(el);
   hosts.push(el);
-  const pl = new PixelLife(el, opts);
+  const pl = new LumiCells(el, opts);
   live.push(pl);
   return pl;
 }
@@ -154,7 +154,7 @@ describe('engine failures release the context at once', () => {
     FakeEngine.failInCtor = true;
     const pl = create({ autoStart: false });
     const errors: Error[] = [];
-    const fallbacks: PixelLifeEvents['fallback'][] = [];
+    const fallbacks: LumiCellsEvents['fallback'][] = [];
     pl.on('error', (e) => errors.push(e));
     pl.on('fallback', (e) => fallbacks.push(e));
     pl.start();
@@ -176,7 +176,7 @@ describe('engine failures release the context at once', () => {
 
   it('failure detected while rendering (compile/link)', async () => {
     const pl = create();
-    const fallbacks: PixelLifeEvents['fallback'][] = [];
+    const fallbacks: LumiCellsEvents['fallback'][] = [];
     pl.on('fallback', (e) => fallbacks.push(e));
     frame();
     const eng = FakeEngine.instances[0];
@@ -266,7 +266,7 @@ describe('config events', () => {
   it('one event per source batch, in order, at the frame flush', () => {
     const pl = create();
     frame();
-    const events: PixelLifeEvents['config'][] = [];
+    const events: LumiCellsEvents['config'][] = [];
     pl.on('config', (e) => events.push(e));
     pl.set('grid.gap', 0.3, { source: 'api' });
     pl.set('background.color', '#ff0000', { source: 'attribute' });
@@ -314,7 +314,7 @@ describe('frame pacing and refresh changes', () => {
 });
 
 describe('bindElement', () => {
-  function boxedChild(pl: PixelLife): HTMLElement {
+  function boxedChild(pl: LumiCells): HTMLElement {
     const el = document.createElement('div');
     pl.host.appendChild(el);
     // jsdom does not compute border-radius: a 12px corner for this element.

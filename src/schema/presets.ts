@@ -3,7 +3,7 @@
  * so a preset only lists what makes it different. Mode presets switch the sphere off explicitly.
  */
 
-import type { PixelLifeConfigInput } from './schema';
+import type { LumiCellsConfigInput } from './schema';
 
 export const PRESET_IDS = [
   'reference',
@@ -21,7 +21,7 @@ export type PresetId = (typeof PRESET_IDS)[number];
 export interface PresetDef {
   label: string;
   description: string;
-  config: PixelLifeConfigInput;
+  config: LumiCellsConfigInput;
 }
 
 export const PRESETS: Record<PresetId, PresetDef> = {

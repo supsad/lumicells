@@ -5,14 +5,14 @@ import { toJsonSchema } from './src/schema/json-schema';
 
 const root = dirname(fileURLToPath(import.meta.url));
 
-/** Emits the JSON Schema of the config file (`pixel-life/schema.json`) next to the bundles. */
+/** Emits the JSON Schema of the config file (`lumicells/schema.json`) next to the bundles. */
 function jsonSchemaAsset(): Plugin {
   return {
-    name: 'pixel-life:json-schema',
+    name: 'lumicells:json-schema',
     generateBundle() {
       this.emitFile({
         type: 'asset',
-        fileName: 'pixel-life.schema.json',
+        fileName: 'lumicells.schema.json',
         source: `${JSON.stringify(toJsonSchema(), null, 2)}\n`,
       });
     },
@@ -33,11 +33,11 @@ export default defineConfig({
     sourcemap: true,
     lib: {
       entry: {
-        'pixel-life': resolve(root, 'src/core/index.ts'),
-        'pixel-life-schema': resolve(root, 'src/schema/index.ts'),
-        'pixel-life-react': resolve(root, 'src/react/index.ts'),
-        'pixel-life-element': resolve(root, 'src/element/index.ts'),
-        'pixel-life-element-define': resolve(root, 'src/element/define.ts'),
+        lumicells: resolve(root, 'src/core/index.ts'),
+        'lumicells-schema': resolve(root, 'src/schema/index.ts'),
+        'lumicells-react': resolve(root, 'src/react/index.ts'),
+        'lumicells-element': resolve(root, 'src/element/index.ts'),
+        'lumicells-element-define': resolve(root, 'src/element/define.ts'),
       },
       formats: ['es'],
     },

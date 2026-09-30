@@ -86,7 +86,7 @@ export class HostView {
     const doc = this.host.ownerDocument;
     const canvas = doc.createElement('canvas');
     canvas.setAttribute('aria-hidden', 'true');
-    canvas.dataset.pixelLife = '';
+    canvas.dataset.lumicells = '';
     const s = canvas.style;
     s.position = 'absolute';
     s.pointerEvents = 'none';

@@ -3,15 +3,15 @@
 import {
   type ConfigIssue,
   isPresetId,
+  type LumiCellsConfig,
   normalizeConfig,
-  type PixelLifeConfig,
   type PresetId,
-} from 'pixel-life';
+} from 'lumicells';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, type BadgeTone, Button, EmptyState, FileDrop, Modal } from './ui';
 
 interface Parsed {
-  config: PixelLifeConfig;
+  config: LumiCellsConfig;
   presetId: PresetId | null;
   issues: ConfigIssue[];
 }
@@ -44,7 +44,7 @@ function parse(text: string): ParseResult {
 interface ImportModalProps {
   open: boolean;
   onClose(): void;
-  onApply(config: PixelLifeConfig, presetId: PresetId | null): void;
+  onApply(config: LumiCellsConfig, presetId: PresetId | null): void;
 }
 
 export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
@@ -67,7 +67,7 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
       onClose={onClose}
       size="lg"
       title="Импорт настроек"
-      description="Загрузите файл pixel-life.config.json или вставьте JSON. Значения вне диапазона будут исправлены, неизвестные ключи отброшены."
+      description="Загрузите файл lumicells.config.json или вставьте JSON. Значения вне диапазона будут исправлены, неизвестные ключи отброшены."
       footer={
         <>
           <Button
