@@ -12,10 +12,16 @@
       Dev-only stress bench (not part of the production build). URL parameters:
         n=100                        number of backgrounds
         layout=visible|scroll        visible: all cards on one screen; scroll: a long feed
-        mode=lumicells|shared|mirror lumicells: one LumiCells (one WebGL context) per card;
+        mode=lumicells|shared|mirror lumicells: one LumiCells instance per card;
                                      shared: one WebGL canvas with a simple shader, copied into
                                      every card's 2D canvas with drawImage;
                                      mirror: one real LumiCells instance copied the same way
+        renderer=own|shared          (lumicells) the instances' renderer: own = one WebGL context
+                                     each (within the context budget), shared = the library's
+                                     shared renderer (one context, atlas + 2D copies)
+        own=N                        (lumicells, renderer=shared) the first N cards use 'own':
+                                     a mixed page
+        sharedBudget=auto|N          LumiCells.configure() shared atlas budget, megapixels
         preset=reference             LumiCells preset (lumicells / mirror)
         pauseOffscreen=1             pause offscreen cards (0 keeps them running)
         maxContexts=auto|N           LumiCells.configure() context budget (library default: auto)

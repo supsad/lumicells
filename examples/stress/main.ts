@@ -1,10 +1,13 @@
 /**
  * Stress bench: N animated card backgrounds on one page, three ways.
  *
- * - `lumicells`: one LumiCells instance per card. A live instance owns a WebGL2 context and
- *   browsers keep only about 16 per page (Chrome evicts the oldest one when a new one is
- *   created); the library's context budget (LumiCells.configure, maxContexts=N here) keeps the
- *   page below that, so the cards past the budget show their poster.
+ * - `lumicells`: one LumiCells instance per card. With `renderer=own` (default) a live instance
+ *   owns a WebGL2 context and browsers keep only about 16 per page (Chrome evicts the oldest one
+ *   when a new one is created); the library's context budget (LumiCells.configure,
+ *   maxContexts=N here) keeps the page below that, so the cards past the budget show their
+ *   poster. With `renderer=shared` every card is a member of the library's shared renderer: one
+ *   context for all of them, drawn into an atlas and copied into each card's 2D canvas (`own=N`
+ *   keeps the first N cards on contexts of their own: a mixed page).
  * - `shared`: one WebGL2 canvas renders a simple pixel-grid shader once per frame; each card is a
  *   2D canvas filled with drawImage() from it (see shared.ts).
  * - `mirror`: the same copy technique, but the source is ONE real LumiCells instance: the full
@@ -23,10 +26,12 @@
 
 import {
   type ConfigureOptions,
+  type InstanceRenderer,
   LumiCells,
   onBeforeFrame,
   PRESET_IDS,
   type PresetId,
+  type SharedRendererStats,
   type Stats,
 } from 'lumicells';
 import { installContextProbe } from './probe';
@@ -53,11 +58,16 @@ const params = {
     ? presetParam
     : 'reference') as PresetId,
   pauseOffscreen: qs.get('pauseOffscreen') !== '0',
+  /** Renderer of the LumiCells instances (mode=lumicells). */
+  renderer: (qs.get('renderer') === 'shared' ? 'shared' : 'own') as InstanceRenderer,
+  /** With renderer=shared: the first N cards use their own context (a mixed page). */
+  own: clampInt(qs.get('own'), 0, 1000, 0),
   hud: qs.get('hud') !== '0',
   /** LumiCells.configure() overrides (library default when absent). */
   maxContexts: qs.get('maxContexts'),
   parkAfterMs: qs.get('parkAfterMs'),
   createPerFrame: qs.get('createPerFrame'),
+  sharedBudget: qs.get('sharedBudget'),
   /** Delay before the instances are created, ms (lets a profiler attach first). */
   mountDelay: clampInt(qs.get('mountDelay'), 0, 60_000, 0),
 };
@@ -283,6 +293,9 @@ function applyRuntimeParams(): ConfigureOptions {
   if (park !== null) opts.parkAfterMs = park;
   const perFrame = num(params.createPerFrame);
   if (perFrame !== null) opts.createPerFrame = perFrame;
+  const budget = num(params.sharedBudget);
+  if (params.sharedBudget === 'auto') opts.sharedBudget = 'auto';
+  else if (budget !== null) opts.sharedBudget = budget;
   if (Object.keys(opts).length > 0) LumiCells.configure(opts);
   return opts;
 }
@@ -292,10 +305,15 @@ const mountInfo = { startAt: -1, syncMs: -1 };
 
 function mountAll(): void {
   if (params.mode === 'lumicells') {
-    for (const card of cards) {
-      const cells = new LumiCells(card.host, { preset: params.preset, config: renderConfig });
+    cards.forEach((card, i) => {
+      const renderer = params.renderer === 'shared' && i < params.own ? 'own' : params.renderer;
+      const cells = new LumiCells(card.host, {
+        preset: params.preset,
+        config: renderConfig,
+        renderer,
+      });
       entries.push(watch(cells, card));
-    }
+    });
     onBeforeFrame(() => {
       const r = rec;
       if (!r) return;
@@ -390,15 +408,23 @@ function canvasPainted(canvas: HTMLCanvasElement): boolean {
   return cs.visibility === 'visible' && cs.display !== 'none' && Number(cs.opacity) > 0;
 }
 
-type CardLook = 'live' | 'poster' | 'dead' | 'blank';
+type CardLook = 'live' | 'poster' | 'dead' | 'blank' | 'frozen';
 
 /**
  * What a card shows: `live` a drawing canvas; `poster` the CSS poster; `dead` a canvas whose
  * context is gone painted over everything (Chrome draws a white box with a broken-image icon);
+ * `frozen` a shared card's 2D canvas holding its last frame while the shared context is lost;
  * `blank` none of these (a canvas that has not drawn yet and no poster).
  */
 function cardLook(e: Entry): CardLook {
   const canvas = e.cells.canvas;
+  if (e.cells.renderer === 'shared') {
+    // A 2D canvas: it never paints a blank box, it keeps whatever was copied last.
+    const shown = !!canvas && canvasShown(canvas) && canvas.width > 0;
+    if (shown && e.cells.getStats().state === 'lost') return 'frozen';
+    if (shown) return 'live';
+    return posterOn(e.card.host) ? 'poster' : 'blank';
+  }
   if (canvas && !contextAlive(canvas) && canvasPainted(canvas)) return 'dead';
   if (posterOn(e.card.host)) return 'poster';
   return canvas && canvasShown(canvas) ? 'live' : 'blank';
@@ -415,10 +441,17 @@ function snapshot() {
   let visiblePoster = 0;
   let webglBytes = 0;
   let canvas2dBytes = 0;
+  /** Shared cards that are parked (or waiting) but still hold 2D canvas pixels. */
+  let parkedWithPixels = 0;
+  let sharedStats: SharedRendererStats | null = null;
+  let sharedMembers = 0;
+  let frozen = 0;
   let lostCanvas = 0;
   let visibleDead = 0;
   let visibleBlank = 0;
   const states: Record<string, number> = {};
+  /** Adaptive quality of the live instances: "tier@scale" -> count. */
+  const quality: Record<string, number> = {};
   let readyAllMs: number | null = null;
 
   if (params.mode === 'lumicells') {
@@ -438,8 +471,21 @@ function snapshot() {
         ready++;
         maxReady = Math.max(maxReady, e.readyAt);
       }
-      const state = e.cells.getStats().state;
+      const st = e.cells.getStats();
+      const state = st.state;
       if (state) states[state] = (states[state] ?? 0) + 1;
+      if (look === 'frozen') frozen++;
+      if (state === 'live') {
+        const q = `${st.quality}@${st.scale}`;
+        quality[q] = (quality[q] ?? 0) + 1;
+      }
+      if (st.renderer === 'shared') {
+        sharedMembers++;
+        if (st.shared && st.shared.atlasWidth > 0) sharedStats = st.shared;
+        const px = canvas ? canvas.width * canvas.height : 0;
+        canvas2dBytes += px * 4;
+        if (px > 0 && state !== 'live' && state !== 'lost') parkedWithPixels++;
+      }
       if (e.card.visible) {
         visible++;
         if (isLive) visibleLive++;
@@ -450,6 +496,9 @@ function snapshot() {
       // Default context: color buffer + a separate presentation buffer (x2).
       if (alive && canvas) webglBytes += canvas.width * canvas.height * 4 * 2;
     }
+    // The shared atlas: one default framebuffer (x2 like above), counted once.
+    const atlas = sharedAtlas();
+    if (atlas) webglBytes += atlas.w * atlas.h * 4 * 2;
     if (ready === entries.length) readyAllMs = Math.round(maxReady);
   } else {
     const src = shared?.canvas ?? mirrorSource?.cells.canvas ?? null;
@@ -484,9 +533,20 @@ function snapshot() {
       visibleDead,
       visibleBlank,
       lostCanvas,
+      frozen,
       states,
+      quality,
     },
     readyAllMs,
+    shared:
+      sharedMembers > 0
+        ? {
+            members: sharedMembers,
+            parkedWithPixels,
+            ...(sharedStats ?? {}),
+            atlas: sharedAtlas(),
+          }
+        : null,
     contexts: { ...probe.counters, liveNow: probe.liveNow(), peakLive: probe.peakLive() },
     memory: {
       usedJSHeapMB: mem ? round(mem.usedJSHeapSize / 1048576, 1) : null,
@@ -497,7 +557,20 @@ function snapshot() {
   };
 }
 
-/** Sum of per-instance CPU (update + render submit) and GPU times of the instances drawing now. */
+/** Size of the shared renderer's atlas (from any shared member's stats), or null. */
+function sharedAtlas(): { w: number; h: number } | null {
+  for (const e of entries) {
+    const s = e.cells.getStats().shared;
+    if (s && s.atlasWidth > 0) return { w: s.atlasWidth, h: s.atlasHeight };
+  }
+  return null;
+}
+
+/**
+ * Sum of per-instance CPU (update + render submit, plus the copy for shared ones) and GPU times
+ * of the instances drawing now. The shared device's GPU time is reported by every shared
+ * instance: it counts once.
+ */
 function sampleCost(): { cpu: number; gpu: number | null; gpuReporting: number } {
   const now = performance.now();
   if (params.mode === 'shared') {
@@ -507,13 +580,22 @@ function sampleCost(): { cpu: number; gpu: number | null; gpuReporting: number }
   let cpu = 0;
   let gpu = 0;
   let gpuReporting = 0;
+  let sharedGpu: number | null = null;
   for (const e of list) {
     if (!isFresh(e, now) || !e.stats) continue;
     cpu += e.stats.cpuMs;
+    if (e.stats.renderer === 'shared') {
+      if (e.stats.gpuMs !== null) sharedGpu = e.stats.gpuMs;
+      continue;
+    }
     if (e.stats.gpuMs !== null) {
       gpu += e.stats.gpuMs;
       gpuReporting++;
     }
+  }
+  if (sharedGpu !== null) {
+    gpu += sharedGpu;
+    gpuReporting++;
   }
   return { cpu, gpu: gpuReporting > 0 ? gpu : null, gpuReporting };
 }
@@ -556,6 +638,8 @@ async function measure(ms = 5000) {
   const c0 = { ...probe.counters };
   const cpu: number[] = [];
   const gpu: number[] = [];
+  const copy: number[] = [];
+  const draw: number[] = [];
   let gpuReporting = 0;
   const timeline: { t: number; liveContexts: number; lost: number; created: number }[] = [];
   const start = performance.now();
@@ -564,6 +648,11 @@ async function measure(ms = 5000) {
     const s = sampleCost();
     cpu.push(s.cpu);
     if (s.gpu !== null) gpu.push(s.gpu);
+    const sh = entries.find((x) => x.stats?.shared)?.stats?.shared;
+    if (sh) {
+      copy.push(sh.copyMs);
+      draw.push(sh.drawMs);
+    }
     gpuReporting = Math.max(gpuReporting, s.gpuReporting);
     timeline.push({
       t: Math.round(performance.now() - start),
@@ -588,6 +677,9 @@ async function measure(ms = 5000) {
     workMsP95: round(pct(workSorted, 0.95)),
     cpuMsSum: round(mean(cpu)),
     gpuMsSum: gpu.length ? round(mean(gpu)) : null,
+    /** Shared renderer: main-thread ms of the draw series and of the copy series per frame. */
+    sharedDrawMs: draw.length ? round(mean(draw), 3) : null,
+    sharedCopyMs: copy.length ? round(mean(copy), 3) : null,
     gpuReporting,
     longTasks: { count: lt.length, totalMs: Math.round(lt.reduce((a, t) => a + t.duration, 0)) },
     contextChurnInWindow: {
@@ -767,11 +859,17 @@ async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: 
   const liveNow = entries.filter(
     (e) => e.card.visible && e.cells.getStats().state === 'live' && cardLook(e) === 'live',
   );
-  // An eviction hits whoever the browser picks: watch every instance that owns a context.
+  // An eviction hits whoever the browser picks: watch every instance that owns a context. A loss
+  // of the shared context hits every shared instance: watch them all.
+  const sharedLive = entries.filter(
+    (e) => e.cells.renderer === 'shared' && e.cells.getStats().state === 'live',
+  );
   const victims =
     appContexts > 0
       ? entries.filter((e) => e.cells.getStats().state === 'live')
-      : liveNow.slice(0, count);
+      : liveNow.some((e) => e.cells.renderer === 'shared')
+        ? [...liveNow.filter((e) => e.cells.renderer === 'own').slice(0, count), ...sharedLive]
+        : liveNow.slice(0, count);
   const before = victims.map((e) => ({ lost: e.lost, restored: e.restored }));
   const centers = victims
     .filter((e) => e.card.visible)
@@ -792,7 +890,15 @@ async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: 
       if (gl) appGl.push(gl);
     }
   } else {
-    for (const e of victims) e.cells.loseContextForTesting();
+    // One call on a shared member loses the shared context (all shared members).
+    let sharedDone = false;
+    for (const e of victims) {
+      if (e.cells.renderer === 'shared') {
+        if (sharedDone) continue;
+        sharedDone = true;
+      }
+      e.cells.loseContextForTesting();
+    }
   }
   const looks: Record<string, number> = {};
   const states: Record<string, number> = {};
@@ -921,7 +1027,7 @@ if (params.hud) {
     const s = snapshot();
     const c = sampleCost();
     hud.textContent =
-      `${params.mode} n=${params.n} ${params.layout} pauseOffscreen=${params.pauseOffscreen ? 1 : 0}\n` +
+      `${params.mode}${params.mode === 'lumicells' ? `/${params.renderer}${params.own ? ` own=${params.own}` : ''}` : ''} n=${params.n} ${params.layout} pauseOffscreen=${params.pauseOffscreen ? 1 : 0}\n` +
       `fps ${fps.toFixed(0)}  cpu ${c.cpu.toFixed(2)} ms  gpu ${c.gpu?.toFixed(2) ?? 'n/a'} ms\n` +
       `live ${s.instances.live}  poster ${s.instances.poster}  ready ${s.instances.ready}\n` +
       `visible ${s.instances.visible}: live ${s.instances.visibleLive}  poster ${s.instances.visiblePoster}  dead ${s.instances.visibleDead}\n` +

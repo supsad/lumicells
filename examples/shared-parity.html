@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LumiCells — shared renderer parity</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
+    />
+    <!--
+      Dev-only check of the shared renderer (not part of the production build): pairs of LumiCells
+      instances with the same config, seed and time, one with renderer 'own' (a WebGL canvas of
+      its own) and one with renderer 'shared' (a region of the shared atlas copied into a 2D
+      canvas). At a frame both drew, the own canvas is read back with readPixels and the shared
+      one with getImageData, and the page prints a PASS / FAIL verdict:
+        - opaque pairs (no overflow margin): every channel within 1 LSB;
+        - overflow pairs (transparent margin): compared premultiplied (what both canvases store),
+          within 1 LSB; the unpremultiplied differences of faint margin pixels (8-bit alpha
+          round trip of getImageData) are reported, not judged;
+        - a last pair under a tiny sharedBudget: the shared one renders with fewer pixels, so only
+          its grid is compared (same cols and rows, same cell size on screen within 1 %).
+      URL parameters:
+        auto=0        do not run on load
+        frames=60     frames to wait after both instances are ready
+      window.parity exposes run(opts) and last (the latest result) for automated runs.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #0b0b12;
+        color: #d8d4ee;
+      }
+      main {
+        padding: 16px;
+        display: grid;
+        gap: 24px;
+      }
+      .pair {
+        display: flex;
+        gap: 48px;
+        align-items: center;
+      }
+      .pair > div {
+        position: relative;
+        width: 240px;
+        height: 150px;
+        border-radius: 8px;
+      }
+      .pair > b {
+        font: 600 12px/1.3 ui-monospace, Consolas, monospace;
+        width: 160px;
+      }
+      #status {
+        font: 12px/1.45 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div id="pairs"></div>
+      <div id="status">running...</div>
+    </main>
+    <script type="module" src="./shared-parity/main.ts"></script>
+  </body>
+</html>
