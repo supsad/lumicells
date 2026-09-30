@@ -23,7 +23,9 @@ const BUBBLES = [
 ];
 
 const RED = '#ee2848';
-const BLUE = '#0481f5';
+// The blue pill is #0481f5; its light is lighter and weaker so the pill stays readable over it.
+const BLUE = '#39b8ff';
+const BLUE_STRENGTH = 0.8;
 
 // -------------------------------------------------------------------------------------------
 // Bubbles: plain buttons moved by JS before the background measures them (no lag).
@@ -64,7 +66,7 @@ function createMain(): PixelLife {
         type: 'light',
         color: b.blue ? BLUE : RED,
         colorMix: 0.55,
-        strength: 1.1,
+        strength: b.blue ? BLUE_STRENGTH : 1.1,
         falloff: 1.5,
         padding: 4,
       }),
@@ -131,7 +133,7 @@ for (const b of bubbles) {
       y: r.top + r.height / 2,
       space: 'client',
       color: b.blue ? BLUE : RED,
-      strength: 1.2,
+      strength: b.blue ? 1 : 1.2,
     });
   });
   b.el.addEventListener('pointerenter', () => {

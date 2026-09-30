@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pixel Life — Web Component</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
+    />
     <style>
       :root {
         --red: #ee2848;
@@ -62,9 +66,11 @@
         position: absolute;
         transform: translate(-50%, -50%);
         padding: 10px 20px;
-        border: 0;
+        /* A light rim and a dark shadow keep the pill readable over the cells it lights up. */
+        border: 1px solid rgba(255, 255, 255, 0.25);
         border-radius: 999px;
         background: var(--red);
+        box-shadow: 0 3px 12px rgba(0, 0, 24, 0.55);
         color: #fff;
         font: 600 15px/1 inherit;
         cursor: pointer;
@@ -186,7 +192,9 @@
         <p>
           Каждый пузырь с <code>data-pl-influence</code> подсвечивает сетку под собой,
           <code>data-pl-pulse="click"</code> запускает круг по клику,
-          <code>data-pl-lift="hover"</code> поднимает пиксели при наведении.
+          <code>data-pl-lift="hover"</code> поднимает пиксели при наведении. Цвет света
+          (<code>data-pl-color</code>) синих пузырей светлее их заливки, чтобы они не сливались с
+          собственной подсветкой.
         </p>
         <div class="row">
           <pixel-life id="hero" preset="reference" interactive>
@@ -196,8 +204,8 @@
               class="bubble big blue"
               style="left: 68%; top: 68%"
               data-pl-influence
-              data-pl-color="#0481f5"
-              data-pl-strength="1.2"
+              data-pl-color="#39b8ff"
+              data-pl-strength="0.9"
               data-pl-pulse="click"
               data-pl-lift="hover"
             >
@@ -234,7 +242,8 @@
               class="bubble blue"
               style="left: 40%; top: 80%"
               data-pl-influence
-              data-pl-color="#0481f5"
+              data-pl-color="#39b8ff"
+              data-pl-strength="0.8"
               data-pl-pulse="click"
               data-pl-lift="hover"
             >

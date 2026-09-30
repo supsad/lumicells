@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pixel Life — ядро без фреймворков</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
+    />
     <style>
       :root {
         color-scheme: dark;
@@ -26,19 +30,23 @@
         left: 0;
         top: 0;
         padding: 10px 18px;
-        border: 0;
+        /* A light rim and a dark shadow keep the pill readable over the cells it lights up. */
+        border: 1px solid rgba(255, 255, 255, 0.25);
         border-radius: 999px;
         font: 600 15px/1.2 inherit;
         color: #fff;
         background: #ee2848;
-        box-shadow: 0 0 24px rgba(238, 40, 72, 0.45);
+        box-shadow:
+          0 3px 12px rgba(0, 0, 24, 0.55),
+          0 0 24px rgba(238, 40, 72, 0.45);
         cursor: pointer;
         will-change: transform;
         white-space: nowrap;
       }
       .bubble.blue {
         background: #0481f5;
-        box-shadow: 0 0 24px rgba(4, 129, 245, 0.45);
+        /* No blue glow: it would merge with the blue light the pill casts on the grid. */
+        box-shadow: 0 3px 12px rgba(0, 0, 24, 0.65);
       }
       .bubble:hover {
         filter: brightness(1.15);
