@@ -197,7 +197,7 @@ describe('<PixelLife>', () => {
     );
     const cfg = live()[0]?.options.config;
     expect(cfg.modes.sphere.hole).toBe(0.5);
-    expect(cfg.modes.sphere.rimPower).toBe(0.6);
+    expect(cfg.modes.sphere.rimPower).toBe(0.8);
     expect(cfg.interaction.pointer).toBe(true);
     expect(cfg.interaction.click).toBe(true);
     expect(cfg.render.overflow).toBe(64);

@@ -20,8 +20,11 @@ vec3 mode_rain(ModeIn m) {
   float x = (u - k) * segLen - (segLen - tailCells);
   float isOn = step(u01(hash3(uvec3(uint(int(col) + 65536), uint(int(k) + 65536), 0x7a1u))), P_modes_rain_density);
   float tail = sat(x / tailCells);
-  float head = 1.0 - smoothstep(segLen - 1.0, segLen, (u - k) * segLen);
-  float I = isOn * head * step(0.0, x) * (0.2 + 0.8 * pow(tail, 1.4) + 0.3 * smoothstep(0.85, 1.0, tail));
+  // The head's leading edge spans 1.5 cells: a fast column then brightens a cell over a few
+  // frames instead of switching it on in one.
+  float head = 1.0 - smoothstep(segLen - 1.5, segLen, (u - k) * segLen);
+  // The tail end ramps in over one cell (a hard step there would pop cells off as it passes).
+  float I = isOn * head * sat(x) * (0.2 + 0.8 * pow(tail, 1.4) + 0.3 * smoothstep(0.85, 1.0, tail));
   return vec3(I, 0.3 + 0.7 * sat(P_modes_rain_density * 2.0), 0.0);
 }
 `;

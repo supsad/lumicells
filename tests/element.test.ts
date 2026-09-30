@@ -225,7 +225,7 @@ describe('attributes and properties', () => {
     el.config = { modes: { sphere: { hole: 0.5 } } };
     await flush();
     expect(inst.replaced.at(-1)?.config.modes.sphere.hole).toBe(0.5);
-    expect(inst.replaced.at(-1)?.config.modes.sphere.rimPower).toBe(0.6); // from orb
+    expect(inst.replaced.at(-1)?.config.modes.sphere.rimPower).toBe(0.8); // from orb
   });
 
   it('reflects boolean properties to attributes and back without echo loops', async () => {

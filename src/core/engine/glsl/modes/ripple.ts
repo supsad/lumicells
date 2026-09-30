@@ -25,7 +25,8 @@ vec3 mode_ripple(ModeIn m) {
     float radius = P_modes_ripple_speed * age * life;
     float dist = length(m.p - c);
     float band = exp(-sq(dist - radius) / (2.0 * w * w));
-    float amp = pow(1.0 - age, 1.5) * smoothstep(0.0, 0.06, age);
+    // The impact is a brief small splash; the drop reads through its ring, not a filled disc.
+    float amp = pow(1.0 - age, 1.5) * smoothstep(0.0, 0.06, age) * (0.45 + 0.55 * smoothstep(0.0, 2.0 * w, radius));
     acc += band * amp;
   }
   float I = 1.0 - exp(-2.5 * acc);

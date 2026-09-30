@@ -102,7 +102,7 @@ describe('schema tree', () => {
     expect(d.version).toBe(1);
     expect(d.grid.count).toBe(31);
     expect(d.scene.center).toEqual([-0.02, -0.02]);
-    expect(d.color.palette).toHaveLength(10);
+    expect(d.color.palette).toHaveLength(12);
     expect(d.background.color).toBe('#000032');
     expect(d.transition).toBe(600);
     expect(getField('color.mapping')).toMatchObject({
@@ -128,9 +128,9 @@ describe('defaults', () => {
     a.color.palette.push('#ffffff');
     a.scene.center[0] = 5;
     const b = getDefaults();
-    expect(b.color.palette).toHaveLength(10);
+    expect(b.color.palette).toHaveLength(12);
     expect(b.scene.center[0]).toBe(-0.02);
-    expect(getField('color.palette')?.default).toHaveLength(10);
+    expect(getField('color.palette')?.default).toHaveLength(12);
   });
 
   it('normalizing defaults yields no issues', () => {
@@ -145,11 +145,11 @@ describe('defaults', () => {
 describe('paths', () => {
   it('get/set by path', () => {
     const d = getDefaults();
-    expect(getPath(d, 'glow.bloom.strength')).toBe(0.35);
+    expect(getPath(d, 'glow.bloom.strength')).toBe(0.8);
     expect(getPath(d, 'glow.nope.x')).toBeUndefined();
     const e = setPath(d, 'glow.bloom.strength', 1);
     expect(e.glow.bloom.strength).toBe(1);
-    expect(d.glow.bloom.strength).toBe(0.35);
+    expect(d.glow.bloom.strength).toBe(0.8);
     expect(e.grid).toBe(d.grid); // untouched branches are shared
     expect(e.glow.halo).toBe(d.glow.halo);
     expect(setPath({}, 'a.b.c', 1)).toEqual({ a: { b: { c: 1 } } });
@@ -158,7 +158,7 @@ describe('paths', () => {
   it('flattenLeaves covers every leaf, arrays as leaves', () => {
     const m = flattenLeaves(getDefaults());
     expect([...m.keys()]).toEqual(getLeafPaths());
-    expect(m.get('color.palette')).toHaveLength(10);
+    expect(m.get('color.palette')).toHaveLength(12);
     expect(m.get('scene.center')).toEqual([-0.02, -0.02]);
     expect(m.has('transition')).toBe(true);
   });
@@ -365,7 +365,9 @@ describe('presets', () => {
   it('are visually distinct', () => {
     const keys = PRESET_IDS.map((id) => stableStringify(getPresetConfig(id)));
     expect(new Set(keys).size).toBe(PRESET_IDS.length);
-    expect(getPresetConfig('minimal').color.palette).toEqual(['#ffffff']);
+    // Monochrome: a grey-to-white ramp with colour fully desaturated.
+    expect(getPresetConfig('minimal').color.palette).toEqual(['#5c5c5c', '#d9d9d9', '#ffffff']);
+    expect(getPresetConfig('minimal').color.saturation).toBe(0);
     expect(getPresetConfig('minimal').background.color).toBe('#050505');
     expect(getPresetConfig('rain').modes.rain.weight).toBe(1);
     expect(getPresetConfig('pulse').modes.sphere.weight).toBe(0);

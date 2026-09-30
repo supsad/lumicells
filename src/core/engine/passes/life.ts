@@ -1,13 +1,15 @@
 /**
  * Life pass: Conway-family automaton on the cell grid (incl. pad), run only on step ticks.
  *
- * State texel: r alive (0/1), g steps since the last change (saturating), b age in steps.
+ * State texel: r alive (0/1), g steps since the last change (saturating), b age in steps,
+ * a the displayed level at the last change (fades continue from it, see modes/life.ts).
  * The field pass turns g + stepFrac into an analytic fade, so nothing here runs per frame.
  * Modes: 0 step, 1 reset (random fill), 2 remap (grid resized: keep cells aligned to the center).
  */
 
 import { FULLSCREEN_VS } from '../glsl/common';
 import { INFLUENCE_GLSL } from '../glsl/influence';
+import { LIFE_LEVEL_GLSL } from '../glsl/modes/life';
 import type { FrameInputs } from '../types';
 import { bindTexture, LazyProgram, type PassContext, setSampler, UNIT_SRC } from './shared';
 
@@ -18,6 +20,7 @@ export const LIFE_MODE_REMAP = 2;
 function lifeFs(header: string): string {
   return `${header}
 ${INFLUENCE_GLSL}
+${LIFE_LEVEL_GLSL}
 uniform sampler2D u_prev;
 uniform ivec4 u_size;   // xy current logical size, zw previous logical size (remap)
 uniform int u_mode;
@@ -33,7 +36,7 @@ float aliveAt(ivec2 c) {
 
 vec4 seeded(uvec2 key) {
   float a = step(u01(hash3(uvec3(key, u_seed ^ 0x5bd1e995u))), u_density);
-  return vec4(a, 0.0, 0.0, 1.0);
+  return vec4(a, 0.0, 0.0, 0.0);
 }
 
 void main() {
@@ -76,7 +79,9 @@ void main() {
   }
   float g = next == alive ? min(self.g * 255.0 + 1.0, 255.0) : 0.0;
   float age = next ? min(self.b * 255.0 + 1.0, 255.0) : 0.0;
-  o_state = vec4(next ? 1.0 : 0.0, g / 255.0, age / 255.0, 1.0);
+  // On a change, remember the level shown at the end of the previous step.
+  float lvl = next == alive ? self.a : lifeLevel(self, 1.0);
+  o_state = vec4(next ? 1.0 : 0.0, g / 255.0, age / 255.0, lvl);
 }
 `;
 }
