@@ -131,6 +131,7 @@ void main() {
   float gs = P_glow_saturation;
   acc = saturateColor(acc, gs) * (P_glow_bloom_strength * u_mix.x)
       + saturateColor(haze, gs) * (P_glow_haze_strength * u_mix.y * mix(1.0, vig, u_mix.z));
+  acc *= 1.0 / GLOW_SCALE;
 #endif
   o_color = enc4(vec4(acc, 1.0));
 }

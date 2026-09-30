@@ -75,6 +75,7 @@ void main() {
   if (u_flags.y > 0.5) {
     if (cubic) glow = texBicubicDec(u_glow, gp, u_cellTex.xy, u_cellTex.zw).rgb;
     else glow = texBilinearDec(u_glow, gp, u_cellTex.xy, u_cellTex.zw).rgb;
+    glow *= GLOW_SCALE;
     // Glow exists only on the padded cell grid. The pad is capped, so a wide overflow margin can
     // reach past it: fade the glow out over the outermost two cells instead of smearing the
     // clamped edge texels into bands out to the canvas edge. (The canvas normally ends at least

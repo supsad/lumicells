@@ -38,9 +38,13 @@ float u01(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
 #if HDR_RT
 vec4 enc4(vec4 v) { return v; }
 vec4 dec4(vec4 v) { return v; }
+#define GLOW_SCALE 1.0
 #else
 vec4 enc4(vec4 v) { return sqrt(clamp(v * 0.25, 0.0, 1.0)); }
 vec4 dec4(vec4 v) { return v * v * 4.0; }
+// The combined glow already carries strength and saturation (up to ~4x the raw bloom), which
+// would clip at enc4's ceiling of 4 and shift hue; RGBA8 stores it pre-divided by this.
+#define GLOW_SCALE 4.0
 #endif
 
 // ---- Color
