@@ -100,9 +100,10 @@ export function ExportModal({ open, onClose, cfg, presetId, notify }: ExportModa
           <Button
             variant="primary"
             icon="copy"
-            onClick={async () =>
-              notify((await copyText(code)) ? 'Скопировано' : 'Не удалось скопировать', 'success')
-            }
+            onClick={async () => {
+              const ok = await copyText(code);
+              notify(ok ? 'Скопировано' : 'Не удалось скопировать', ok ? 'success' : 'error');
+            }}
           >
             Копировать
           </Button>

@@ -80,6 +80,7 @@ export function StatsGraph({
     palette: null as Palette | null,
     props: { min, max, guides, warnAbove, decimals, color },
     lastText: '',
+    lastRange: '',
   });
   st.current.props = { min, max, guides, warnAbove, decimals, color };
   const guidesKey = guides?.join(',');
@@ -182,9 +183,14 @@ export function StatsGraph({
       valueEl.current.dataset.warn = p.warnAbove !== undefined && last > p.warnAbove ? '1' : '0';
     }
     if (rangeEl.current) {
-      rangeEl.current.textContent = n
+      const range = n
         ? `мин ${lo.toFixed(dec)} · ср ${(sum / n).toFixed(dec)} · макс ${hi.toFixed(dec)}`
         : '';
+      // Assigning textContent replaces the text node even for an equal string: write on change only.
+      if (s.lastRange !== range) {
+        s.lastRange = range;
+        rangeEl.current.textContent = range;
+      }
     }
   };
 
@@ -208,6 +214,7 @@ export function StatsGraph({
         s.head = 0;
         s.count = 0;
         s.lastText = '';
+        s.lastRange = '';
         schedule();
       },
     }),

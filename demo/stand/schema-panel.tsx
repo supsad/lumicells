@@ -128,8 +128,10 @@ export const FieldRow = memo(function FieldRow({ node }: { node: LeafNode }) {
   const store = useStore();
   const { path, field } = node;
   const visible = useSelector((s) => isChainMet(s.cfg, node.chain));
-  const value = usePathValue(path);
-  const def = useSelector((s) => getPath(s.presetCfg, path));
+  const stored = usePathValue(path);
+  const def = useSelector((s) => getPath(s.presetCfg, path)) ?? field.default;
+  // A field added after the config was stored (HMR, old autosave) reads as its default.
+  const value = stored ?? def;
   const effective = useModulated(path);
   const discrete = field.kind === 'boolean' || field.kind === 'enum';
   const onChange = useCallback(

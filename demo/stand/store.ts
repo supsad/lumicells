@@ -4,7 +4,14 @@
  * slider re-renders that row (and whatever else depends on the changed value), not the panel.
  */
 
-import { getPath, getPresetConfig, type PixelLifeConfig, type PresetId, setPath } from 'pixel-life';
+import {
+  getPath,
+  getPresetConfig,
+  normalizeConfig,
+  type PixelLifeConfig,
+  type PresetId,
+  setPath,
+} from 'pixel-life';
 import { createContext, useContext, useSyncExternalStore } from 'react';
 
 /** Tween used while a value is being dragged: feels immediate, still hides steps. */
@@ -36,6 +43,14 @@ export interface SetOptions {
   discrete?: boolean;
 }
 
+/**
+ * Brings a restored or hot-reloaded config up to the current schema: fields added since it was
+ * saved get their defaults (and stale values are clamped), so panel rows never see `undefined`.
+ */
+function fresh(cfg: PixelLifeConfig): PixelLifeConfig {
+  return normalizeConfig(cfg).config;
+}
+
 export class StandStore {
   private snap: StandSnapshot;
   private past: Entry[] = [];
@@ -45,6 +60,7 @@ export class StandStore {
   private group: { path: string; timer: number } | null = null;
 
   constructor(cfg: PixelLifeConfig, presetId: PresetId) {
+    cfg = fresh(cfg);
     this.snap = {
       cfg,
       presetId,
@@ -106,6 +122,7 @@ export class StandStore {
   ): void {
     this.endGroup();
     this.pushHistory();
+    cfg = fresh(cfg);
     this.publish(cfg, presetId, transition ?? cfg.transition);
   }
 
@@ -128,7 +145,7 @@ export class StandStore {
     const prev = this.past.pop();
     if (!prev) return;
     this.future.push({ cfg: this.snap.cfg, presetId: this.snap.presetId });
-    this.publish(prev.cfg, prev.presetId, UNDO_TRANSITION_MS);
+    this.publish(fresh(prev.cfg), prev.presetId, UNDO_TRANSITION_MS);
   }
 
   redo(): void {
@@ -136,7 +153,7 @@ export class StandStore {
     const next = this.future.pop();
     if (!next) return;
     this.past.push({ cfg: this.snap.cfg, presetId: this.snap.presetId });
-    this.publish(next.cfg, next.presetId, UNDO_TRANSITION_MS);
+    this.publish(fresh(next.cfg), next.presetId, UNDO_TRANSITION_MS);
   }
 
   private touch(path: string, discrete: boolean): void {

@@ -2,10 +2,13 @@ import type { PixelLifeConfig, PixelLife as PixelLifeInstance, PresetId } from '
 import { PixelLifeContext } from 'pixel-life/react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ExportModal } from './stand/ExportModal';
+import { hotkeyOf } from './stand/hotkeys';
 import { ImportModal } from './stand/ImportModal';
 import { ModulationContext, ModulationTracker } from './stand/modulation';
 import {
+  decodeShareHash,
   getInitialState,
+  type LoadedState,
   loadJson,
   saveAutosave,
   saveJson,
@@ -53,6 +56,17 @@ export function App() {
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+}
+
+function notifyShared(
+  notify: (message: string, tone: 'success' | 'warn') => void,
+  shared: Pick<LoadedState, 'issues'>,
+): void {
+  const n = shared.issues.length;
+  notify(
+    n ? `Настройки из ссылки применены, замечаний: ${n}` : 'Настройки загружены из ссылки',
+    n ? 'warn' : 'success',
+  );
 }
 
 interface StandProps {
@@ -172,15 +186,27 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
     if (announced.current) return;
     announced.current = true;
     const init = getInitialState();
-    if (init.source === 'hash') {
-      notify(
-        init.issues.length
-          ? `Настройки из ссылки применены, замечаний: ${init.issues.length}`
-          : 'Настройки загружены из ссылки',
-        init.issues.length ? 'warn' : 'success',
-      );
-    }
+    if (init.source === 'hash') notifyShared(notify, init);
   }, [notify]);
+
+  // A share link pasted into a tab where the stand is already open is a same-document fragment
+  // navigation (no reload): apply it here, the same way as on load.
+  useEffect(() => {
+    const onHash = () => {
+      const shared = decodeShareHash(window.location.hash);
+      if (!shared) return;
+      store.replace(shared.cfg, shared.presetId);
+      notifyShared(notify, shared);
+      try {
+        const { pathname, search } = window.location;
+        window.history.replaceState(null, '', pathname + search);
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [store, notify]);
 
   // ------------------------------------------------------------------------ hotkeys
 
@@ -188,7 +214,7 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey) return;
       if (document.querySelector('dialog[open]')) return;
-      const key = e.key.toLowerCase();
+      const key = hotkeyOf(e);
       const mod = e.ctrlKey || e.metaKey;
       if (mod) {
         // Inside text fields Ctrl+Z belongs to the field itself.

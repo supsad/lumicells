@@ -24,11 +24,11 @@ import type { ModulationTracker, TrackedModulator } from './modulation';
 const LIGHT_BASE: BindElementOptions = {
   track: 'auto',
   type: 'light',
-  colorMix: 0.55,
+  colorMix: 0.2,
   falloff: 1.6,
 };
-const LIGHT_STRENGTH = 0.7;
-const LIGHT_HOVER_STRENGTH = 1.25;
+const LIGHT_STRENGTH = 0.28;
+const LIGHT_HOVER_STRENGTH = 0.7;
 
 const SPHERE_BUMP = 0.12; // extra sphere radius right after "готово"
 const SPHERE_BUMP_MS = 1400;
@@ -40,14 +40,6 @@ interface BubbleRec {
   /** False before the entrance flight and after the exit flight: the light stays off. */
   live: boolean;
   hovered: boolean;
-}
-
-/** Approximate size of one grid cell in CSS px (for padding and radii given in "cells"). */
-function cellPx(pl: PixelLife): number {
-  const g = pl.getConfig().grid;
-  if (g.sizing === 'pitch') return g.pitch;
-  const r = pl.host.getBoundingClientRect();
-  return Math.max(1, Math.min(r.width, r.height) / Math.max(1, g.count));
 }
 
 function centerOf(el: Element): { x: number; y: number } {
@@ -130,8 +122,8 @@ export class SceneBinder {
     t.handle = pl.bindElement(t.el, {
       track: 'auto',
       type: 'shadow',
-      strength: 0.85,
-      padding: cellPx(pl),
+      strength: 0.65,
+      padding: 0,
       falloff: 1.4,
     });
   }
