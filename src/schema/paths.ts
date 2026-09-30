@@ -31,19 +31,26 @@ export function walkSchema(visitor: SchemaVisitor, root: GroupDef = schema): voi
   visit(root, '');
 }
 
-let leafCache: { paths: ParamPath[]; fields: Map<string, FieldDef> } | null = null;
+let leafCache: {
+  paths: ParamPath[];
+  fields: Map<string, FieldDef>;
+  /** Pre-split keys of every leaf path (getPath runs for every leaf of every new instance). */
+  keys: Map<string, readonly string[]>;
+} | null = null;
 
 function leaves() {
   if (!leafCache) {
     const paths: ParamPath[] = [];
     const fields = new Map<string, FieldDef>();
+    const keys = new Map<string, readonly string[]>();
     walkSchema((node, path) => {
       if (!isGroup(node)) {
         paths.push(path as ParamPath);
         fields.set(path, node);
+        keys.set(path, path.split('.'));
       }
     });
-    leafCache = { paths, fields };
+    leafCache = { paths, fields, keys };
   }
   return leafCache;
 }
@@ -83,7 +90,7 @@ export function getPath<P extends ParamPath>(cfg: LumiCellsConfig, path: P): Par
 export function getPath(cfg: unknown, path: string): unknown;
 export function getPath(cfg: unknown, path: string): unknown {
   let cur: unknown = cfg;
-  for (const key of path.split('.')) {
+  for (const key of leaves().keys.get(path) ?? path.split('.')) {
     if (!isPlainObject(cur) || !Object.hasOwn(cur, key)) return undefined;
     cur = cur[key];
   }

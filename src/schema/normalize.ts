@@ -364,8 +364,8 @@ function checkRoot(raw: unknown, issues: ConfigIssue[]): Record<string, unknown>
 
 const presetCache = new Map<PresetId, LumiCellsConfig>();
 
-/** Fully resolved config of a preset (defaults + preset patch). Returns a fresh copy. */
-export function getPresetConfig(id: PresetId): LumiCellsConfig {
+/** The cached resolved preset: shared, never to be mutated or handed out. */
+function presetBase(id: PresetId): LumiCellsConfig {
   let cfg = presetCache.get(id);
   if (!cfg) {
     const preset = PRESETS[id];
@@ -376,7 +376,12 @@ export function getPresetConfig(id: PresetId): LumiCellsConfig {
     cfg = { ...body, version: CONFIG_VERSION } as LumiCellsConfig;
     presetCache.set(id, cfg);
   }
-  return cloneData(cfg);
+  return cfg;
+}
+
+/** Fully resolved config of a preset (defaults + preset patch). Returns a fresh copy. */
+export function getPresetConfig(id: PresetId): LumiCellsConfig {
+  return cloneData(presetBase(id));
 }
 
 /**
@@ -388,7 +393,8 @@ export function normalizeConfig(raw: unknown): { config: LumiCellsConfig; issues
   let obj = checkRoot(raw, issues);
   obj = migrate(obj, issues);
   const ext = checkExtends(obj, issues);
-  const base = (ext ? getPresetConfig(ext) : getDefaults()) as unknown as Record<string, unknown>;
+  // The base is only read: sanitizeGroup copies (clones) whatever it takes from it.
+  const base = (ext ? presetBase(ext) : getDefaults()) as unknown as Record<string, unknown>;
   const body = sanitizeGroup(schema, obj, base, '', issues);
   return { config: { version: CONFIG_VERSION, ...body } as LumiCellsConfig, issues };
 }
