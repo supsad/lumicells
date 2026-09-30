@@ -15,7 +15,6 @@ import { Button, IconButton } from './ui';
 interface StageProps {
   cfg: PixelLifeConfig;
   transition: number;
-  paused: boolean;
   prefs: Prefs;
   binder: SceneBinder;
   onInstance(instance: PixelLifeInstance | null): void;
@@ -28,7 +27,6 @@ const clampDim = (v: number) => Math.min(MAX_STAGE, Math.max(MIN_STAGE, Math.rou
 export function Stage({
   cfg,
   transition,
-  paused,
   prefs,
   binder,
   onInstance,
@@ -75,7 +73,6 @@ export function Stage({
             className="stand-host"
             config={cfg}
             transition={transition}
-            paused={paused}
             onError={onError}
           >
             {prefs.scene && <SceneLayer binder={binder} />}

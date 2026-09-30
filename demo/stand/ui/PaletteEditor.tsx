@@ -146,8 +146,11 @@ export function PaletteEditor({
   const add = () => {
     if (n === 0) return insertAt(0, '#ffffff');
     const a = value[sel] as string;
-    if (sel < n - 1) insertAt(sel + 1, midColor(a, value[sel + 1] as string, interpolation));
-    else insertAt(n, a);
+    if (sel < n - 1) return insertAt(sel + 1, midColor(a, value[sel + 1] as string, interpolation));
+    // The last stop has no next one: a copy of it would not change the gradient at all. Insert
+    // the midpoint between the previous stop and the last one, before the last one.
+    if (n >= 2) return insertAt(n - 1, midColor(value[n - 2] as string, a, interpolation));
+    insertAt(n, a);
   };
 
   const remove = (i: number) => {
@@ -382,7 +385,7 @@ export function PaletteEditor({
             icon="plus"
             onClick={add}
             disabled={disabled || n >= maxStops}
-            title="Добавить цвет: средний между выбранным и следующим"
+            title="Добавить цвет: средний между выбранным и следующим (для последнего: между предпоследним и последним)"
           >
             Добавить
           </Button>

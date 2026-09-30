@@ -79,6 +79,9 @@ body {
     right: 12px;
     bottom: 12px;
     z-index: 20;
+    /* top + bottom define the height (below the toolbar, inside the margins); a fixed
+       "height: 100%" would win over them and push the panel past the viewport edge. */
+    height: auto;
     max-width: calc(100% - 24px);
     padding: 0;
   }
@@ -86,6 +89,50 @@ body {
     box-shadow:
       -24px 0 60px rgba(0, 0, 12, 0.5),
       var(--plui-shadow);
+  }
+}
+
+/*
+ * Phones: the panel starts collapsed (see App) and the collapsed rail shrinks to a single button
+ * in the corner instead of a full-height strip over the stage. Opened, the panel fills the
+ * space below the toolbar; the stats block is capped so the parameter list keeps its room.
+ */
+@media (max-width: 699px) {
+  .stand__bar {
+    padding: 8px 8px 0;
+  }
+  .stand__body {
+    padding: 8px 8px 8px;
+  }
+  .stand__dock {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    max-width: calc(100% - 16px);
+  }
+  .stand[data-collapsed] .stand__dock {
+    bottom: auto;
+  }
+  .stand[data-collapsed] .stand__dock .plui-panel {
+    height: auto;
+    border-radius: 10px;
+  }
+  .stand[data-collapsed] .stand__dock .plui-panel__head {
+    flex: none;
+    padding: 6px;
+  }
+  .stand[data-collapsed] .stand__dock .plui-panel__rail-title {
+    display: none;
+  }
+  /* The frame-time graph is dropped (fps and ms stay in the readouts) and the rest is capped,
+     so an open Stats block cannot squeeze the parameter list. */
+  .stand-stats__body .plui-stats {
+    display: none;
+  }
+  .stand-stats__body {
+    max-height: 22dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 }
 
@@ -414,6 +461,14 @@ body {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+}
+
+.stand-export__scope-slot[data-idle] {
+  visibility: hidden;
+}
+/* A fixed code area (not just a max-height) so switching tabs never resizes the modal. */
+.stand-export__code .plui-code__pre {
+  height: 46vh;
 }
 
 .stand-textarea {

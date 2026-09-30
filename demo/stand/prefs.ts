@@ -53,6 +53,13 @@ export const DEFAULT_PREFS: Prefs = {
   statsOpen: false,
 };
 
+/** Below this viewport width (px) the stand uses the phone layout: the panel starts collapsed. */
+export const NARROW_MAX = 699;
+
+export function isNarrowViewport(): boolean {
+  return typeof window !== 'undefined' && window.innerWidth <= NARROW_MAX;
+}
+
 /** Pixel size of the stage frame for a mode (undefined = fills the stage area). */
 export function frameSize(p: Prefs): { w: number; h: number } | null {
   if (p.size === 'full') return null;

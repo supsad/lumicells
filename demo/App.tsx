@@ -5,6 +5,7 @@ import { ExportModal } from './stand/ExportModal';
 import { hotkeyOf } from './stand/hotkeys';
 import { ImportModal } from './stand/ImportModal';
 import { ModulationContext, ModulationTracker } from './stand/modulation';
+import { usePauseModulators } from './stand/pause';
 import {
   decodeShareHash,
   getInitialState,
@@ -15,7 +16,7 @@ import {
   shareUrl,
   UI_KEY,
 } from './stand/persistence';
-import { DEBUG_VIEWS, DEFAULT_PREFS, type Prefs, sanitizePrefs } from './stand/prefs';
+import { DEBUG_VIEWS, isNarrowViewport, type Prefs, sanitizePrefs } from './stand/prefs';
 import { Stage } from './stand/Stage';
 import { StandPanel } from './stand/StandPanel';
 import { SceneBinder } from './stand/scene-binding';
@@ -82,16 +83,29 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
   const toasts = useToasts(4);
   const { push } = toasts;
 
-  const [prefs, setPrefs] = useState<Prefs>(() => ({
-    ...sanitizePrefs(loadJson<Prefs>(PREFS_KEY, DEFAULT_PREFS)),
-    debug: 'final',
-  }));
-  const patchPrefs = useCallback(
-    (patch: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...patch })),
-    [],
-  );
+  // Whether the user has ever opened/closed the panel. Until then the panel state is a default
+  // (collapsed on phones, open elsewhere) and is not saved, so it keeps following the viewport.
+  const panelChosen = useRef<boolean | null>(null);
+  const [prefs, setPrefs] = useState<Prefs>(() => {
+    const saved = loadJson<Partial<Prefs>>(PREFS_KEY, {});
+    panelChosen.current = typeof saved.panelCollapsed === 'boolean';
+    const prefs = sanitizePrefs(saved);
+    return {
+      ...prefs,
+      debug: 'final',
+      panelCollapsed: panelChosen.current ? prefs.panelCollapsed : isNarrowViewport(),
+    };
+  });
+  const patchPrefs = useCallback((patch: Partial<Prefs>) => {
+    if ('panelCollapsed' in patch) panelChosen.current = true;
+    setPrefs((p) => ({ ...p, ...patch }));
+  }, []);
   useEffect(() => {
-    saveJson(PREFS_KEY, { ...prefs, debug: undefined });
+    saveJson(PREFS_KEY, {
+      ...prefs,
+      debug: undefined,
+      panelCollapsed: panelChosen.current ? prefs.panelCollapsed : undefined,
+    });
   }, [prefs]);
 
   const [paused, setPaused] = useState(false);
@@ -116,6 +130,9 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
   useEffect(() => {
     if (instance) instance.setDebugView(prefs.debug);
   }, [instance, prefs.debug]);
+
+  // Pause freezes time but keeps rendering (see pause.ts): edits stay visible, stats stay live.
+  usePauseModulators(instance, tracker, paused);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -226,8 +243,10 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
         return;
       }
       if (isTyping(e.target)) return;
-      if (key === 'h') setPrefs((p) => ({ ...p, panelCollapsed: !p.panelCollapsed }));
-      else if (key === 'p') setPaused((v) => !v);
+      if (key === 'h') {
+        panelChosen.current = true;
+        setPrefs((p) => ({ ...p, panelCollapsed: !p.panelCollapsed }));
+      } else if (key === 'p') setPaused((v) => !v);
       else if (key === 'd') {
         setPrefs((p) => {
           const i = DEBUG_VIEWS.findIndex((d) => d.id === p.debug);
@@ -283,7 +302,6 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
           <Stage
             cfg={snap.cfg}
             transition={snap.transition}
-            paused={paused}
             prefs={prefs}
             binder={binder}
             onInstance={setInstance}
