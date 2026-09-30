@@ -12,6 +12,7 @@ float sat(float x) { return clamp(x, 0.0, 1.0); }
 vec2 sat2(vec2 x) { return clamp(x, 0.0, 1.0); }
 vec3 sat3(vec3 x) { return clamp(x, 0.0, 1.0); }
 float sq(float x) { return x * x; }
+vec3 sq3(vec3 x) { return x * x; }
 float max3(vec3 c) { return max(c.r, max(c.g, c.b)); }
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 vec3 saturateColor(vec3 c, float s) { return max(vec3(0.0), mix(vec3(luma(c)), c, s)); }

@@ -24,3 +24,6 @@ Thumbs.db
 
 # Browser automation artifacts
 .playwright-mcp/
+
+# Local design mock used by examples/tune.html
+examples/tune/reference.png

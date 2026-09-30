@@ -45,9 +45,13 @@ void addMode(inout Mix x, float w, vec3 v) {
   x.accent = max(x.accent, w * v.z);
 }
 
-// Per-cell value noise in time: aperiodic, smooth, identical at any frame rate.
-float flickerF(uvec2 key, float h) {
-  float amt = P_animation_flicker_amount * (1.0 - 0.8 * f_clock.w);
+// Per-cell value noise in time: aperiodic, smooth, identical at any frame rate. It doubles as the
+// per-cell brightness variety: calm on the dense structure, twice as wide where the envelope
+// thins out (the reference's outer band mixes bright and dim cells side by side).
+float flickerF(uvec2 key, float h, float env) {
+  float amt = P_animation_flicker_amount * (1.0 - 0.8 * f_clock.w)
+            * (1.0 + 1.2 * (1.0 - smoothstep(0.3, 0.9, env)));
+  amt = min(amt, 0.9);
   if (amt <= 0.001) return 1.0;
   float tt = f_clock.x * P_animation_flicker_rate * (0.6 + 0.8 * h) + h * 7.0;
   float e = floor(tt);
@@ -58,13 +62,16 @@ float flickerF(uvec2 key, float h) {
   return 1.0 - amt * (1.0 - mix(a, b, f * f * (3.0 - 2.0 * f)));
 }
 
-// Sparsity: where the envelope is low, cells disappear (re-rolled every period, crossfaded over
+// Sparsity: where the envelope is low, cells drop out (re-rolled every period, crossfaded over
 // 0.4 s) instead of all dimming, and survivors get brighter and more varied: sparse, crisp
 // outskirts. "vary" is the survivor's brightness factor (1 where nothing is killed).
 float presenceF(uvec2 key, float h, float env, out float killP, out float vary) {
-  // Calibrated on the reference: ~5% / 30% / 78% of cells gone where the envelope is ~0.55 /
-  // 0.25 / 0.07 at the default amount.
-  killP = min(1.0, 1.45 * P_animation_sparsity_amount) * sq(1.0 - smoothstep(0.03, 0.6, env));
+  // Calibrated on the reference: ~5% / 30% / 75% of cells out where the envelope is ~0.7 /
+  // 0.45 / 0.1 at the default amount.
+  killP = min(1.0, 1.45 * P_animation_sparsity_amount) * pow(1.0 - smoothstep(0.08, 0.9, env), 1.5);
+  // Where the envelope is ~0 (far outskirts of a wide host) the survivors thin out to nothing, so
+  // the edges read as clean navy instead of a uniform sprinkle of boosted cells.
+  killP = mix(killP, sat(2.0 * P_animation_sparsity_amount), 1.0 - smoothstep(0.01, 0.1, env));
   vary = 1.0;
   if (killP <= 0.001) return 1.0;
   float period = max(P_animation_sparsity_period, 0.1);
@@ -100,8 +107,11 @@ float sparkleF(uvec2 key, float h, float I) {
 float mapT(float mode, vec2 p, float I) {
   float sc = P_color_scale;
   if (mode < 0.5) {
-    float a = P_color_angle;
-    return SPATIAL_T0 + 0.5 * SPATIAL_K * sc * dot(p, vec2(cos(a), sin(a)));
+    // bend > 0 curves the color boundaries into arcs around the center: the ends of a boundary
+    // drift toward the palette end, so the start color stays a crescent on one side.
+    vec2 d = vec2(cos(P_color_angle), sin(P_color_angle));
+    float across = dot(p, vec2(-d.y, d.x));
+    return SPATIAL_T0 + 0.5 * SPATIAL_K * sc * (dot(p, d) + P_color_bend * across * across);
   }
   if (mode < 1.5) return length(p) * sc * 0.75;
   if (mode < 2.5) {
@@ -146,17 +156,23 @@ ${MODES_EVAL_GLSL}
   float env = sat(x.env);
 
   I = pow(max(I, 0.0), max(P_animation_gamma, 0.05)) * P_animation_brightness * P_animation_energy;
-  I *= flickerF(key, h);
+  I *= flickerF(key, h, env);
+  // Heat is judged before the sparsity boost: a lone bright survivor in the outskirts must stay
+  // saturated, only the genuinely hottest cells of the structure get pastel cores.
+  float Iheat = I;
   float killP;
   float vary;
   float pres = presenceF(key, h2, env, killP, vary);
-  I *= pres * vary * (1.0 + 2.5 * killP);
+  // Dropped cells linger as dim squares next to the structure (the reference's outer band mixes
+  // dim and bright cells) and vanish completely far out.
+  I *= vary * mix(0.25 * smoothstep(0.2, 0.7, env), 1.0 + 2.5 * killP, pres);
   // Soft gate on near-black cells: against navy even I = 0.05 reads as a dim grid, while the
   // look wants the outskirts either empty or holding a few crisp survivors.
   I *= smoothstep(0.015, 0.09, I);
   float spk = sparkleF(key, h, I);
   I += P_animation_sparkle_amount * spk;
-  float hotAdd = 0.8 * spk * min(P_animation_sparkle_amount * 2.5, 1.0);
+  // Sparkles are brightness peaks with only a hint of the hot tint, never white flashes.
+  float hotAdd = 0.3 * spk * min(P_animation_sparkle_amount * 2.5, 1.0);
 
   // Influences (device px): light adds and tints, shadow multiplies down, lift heats up.
   vec3 tint = vec3(0.0);
@@ -169,8 +185,9 @@ ${MODES_EVAL_GLSL}
     float k = influenceK(i, cpx, pitch) * b.z;
     if (k <= 0.0) continue;
     if (b.w < 0.5) {
-      I += k;
-      hotAdd += 0.15 * k;
+      // Light lifts dim cells more than bright ones and never bleaches them: a lit neighbourhood
+      // stays saturated neon instead of turning pastel.
+      I += k * (1.0 - 0.5 * sat(I));
       vec4 c = f_inf[i * 3 + 2];
       tint += c.rgb * (k * c.a);
       tintW += k * c.a;
@@ -204,9 +221,15 @@ ${MODES_EVAL_GLSL}
     vec4 s = f_socket[i];
     if (ivec2(floor(s.xy + 0.5)) == cell) sock = max(sock, s.z);
   }
-  I = Ipre * (1.0 - sat(sock));
+  // Same gate as the lift pass: a copy faded out over a dark cell leaves no dimmed socket behind.
+#ifdef P_lift_threshold
+  float gateHi = P_lift_threshold;
+#else
+  float gateHi = 0.2;
+#endif
+  I = Ipre * (1.0 - sat(sock) * smoothstep(0.5 * gateHi, gateHi, Ipre));
 
-  float hot = (smoothstep(P_color_hot_threshold, 1.0, Ipre) * P_color_hot_amount + hotAdd) * shade;
+  float hot = (smoothstep(P_color_hot_threshold, 1.0, Iheat) * P_color_hot_amount + hotAdd) * shade;
 
   // Palette position: mapping (+ crossfade from the previous mapping), warp, jitter, drift.
   float t = mapT(P_color_mapping, p, Ipre);
@@ -217,16 +240,17 @@ ${MODES_EVAL_GLSL}
   t = f_phaseB.w != 0.0 ? tri(t + f_phaseB.w) : sat(t);
 
   vec3 base = texture(u_lut, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.25)).rgb;
-  // Hue cues from the reference: inner-edge patches lean cyan on the cool side, hot cells lean
-  // red on the warm side. Rotating in OKLab keeps lightness and chroma.
-  float rot = -0.85 * x.accent * smoothstep(0.45, 0.62, t)
-            + 0.35 * sat(hot) * (1.0 - smoothstep(0.3, 0.45, t));
-  if (abs(rot) > 1e-3) {
+  // Hue cues from the reference: organic inner-edge patches take the accent color on the cool
+  // half of the palette (cyan in the blue), hot cells lean red on the warm side. Both in OKLab.
+  // Sharpened so patch cores take the accent fully (distinct teal cells, not a tinted azure).
+  float acc = sat(1.6 * x.accent * P_color_accent_amount - 0.3) * smoothstep(0.42, 0.58, t);
+  float rot = 0.35 * sat(hot) * (1.0 - smoothstep(0.2, 0.35, t));
+  if (acc > 1e-3 || rot > 1e-3) {
     vec3 lab = lin2oklab(base);
     float cr = cos(rot);
     float sr = sin(rot);
     lab.yz = vec2(lab.y * cr - lab.z * sr, lab.y * sr + lab.z * cr);
-    lab.x *= 1.0 + 0.12 * x.accent * smoothstep(0.45, 0.62, t);
+    lab = mix(lab, lin2oklab(P_color_accent_color), acc);
     base = max(oklab2lin(lab), vec3(0.0));
   }
   base = saturateColor(base, P_color_saturation);

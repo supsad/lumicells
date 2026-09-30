@@ -80,7 +80,7 @@ export function createLiftParams(): LiftParams {
     fall: 0.45,
     bokeh: 0.3,
     socket: 0.6,
-    outerBias: 0.6,
+    outerBias: 0.85,
     cluster: 0.15,
     landing: 0.25,
     floatSpeed: 0.9,
@@ -335,8 +335,11 @@ export class LiftScheduler {
       out[lo + LIFT_TILT_Y] = (rec[o + TILT_B] as number) * tiltRad * hp;
       out[lo + LIFT_H] = h;
       out[lo + LIFT_ALPHA] = alpha;
+      // Bokeh: only a `bokeh` share of lifts is out of focus (soft over 0.12-0.3 pitch); the
+      // rest stay crisp like the grid.
       const depth = rec[o + DEPTH] as number;
-      out[lo + LIFT_BLUR] = p.bokeh * depth * depth * 0.6 * pitch * hp;
+      out[lo + LIFT_BLUR] =
+        depth < p.bokeh ? (0.12 + (0.18 * depth) / Math.max(p.bokeh, 1e-3)) * pitch * hp : 0;
       out[lo + LIFT_SEED] = rec[o + SEED] as number;
       const so = OFF_SOCKET + n * 4;
       frame[so] = tx;
@@ -390,7 +393,12 @@ export class LiftScheduler {
         const px = (ci * pitch * inv - p.sceneX) / zoom;
         const py = (cj * pitch * inv - p.sceneY) / zoom;
         const r = Math.sqrt(px * px + py * py);
-        const weight = mix(1, smoothstep(0.6, 0.9, r), p.outerBias);
+        // Outer band of the ring, not the far corners (those cells are mostly dropped anyway).
+        const weight = mix(
+          1,
+          smoothstep(0.6, 0.85, r) * (1 - 0.6 * smoothstep(1.15, 1.45, r)),
+          p.outerBias,
+        );
         if (this.random() >= weight || this.has(ci, cj)) continue;
         this.spawn(ci, cj, 0, p, false);
         if (this.random() < p.cluster) this.spawnCluster(ci, cj, mx, my, cap, p);

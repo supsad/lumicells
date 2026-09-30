@@ -118,7 +118,7 @@ describe('PixelLife without WebGL2', () => {
     pl.setDebugView('bloom');
     expect(inf.id).toBeGreaterThan(0);
     expect(bound.id).toBeGreaterThan(inf.id);
-    expect(pl.getConfig().modes.sphere.radius).toBe(0.66);
+    expect(pl.getConfig().modes.sphere.radius).toBe(0.68);
     expect(pl.exportConfig({ mode: 'diff' })).not.toHaveProperty('modes');
     m.dispose();
     inf.dispose();

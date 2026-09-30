@@ -65,14 +65,14 @@ describe('Controller.modulate', () => {
     const c = controller();
     const h = c.modulate(RADIUS, 0.2, { blend: 'add' });
     const f = c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(0.86, 6);
-    expect(f.params[slot(RADIUS)]).toBeCloseTo(0.86, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.88, 6);
+    expect(f.params[slot(RADIUS)]).toBeCloseTo(0.88, 6);
     expect(f.paramsDirty).toBe(true);
     // The base config is untouched (never exported).
-    expect(c.getConfig().modes.sphere.radius).toBe(0.66);
+    expect(c.getConfig().modes.sphere.radius).toBe(0.68);
     h.set(0.4);
     c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(1.06, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(1.08, 6);
   });
 
   it('keeps modulating while the base tweens', () => {
@@ -101,7 +101,7 @@ describe('Controller.modulate', () => {
     const c = controller();
     c.modulate('color.angle', 350, { blend: 'add' });
     c.update(1 / 60);
-    expect(c.getEffective('color.angle')).toBeCloseTo(22, 6); // (32 + 350) mod 360
+    expect(c.getEffective('color.angle')).toBeCloseTo(12, 6); // (22 + 350) mod 360
   });
 
   it('dispose restores the plain tweened value on the GPU', () => {
@@ -109,17 +109,17 @@ describe('Controller.modulate', () => {
     const h = c.modulate(RADIUS, 0.5);
     c.update(1 / 60);
     c.commitFrame();
-    expect(c.getEffective(RADIUS)).toBeCloseTo(1.16, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(1.18, 6);
     h.dispose();
     h.dispose(); // idempotent
     const f = c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(0.66, 6);
-    expect(f.params[slot(RADIUS)]).toBeCloseTo(0.66, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.68, 6);
+    expect(f.params[slot(RADIUS)]).toBeCloseTo(0.68, 6);
     expect(f.paramsDirty).toBe(true);
     expect(c.store.isModulated(RADIUS)).toBe(false);
     h.set(9); // no-op after dispose
     c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(0.66, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.68, 6);
   });
 
   it('Symbol.dispose and AbortSignal dispose too', () => {
@@ -128,11 +128,11 @@ describe('Controller.modulate', () => {
     c.modulate(RADIUS, 0.1, { signal: ac.signal });
     const h2 = c.modulate('scene.zoom', 2, { blend: 'override' });
     c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(0.76, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.78, 6);
     ac.abort();
     h2[Symbol.dispose]();
     c.update(1 / 60);
-    expect(c.getEffective(RADIUS)).toBeCloseTo(0.66, 6);
+    expect(c.getEffective(RADIUS)).toBeCloseTo(0.68, 6);
     expect(c.getEffective('scene.zoom')).toBeCloseTo(1, 6);
   });
 

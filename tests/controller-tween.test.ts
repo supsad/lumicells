@@ -28,23 +28,23 @@ describe('ParamStore scalar tween', () => {
   it('starts at the config values with the whole block dirty', () => {
     const s = store();
     expect(s.dirty).toBe(true);
-    expect(s.getEffective('modes.sphere.radius')).toBeCloseTo(0.66);
-    expect(s.params[slot('modes.sphere.radius')]).toBeCloseTo(0.66);
+    expect(s.getEffective('modes.sphere.radius')).toBeCloseTo(0.68);
+    expect(s.params[slot('modes.sphere.radius')]).toBeCloseTo(0.68);
   });
 
   it('converges exponentially: ~99.3% after the duration, exact after snapping', () => {
     const s = store();
-    s.setTarget('modes.sphere.radius', 1.16, 600);
+    s.setTarget('modes.sphere.radius', 1.18, 600);
     run(s, 0.6);
     const v = s.getEffective('modes.sphere.radius');
-    const progress = (v - 0.66) / 0.5;
+    const progress = (v - 0.68) / 0.5;
     expect(progress).toBeGreaterThan(0.99);
     expect(progress).toBeLessThan(1);
     expect(s.animating).toBe(true);
     run(s, 1.5);
     expect(s.animating).toBe(false);
-    expect(s.getEffective('modes.sphere.radius')).toBe(1.16);
-    expect(s.params[slot('modes.sphere.radius')]).toBeCloseTo(1.16, 6);
+    expect(s.getEffective('modes.sphere.radius')).toBe(1.18);
+    expect(s.params[slot('modes.sphere.radius')]).toBeCloseTo(1.18, 6);
   });
 
   it('is frame-rate independent', () => {
@@ -58,9 +58,9 @@ describe('ParamStore scalar tween', () => {
       b.getEffective('glow.bloom.strength'),
       4,
     );
-    // Analytic value: 0.35 + (1.5 - 0.35) * (1 - e^(-5 t / d))
+    // Analytic value: 0.8 + (1.5 - 0.8) * (1 - e^(-5 t / d))
     expect(a.getEffective('glow.bloom.strength')).toBeCloseTo(
-      0.35 + 1.15 * (1 - Math.exp(-5 / 3 / 0.8)),
+      0.8 + 0.7 * (1 - Math.exp(-5 / 3 / 0.8)),
       5,
     );
   });

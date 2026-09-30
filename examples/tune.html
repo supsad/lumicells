@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pixel Life — настройка по референсу</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #0b0b12;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+      }
+      #host {
+        position: relative;
+        background: #000032;
+        flex: none;
+      }
+      #ref {
+        display: block;
+        flex: none;
+        image-rendering: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div id="host"></div>
+      <!-- The design mock is not versioned: drop it at examples/tune/reference.png locally. -->
+      <img id="ref" src="./tune/reference.png" alt="Референс" onerror="this.remove()" />
+    </div>
+    <script type="module" src="./tune/main.ts"></script>
+  </body>
+</html>

@@ -96,7 +96,7 @@ describe('createParamLayout', () => {
     layout.writeAll(buf, cfg);
     const at = (p: string) => layout.slots.get(p)?.offset ?? -1;
     expect(buf[at('grid.gap')]).toBeCloseTo(0.27, 6);
-    expect(buf[at('color.angle')]).toBeCloseTo((32 * Math.PI) / 180, 6);
+    expect(buf[at('color.angle')]).toBeCloseTo((22 * Math.PI) / 180, 6);
     expect(buf[at('modes.sphere.weight')]).toBe(1);
     for (const s of layout.slots.values()) {
       for (let i = 0; i < s.size; i++) expect(buf[s.offset + i]).not.toBe(-99);

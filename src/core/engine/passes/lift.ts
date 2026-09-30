@@ -57,7 +57,8 @@ void main() {
   float corner = sat(P_grid_roundness) * min(halfB.x, halfB.y);
   float la = P_modes_sphere_lightAngle;
   vec2 shOff = -vec2(cos(la), sin(la)) * (max(h, 0.0) * 0.3 * pitch);
-  float feather = P_grid_softness + 0.5 + max(a_i2.z, 0.0) + 0.08 * pitch * max(h, 0.0);
+  // Crisp like a grid cell unless the controller gave this lift a depth-of-field blur (bokeh).
+  float feather = P_grid_softness + 0.5 + max(a_i2.z, 0.0) + 0.02 * pitch * max(h, 0.0);
   float ext = max(halfB.x, halfB.y) + 0.9 * pitch + length(shOff) + (0.15 + 0.5 * max(h, 0.0)) * pitch
             + feather + 2.0;
   vec2 c = (vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0) * ext;
@@ -73,12 +74,15 @@ void main() {
   v_plane = c;
   vec3 hotC = textureLod(u_lut, vec2(B.r * (255.0 / 256.0) + 0.5 / 256.0, 0.75), 0.0).rgb;
   hotC /= max(max3(hotC), 1e-4);
-  float Il = max(Ipre, 0.55) * (1.0 + P_lift_brightness * max(h, 0.0));
+  // Brighter than the grid around it even after the tonemap shoulder (neighbours also get their
+  // halo and bloom on top), otherwise the copy reads as a dim tile with a glowing outline.
+  float Il = max(Ipre, 0.7) * (1.0 + 2.0 * P_lift_brightness * max(h, 0.0));
   // The popped cell glows in its local hue at full chroma even when it comes from the dark end
-  // of the palette (outskirts); scaling a navy up would read as grey.
+  // of the palette (outskirts); scaling a navy up would read as grey. Whitening stays a hint:
+  // the hot tint is near white, and a pastel lift reads as a washed-out sticker.
   vec3 hue = A.rgb / max(max3(A.rgb), 1e-4);
-  v_base = vec4(saturateColor(hue, 1.1), Il);
-  v_hot = vec4(hotC, sat(P_lift_whiten * max(h, 0.0) + 0.25 * B.g));
+  v_base = vec4(saturateColor(hue, 1.15), Il);
+  v_hot = vec4(hotC, sat(P_lift_whiten * max(h, 0.0) + 0.1 * B.g));
   v_geo = vec4(halfB, h, feather);
   v_misc = vec4(shOff, alpha, corner);
 }
@@ -102,12 +106,16 @@ void main() {
   float body = 1.0 - smoothstep(-feather, feather, d);
   float dh = max(d, 0.0) / pitch;
   float r2 = max(P_glow_halo_radius, 0.01) * (1.0 + 1.5 * h);
-  float haloK = (0.6 * exp2(-dh * 28.8539) + 0.25 * exp2(-dh * 1.4427 / r2)) * sq(sat(1.0 - dh / 0.9));
+  // Soft lobe only (a tight rim would outline the tile instead of making it glow), grown in with
+  // the height: at h ~ 0 the copy still sits on its own cell.
+  float haloK = 0.45 * exp2(-dh * 1.4427 / r2) * sq(sat(1.0 - dh / 0.9)) * smoothstep(0.05, 0.6, h);
   float ds = sdRoundBox(v_plane - v_misc.xy, v_geo.xy, v_misc.w);
   float sBlur = (0.15 + 0.5 * h) * pitch;
   float shadowA = sat(P_lift_shadow) * sat(h) * (1.0 - smoothstep(-sBlur, sBlur, ds));
-  vec3 col = mix(v_base.rgb, v_hot.rgb, v_hot.a) * v_base.a;
-  vec3 haloC = saturateColor(v_base.rgb, P_glow_saturation) * (v_base.a * haloK * P_lift_halo * 0.5);
+  // Whitening mixes in a gamma-2 space: a linear mix of 10% near-white into saturated blue
+  // already reads pastel after the sRGB encode.
+  vec3 col = sq3(mix(sqrt(v_base.rgb), sqrt(v_hot.rgb), v_hot.a)) * v_base.a;
+  vec3 haloC = saturateColor(v_base.rgb, P_glow_saturation) * (v_base.a * haloK * P_lift_halo * 0.8);
   float ex = P_glow_exposure;
   float wp = P_glow_whitePoint;
   vec3 bodyS = lin2srgb(tonemapMax(col * ex, wp));

@@ -101,10 +101,16 @@ void main() {
       mediump float dq = sqrt(sqrt(dot(q2, q2)));
       mediump float core = 1.0 - smoothstep(0.45 * P_color_hot_core, 1.45 * P_color_hot_core, dq);
       mediump float hk = b0.g * core;
-      vec3 hotC = texture(u_lut, vec2(b0.r * (255.0 / 256.0) + 0.5 / 256.0, 0.75)).rgb;
-      // Keep the tint near the base's brightness: whitening a dark navy cell must not paint a grey dot.
-      hotC *= min(1.0, 1.6 * max3(f0.rgb) / max(max3(hotC), 1e-4));
-      vec3 cc = mix(f0.rgb, hotC, hk) * (f0.a * (1.0 + 0.5 * hk)) + f0.rgb * b0.b;
+      vec3 cc = f0.rgb;
+      if (hk > 0.002) {
+        vec3 hotC = texture(u_lut, vec2(b0.r * (255.0 / 256.0) + 0.5 / 256.0, 0.75)).rgb;
+        // Keep the tint near the base's brightness: whitening a dark navy cell must not paint a
+        // grey dot. The mix runs in a gamma-2 space: linear mixing of a little near-white into
+        // saturated neon already reads pastel after the sRGB encode.
+        hotC *= min(1.0, 1.6 * max3(f0.rgb) / max(max3(hotC), 1e-4));
+        cc = sq3(mix(sqrt(f0.rgb), sqrt(hotC), hk));
+      }
+      cc = cc * (f0.a * (1.0 + 0.5 * hk)) + f0.rgb * b0.b;
       if (P_grid_bevel > 0.0 && !lowQ) {
         mediump float rim = 1.0 - smoothstep(0.0, 0.3 * hb, -d0);
         cc *= max(0.0, 1.0 + 4.0 * P_grid_bevel * rim * clamp(-(lc.x + lc.y) / hb, -1.0, 1.0));
