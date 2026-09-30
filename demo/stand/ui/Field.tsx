@@ -1,4 +1,5 @@
 import { type ReactNode, useId } from 'react';
+import { useT } from '../i18n';
 import { Icon } from './Icon';
 import { copyText, cx, useFlash } from './utils';
 
@@ -46,6 +47,7 @@ export function Field({
   layout = 'row',
   children,
 }: FieldProps) {
+  const t = useT();
   const title = typeof label === 'string' ? label : undefined;
   return (
     <div
@@ -59,7 +61,7 @@ export function Field({
             id={labelId}
             htmlFor={htmlFor}
             className="lcui-field__label"
-            title={onReset ? `${title ?? ''}${title ? ' — ' : ''}двойной клик: сбросить` : title}
+            title={onReset ? `${title ?? ''}${title ? ' — ' : ''}${t.ui.doubleClickReset}` : title}
             onDoubleClick={() => !disabled && changed && onReset?.()}
           >
             {label}
@@ -72,8 +74,8 @@ export function Field({
               onClick={onReset}
               disabled={disabled || !changed}
               tabIndex={changed && !disabled ? 0 : -1}
-              aria-label={`Сбросить: ${title ?? 'значение'}`}
-              title="Сбросить к значению по умолчанию"
+              aria-label={t.ui.resetAria(title ?? t.ui.value)}
+              title={t.ui.resetTitle}
             >
               <Icon name="reset" size={11} />
             </button>
@@ -87,6 +89,7 @@ export function Field({
 }
 
 function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
+  const t = useT();
   const id = useId();
   const [copied, flash] = useFlash();
   return (
@@ -99,7 +102,7 @@ function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
           onClick={async () => {
             if (await copyText(path)) flash();
           }}
-          title="Скопировать путь"
+          title={t.ui.copyPath}
         >
           <code>{path}</code>
           <Icon name={copied ? 'check' : 'copy'} size={11} />
@@ -111,12 +114,10 @@ function FieldPop({ hint, path }: { hint?: ReactNode; path?: string }) {
 
 /** Tiny "modulated by animation" badge used next to labels. */
 export function ModulatedBadge({ effective, decimals }: { effective: number; decimals: number }) {
+  const t = useT();
   return (
-    <span
-      className="lcui-modbadge"
-      title={`Значение изменяется модуляцией. Эффективное: ${effective.toFixed(decimals)}`}
-    >
-      мод.
+    <span className="lcui-modbadge" title={t.ui.modulatedTitle(effective.toFixed(decimals))}>
+      {t.ui.modulated}
     </span>
   );
 }

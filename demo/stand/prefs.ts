@@ -1,31 +1,35 @@
-/** Stand-only preferences (not part of the lumicells config): stage size, toggles, panel state. */
+/**
+ * Stand-only preferences (not part of the lumicells config): stage size, toggles, panel state,
+ * UI language.
+ */
 
-import type { DebugView } from 'lumicells';
+import { type DebugView, isLocale, type Locale } from 'lumicells';
 
 export type SizeMode = 'full' | 'card' | 'banner' | 'phone' | 'custom';
 
+/** Stage size presets; their captions live in the i18n dictionaries (`sizes`). */
 export interface SizeDef {
   id: SizeMode;
-  label: string;
   w?: number;
   h?: number;
 }
 
 export const SIZE_MODES: readonly SizeDef[] = [
-  { id: 'full', label: 'Весь экран' },
-  { id: 'card', label: 'Карточка 360×360', w: 360, h: 360 },
-  { id: 'banner', label: 'Баннер 1200×320', w: 1200, h: 320 },
-  { id: 'phone', label: 'Телефон 390×844', w: 390, h: 844 },
-  { id: 'custom', label: 'Свой размер' },
+  { id: 'full' },
+  { id: 'card', w: 360, h: 360 },
+  { id: 'banner', w: 1200, h: 320 },
+  { id: 'phone', w: 390, h: 844 },
+  { id: 'custom' },
 ];
 
-export const DEBUG_VIEWS: ReadonlyArray<{ id: DebugView; label: string }> = [
-  { id: 'final', label: 'Итог' },
-  { id: 'field', label: 'Поле' },
-  { id: 'halo', label: 'Гало' },
-  { id: 'bloom', label: 'Блум' },
-  { id: 'haze', label: 'Дымка' },
-  { id: 'cells', label: 'Ячейки' },
+/** Debug views in the order the D hotkey cycles through them (captions: i18n `debugViews`). */
+export const DEBUG_VIEWS: ReadonlyArray<{ id: DebugView }> = [
+  { id: 'final' },
+  { id: 'field' },
+  { id: 'halo' },
+  { id: 'bloom' },
+  { id: 'haze' },
+  { id: 'cells' },
 ];
 
 export const MIN_STAGE = 120;
@@ -40,6 +44,8 @@ export interface Prefs {
   panelCollapsed: boolean;
   showAdvanced: boolean;
   statsOpen: boolean;
+  /** UI language of the stand and the demo scene (`?lang=` overrides it for one visit). */
+  locale: Locale;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -51,6 +57,7 @@ export const DEFAULT_PREFS: Prefs = {
   panelCollapsed: false,
   showAdvanced: false,
   statsOpen: false,
+  locale: 'en',
 };
 
 /** Below this viewport width (px) the stand uses the phone layout: the panel starts collapsed. */
@@ -87,5 +94,6 @@ export function sanitizePrefs(raw: Partial<Prefs>): Prefs {
     panelCollapsed: typeof raw.panelCollapsed === 'boolean' ? raw.panelCollapsed : d.panelCollapsed,
     showAdvanced: typeof raw.showAdvanced === 'boolean' ? raw.showAdvanced : d.showAdvanced,
     statsOpen: typeof raw.statsOpen === 'boolean' ? raw.statsOpen : d.statsOpen,
+    locale: isLocale(raw.locale) ? raw.locale : d.locale,
   };
 }

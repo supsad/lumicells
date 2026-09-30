@@ -45,6 +45,9 @@ body {
 
 .stand__bar {
   flex: none;
+  /* Above the stage/dock so the toolbar dropdown (Examples) is not painted under them. */
+  position: relative;
+  z-index: 30;
   padding: 12px 12px 0;
 }
 
@@ -539,6 +542,111 @@ body {
   font-family: var(--lcui-mono);
   color: var(--lcui-cyan);
   white-space: nowrap;
+}
+
+/* ------------------------------------------- language switch and links */
+
+.stand-tb-group--meta {
+  gap: 8px;
+}
+
+.stand-lang {
+  display: inline-flex;
+  margin: 0;
+  padding: 2px;
+  min-inline-size: 0;
+  border: 1px solid var(--lcui-border-strong);
+  border-radius: var(--lcui-radius);
+  background: var(--lcui-well);
+}
+.stand-lang__btn {
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lcui-text-mute);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.stand-lang__btn:hover {
+  color: var(--lcui-text);
+}
+.stand-lang__btn[aria-pressed="true"] {
+  background: var(--lcui-raise-2);
+  color: var(--lcui-text);
+}
+.stand-lang__btn:focus-visible {
+  outline: 2px solid var(--lcui-focus);
+  outline-offset: 1px;
+}
+
+.stand-link {
+  color: var(--lcui-text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.stand-link:hover {
+  color: var(--lcui-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.stand-link:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--lcui-focus);
+  outline-offset: 2px;
+}
+
+.stand-menu {
+  position: relative;
+}
+.stand-menu > summary {
+  list-style: none;
+}
+.stand-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.stand-menu > summary::after {
+  content: "";
+  display: inline-block;
+  margin-left: 4px;
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+  border-bottom-width: 0;
+  vertical-align: middle;
+}
+.stand-menu__list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 4px;
+  border: 1px solid var(--lcui-border-strong);
+  border-radius: 8px;
+  background: var(--lcui-surface-solid);
+  box-shadow: var(--lcui-shadow);
+}
+.stand-menu__item {
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: var(--lcui-text);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.stand-menu__item:hover,
+.stand-menu__item:focus-visible {
+  outline: none;
+  background: var(--lcui-raise-2);
 }
 
 @media (min-width: 1760px) {

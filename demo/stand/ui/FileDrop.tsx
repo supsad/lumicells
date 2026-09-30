@@ -1,4 +1,5 @@
 import { type ReactNode, useRef, useState } from 'react';
+import { useT } from '../i18n';
 import { Icon } from './Icon';
 import { cx } from './utils';
 
@@ -46,6 +47,7 @@ export function FileDrop({
   disabled,
   className,
 }: FileDropProps) {
+  const t = useT();
   const [over, setOver] = useState(false);
   const depth = useRef(0);
 
@@ -53,14 +55,14 @@ export function FileDrop({
     const file = files?.[0];
     if (!file) return;
     if (!matchesAccept(file, accept)) {
-      onError?.(`Файл «${file.name}» не подходит: нужен ${accept}`, file);
+      onError?.(t.ui.fileWrongType(file.name, accept), file);
       return;
     }
     onFile?.(file);
     if (onText) {
       file.text().then(
-        (t) => onText(t, file),
-        () => onError?.(`Не удалось прочитать «${file.name}»`, file),
+        (text) => onText(text, file),
+        () => onError?.(t.ui.fileReadFailed(file.name), file),
       );
     }
   };
@@ -89,7 +91,9 @@ export function FileDrop({
       <span className="lcui-drop__text">
         {children ?? (
           <>
-            Перетащите <b>.json</b> сюда или нажмите, чтобы выбрать
+            {t.ui.fileDropBefore}
+            <b>.json</b>
+            {t.ui.fileDropAfter}
           </>
         )}
       </span>

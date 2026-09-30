@@ -8,7 +8,9 @@ import {
   type GroupDef,
   getPath,
   isGroup,
+  LOCALES,
   type LumiCellsConfig,
+  localizedText,
   schema,
   type VisibleWhen,
   valueEquals,
@@ -22,7 +24,7 @@ export interface LeafNode {
   /** visibleWhen of the field and all its ancestor groups. */
   chain: readonly VisibleWhen[];
   advanced: boolean;
-  /** Lower-cased label + path + description for the search filter. */
+  /** Lower-cased labels + descriptions in every locale + path, for the search filter. */
   text: string;
 }
 
@@ -48,8 +50,15 @@ export interface PanelModel {
   sections: GroupNode[];
 }
 
-const textOf = (label: string, path: string, description?: string) =>
-  `${label} ${path} ${description ?? ''}`.toLowerCase();
+/** Search text in every locale, so a query matches whatever language the panel shows. */
+function textOf(path: string): string {
+  const parts = [path];
+  for (const locale of LOCALES) {
+    const t = localizedText(path, locale);
+    if (t) parts.push(t.label, t.description ?? '');
+  }
+  return parts.join(' ').toLowerCase();
+}
 
 function byOrder<T extends { order?: number }>(entries: Array<[string, T]>): Array<[string, T]> {
   // Array.prototype.sort is stable: fields without `order` keep their declaration order.
@@ -78,7 +87,7 @@ function buildGroup(
     weight: null,
     chain,
     advanced,
-    text: textOf(def.label, path, def.description),
+    text: textOf(path),
   };
   for (const [k, child] of byOrder(Object.entries(def.fields))) {
     const p = `${path}.${k}`;
@@ -107,7 +116,7 @@ function buildLeaf(
     field,
     chain: field.visibleWhen ? [...parentChain, field.visibleWhen] : parentChain,
     advanced: parentAdvanced || !!field.advanced,
-    text: textOf(field.label, path, field.description),
+    text: textOf(path),
   };
 }
 

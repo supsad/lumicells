@@ -11,7 +11,6 @@ import {
   getPresetConfig,
   type PaletteField,
   PRESET_IDS,
-  PRESETS,
   type Vec2Field,
 } from 'lumicells';
 import {
@@ -23,6 +22,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { type SchemaText, useSchemaText, useT } from './i18n';
 import { filterModel, type GroupNode, getPanelModel, isChainMet, type LeafNode } from './model';
 import { useModulated } from './modulation';
 import { loadJson, saveJson, UI_KEY } from './persistence';
@@ -97,6 +97,7 @@ export { SectionStateContext };
 // ------------------------------------------------------------- quick palettes
 
 function useQuickPalettes(): QuickPalette[] {
+  const st = useSchemaText();
   return useMemo(() => {
     const seen = new Set<string>();
     const out: QuickPalette[] = [];
@@ -105,19 +106,16 @@ function useQuickPalettes(): QuickPalette[] {
       const key = colors.join(',');
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ id, name: PRESETS[id].label, colors });
+      out.push({ id, name: st.preset(id).label, colors });
     }
     return out;
-  }, []);
+  }, [st]);
 }
 
 // ---------------------------------------------------------------- field rows
 
-function enumOptions(field: EnumField) {
-  return field.values.map((v) => ({
-    value: v,
-    label: (field.labels as Record<string, string> | undefined)?.[v] ?? v,
-  }));
+function enumOptions(field: EnumField, path: string, st: SchemaText) {
+  return field.values.map((v) => ({ value: v, label: st.enumLabel(path, v) }));
 }
 
 /**
@@ -161,7 +159,8 @@ interface ControlProps {
 }
 
 function Control({ field, path, value, def, effective, onChange }: ControlProps): ReactNode {
-  const common = { label: field.label, hint: field.description, path };
+  const st = useSchemaText();
+  const common = { label: st.label(path, field), hint: st.description(path, field), path };
   switch (field.kind) {
     case 'number':
     case 'int':
@@ -174,7 +173,7 @@ function Control({ field, path, value, def, effective, onChange }: ControlProps)
           max={field.max}
           step={field.step ?? (field.kind === 'int' ? 1 : undefined)}
           scale={field.scale}
-          unit={field.unit}
+          unit={st.unit(path, field)}
           default={def as number}
           effective={effective}
         />
@@ -203,7 +202,7 @@ function Control({ field, path, value, def, effective, onChange }: ControlProps)
         />
       );
     case 'enum': {
-      const options = enumOptions(field);
+      const options = enumOptions(field, path, st);
       const long = options.reduce((n, o) => n + o.label.length, 0) > 22;
       return options.length <= 4 ? (
         <Segmented
@@ -305,13 +304,14 @@ const GroupSection = memo(function GroupSection({
 }) {
   const shown = useSelector((s) => isChainMet(s.cfg, node.chain));
   const sections = useContext(SectionStateContext);
+  const st = useSchemaText();
   const weight = node.weight;
   // A mode with weight 0 does not contribute: dim its body (controls stay usable).
   const dimmed = useSelector((s) => (weight ? getPath(s.cfg, weight.path) === 0 : false));
   if (!shown || !visible.has(node.path)) return null;
   return (
     <Section
-      title={node.def.label}
+      title={st.label(node.path, node.def)}
       level={level}
       advanced={node.def.advanced}
       open={sections.forceOpen || sections.isOpen(node.path)}
@@ -326,7 +326,7 @@ const GroupSection = memo(function GroupSection({
       }
     >
       {node.def.description && level === 1 && (
-        <p className="stand-section-note">{node.def.description}</p>
+        <p className="stand-section-note">{st.description(node.path, node.def)}</p>
       )}
       {node.children.map((c) =>
         c.type === 'leaf' ? (
@@ -348,6 +348,7 @@ export const SchemaPanel = memo(function SchemaPanel({
   query: string;
   showAdvanced: boolean;
 }) {
+  const t = useT();
   const model = getPanelModel();
   const filtered = useMemo(
     () => filterModel(model, query, showAdvanced),
@@ -369,14 +370,12 @@ export const SchemaPanel = memo(function SchemaPanel({
       ))}
       {filtered.count === 0 && (
         <EmptyState>
-          Ничего не найдено по запросу «{query}».
-          {filtered.hiddenAdvanced > 0 && ' Включите «Показать расширенные».'}
+          {t.panel.notFound(query)}
+          {filtered.hiddenAdvanced > 0 && t.panel.notFoundAdvanced}
         </EmptyState>
       )}
       {filtered.count > 0 && filtered.hiddenAdvanced > 0 && (
-        <p className="stand-adv-note">
-          Ещё {filtered.hiddenAdvanced} в расширенных: включите «Показать расширенные».
-        </p>
+        <p className="stand-adv-note">{t.panel.moreAdvanced(filtered.hiddenAdvanced)}</p>
       )}
     </>
   );

@@ -30,6 +30,8 @@ export type DemoSceneProps = {
   onFlight?(el: HTMLElement, info: BubbleInfo, phase: FlightPhase): void;
   /** false plays the exit and keeps the bubbles hidden; true (default) plays the entrance. */
   visible?: boolean;
+  /** Language of the scene copy (default 'en'). Switching it keeps the bubbles mounted. */
+  locale?: 'en' | 'ru';
   className?: string;
 };
 

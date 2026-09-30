@@ -26,16 +26,15 @@ export interface PresetDef {
 
 export const PRESETS: Record<PresetId, PresetDef> = {
   reference: {
-    label: 'Референс',
-    description:
-      'Полая неоновая сфера: малиновый верх слева, синий низ справа, угасание в тёмно-синий.',
+    label: 'Reference',
+    description: 'Hollow neon sphere: crimson top left, blue bottom right, fading into navy.',
     config: {},
   },
 
   orb: {
-    label: 'Сфера',
+    label: 'Orb',
     description:
-      'Сплошная вращающаяся планета: освещённый голубой край, глубокая индиговая тень и тонкая атмосфера.',
+      'Solid rotating planet: a lit sky-blue rim, a deep indigo shadow and a thin atmosphere.',
     config: {
       grid: { count: 34 },
       modes: {
@@ -80,9 +79,8 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   pulse: {
-    label: 'Пульс',
-    description:
-      'Чёткие кольца расходятся от центра и мягко дышат: малиновый, розовый, фиолетовый.',
+    label: 'Pulse',
+    description: 'Crisp rings spread from the center and gently breathe: crimson, pink, violet.',
     config: {
       grid: { count: 33 },
       modes: {
@@ -116,9 +114,9 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   life: {
-    label: 'Жизнь',
+    label: 'Life',
     description:
-      'Клеточный автомат Конвея: клетки быстро вспыхивают и плавно гаснут, бирюза и мята.',
+      "Conway's cellular automaton: cells flash quickly and fade out smoothly, in teal and mint.",
     config: {
       grid: { count: 40, gap: 0.22, roundness: 0.2 },
       modes: {
@@ -152,8 +150,8 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   vortex: {
-    label: 'Вихрь',
-    description: 'Трёхрукавная галактика: золотое ядро, огненные рукава и фиолетовые окраины.',
+    label: 'Vortex',
+    description: 'Three-armed galaxy: a golden core, fiery arms and violet outskirts.',
     config: {
       modes: {
         sphere: { weight: 0 },
@@ -180,8 +178,8 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   waves: {
-    label: 'Волны',
-    description: 'Интерференционная плазма: изгибающиеся гребни от индиго через фиолет к голубому.',
+    label: 'Waves',
+    description: 'Interference plasma: bending crests from indigo through violet to sky blue.',
     config: {
       grid: { count: 34 },
       modes: {
@@ -215,8 +213,8 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   ripples: {
-    label: 'Капли',
-    description: 'Тёмная вода под луной: от случайных капель расходятся серебристо-голубые круги.',
+    label: 'Ripples',
+    description: 'Dark water under the moon: silvery blue rings spread from random drops.',
     config: {
       modes: {
         sphere: { weight: 0 },
@@ -255,8 +253,8 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   rain: {
-    label: 'Дождь',
-    description: 'Зелёный «цифровой дождь» на почти чёрном фоне, мелкая сетка.',
+    label: 'Rain',
+    description: 'Green "digital rain" on a near-black background, with a fine grid.',
     config: {
       grid: { count: 56, gap: 0.2, roundness: 0.15 },
       modes: {
@@ -286,9 +284,9 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   minimal: {
-    label: 'Минимализм',
+    label: 'Minimal',
     description:
-      'Монохромные белые острова медленно плывут по угольному фону, сдержанное свечение.',
+      'Monochrome white islands drift slowly over a charcoal background, with a restrained glow.',
     config: {
       grid: { count: 36, gap: 0.3, roundness: 0.25 },
       modes: {

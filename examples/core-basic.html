@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LumiCells — ядро без фреймворков</title>
+    <title>LumiCells — vanilla JS</title>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
@@ -124,25 +124,36 @@
         color: #fff;
         cursor: pointer;
       }
+      #hud .back {
+        align-self: center;
+        margin-right: 4px;
+        color: #9fc2ff;
+        text-decoration: none;
+      }
+      #hud .back:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
     <div id="bg">
-      <h1 class="title" id="title">Живые пиксели<br /><em>без фреймворков</em></h1>
+      <h1 class="title" id="title">Living pixels<br /><em>without a framework</em></h1>
     </div>
     <div class="card" id="card">
       <div class="card-body">
-        <b>Карточка 320×200</b>
-        overflow: 60px, пиксели всплывают за край
+        <b>Card 320×200</b>
+        overflow: 60px, pixels float past the edge
       </div>
     </div>
     <div id="hud">
-      <div id="hud-text">загрузка…</div>
+      <div id="hud-text">loading…</div>
       <div class="row">
-        <button type="button" id="btn-lose">Потеря контекста</button>
-        <button type="button" id="btn-recreate">Пересоздать ×20</button>
-        <button type="button" id="btn-radius">Радиус сферы 0.3 ↔ 0.66</button>
-        <button type="button" id="btn-pointer">Свет курсора</button>
+        <a class="back" href="../">← Playground</a>
+        <!-- Stress-test controls, shown with ?debug -->
+        <button type="button" id="btn-lose" hidden>Lose context</button>
+        <button type="button" id="btn-recreate" hidden>Recreate ×20</button>
+        <button type="button" id="btn-radius">Sphere radius 0.3 ↔ 0.66</button>
+        <button type="button" id="btn-pointer">Pointer light</button>
       </div>
     </div>
     <script type="module" src="./core-basic/main.ts"></script>

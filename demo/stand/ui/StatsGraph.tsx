@@ -1,4 +1,5 @@
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
+import { useT } from '../i18n';
 import { cx } from './utils';
 
 export const STATS_GRAPH_CAPACITY = 240;
@@ -67,6 +68,10 @@ export function StatsGraph({
   const canvas = useRef<HTMLCanvasElement>(null);
   const valueEl = useRef<HTMLSpanElement>(null);
   const rangeEl = useRef<HTMLSpanElement>(null);
+  const t = useT();
+  // Read by the imperative draw loop, which must not capture a stale locale.
+  const tRef = useRef(t);
+  tRef.current = t;
 
   // Everything mutable lives in one ref object to keep push() allocation-free.
   const st = useRef({
@@ -184,7 +189,7 @@ export function StatsGraph({
     }
     if (rangeEl.current) {
       const range = n
-        ? `мин ${lo.toFixed(dec)} · ср ${(sum / n).toFixed(dec)} · макс ${hi.toFixed(dec)}`
+        ? tRef.current.ui.graphSummary(lo.toFixed(dec), (sum / n).toFixed(dec), hi.toFixed(dec))
         : '';
       // Assigning textContent replaces the text node even for an equal string: write on change only.
       if (s.lastRange !== range) {
@@ -267,7 +272,7 @@ export function StatsGraph({
         className="lcui-stats__canvas"
         style={{ height }}
         role="img"
-        aria-label={`График: ${label}`}
+        aria-label={t.ui.graphAria(label)}
       />
       <span ref={rangeEl} className="lcui-stats__range" />
     </div>

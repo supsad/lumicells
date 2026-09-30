@@ -1,5 +1,5 @@
 /**
- * Tracks which parameters are currently driven by modulators, so the panel can show a "мод."
+ * Tracks which parameters are currently driven by modulators, so the panel can show a "mod"
  * badge and the effective value next to them. The instance API has no "list modulators" call,
  * so every modulator created by the stand goes through `tracker.modulate`.
  */

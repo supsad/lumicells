@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -180,25 +180,27 @@
   <body>
     <main>
       <header>
-        <h1>&lt;lumi-cells&gt; без фреймворка</h1>
+        <p><a href="../">← Back to the playground</a></p>
+        <h1>&lt;lumi-cells&gt; without a framework</h1>
         <p>
-          Обычный HTML: тег, атрибуты <code>preset</code>, <code>interactive</code>,
-          <code>src</code> и декларативная привязка элементов через <code>data-lc-*</code>.
+          Plain HTML: one tag, the <code>preset</code>, <code>interactive</code> and
+          <code>src</code> attributes, and declarative element binding through
+          <code>data-lc-*</code>.
         </p>
       </header>
 
       <section>
-        <h2>1. Сцена из HTML-пузырей</h2>
+        <h2>1. A scene of HTML bubbles</h2>
         <p>
-          Каждый пузырь с <code>data-lc-influence</code> подсвечивает сетку под собой,
-          <code>data-lc-pulse="click"</code> запускает круг по клику,
-          <code>data-lc-lift="hover"</code> поднимает пиксели при наведении. Цвет света
-          (<code>data-lc-color</code>) синих пузырей светлее их заливки, чтобы они не сливались с
-          собственной подсветкой.
+          Every bubble with <code>data-lc-influence</code> lights up the grid under it,
+          <code>data-lc-pulse="click"</code> sends a ring on click and
+          <code>data-lc-lift="hover"</code> lifts pixels on hover. The light color
+          (<code>data-lc-color</code>) of the blue bubbles is lighter than their fill, so they do
+          not blend into their own glow.
         </p>
         <div class="row">
           <lumi-cells id="hero" preset="reference" interactive>
-            <p class="title">выбери, что тебе <mark>интересно</mark></p>
+            <p class="title">pick what <mark>you</mark> are into</p>
 
             <button type="button"
               class="bubble big blue"
@@ -209,7 +211,7 @@
               data-lc-pulse="click"
               data-lc-lift="hover"
             >
-              наука
+              Science
             </button>
             <button type="button"
               class="bubble"
@@ -218,7 +220,7 @@
               data-lc-pulse="click"
               data-lc-lift="hover"
             >
-              путешествия
+              Travel
             </button>
             <button type="button"
               class="bubble"
@@ -227,7 +229,7 @@
               data-lc-pulse="click"
               data-lc-lift="hover"
             >
-              музыка
+              Music
             </button>
             <button type="button"
               class="bubble"
@@ -236,7 +238,7 @@
               data-lc-falloff="3"
               data-lc-pulse="click"
             >
-              тишина
+              Silence
             </button>
             <button type="button"
               class="bubble blue"
@@ -247,24 +249,24 @@
               data-lc-pulse="click"
               data-lc-lift="hover"
             >
-              назад
+              Back
             </button>
           </lumi-cells>
 
           <div class="portal" data-lc-for="hero" data-lc-influence data-lc-pulse="click">
-            Я вне тега: <code>data-lc-for="hero"</code>
+            Outside the tag: <code>data-lc-for="hero"</code>
           </div>
         </div>
       </section>
 
       <section>
-        <h2>2. Второй экземпляр и конфиг из файла</h2>
+        <h2>2. A second instance and a config file</h2>
         <div class="row">
           <lumi-cells id="card" preset="pulse">
             <div class="inner">
-              <strong>Пульсация</strong>
-              <span>Пресет <code>pulse</code> — круги расходятся от центра.</span>
-              <button type="button" data-lc-pulse="click" data-lc-color="#c43db2">Запустить круг</button>
+              <strong>Pulse</strong>
+              <span>The <code>pulse</code> preset: rings spread from the center.</span>
+              <button type="button" data-lc-pulse="click" data-lc-color="#c43db2">Send a ring</button>
             </div>
           </lumi-cells>
 
@@ -272,7 +274,7 @@
           <lumi-cells id="from-file" src="./lumicells.config.json">
             <div class="inner">
               <div>
-                <strong>Конфиг из файла</strong>
+                <strong>Config from a file</strong>
                 <p><code>&lt;lumi-cells src="./lumicells.config.json"&gt;</code></p>
               </div>
             </div>
@@ -281,10 +283,10 @@
       </section>
 
       <section>
-        <h2>3. Свойства и события</h2>
+        <h2>3. Properties and events</h2>
         <div class="controls">
           <label>
-            Пресет
+            Preset
             <select id="preset">
               <option value="reference">reference</option>
               <option value="orb">orb</option>
@@ -297,7 +299,7 @@
               <option value="minimal">minimal</option>
             </select>
           </label>
-          <button id="pause" type="button">Пауза</button>
+          <button id="pause" type="button">Pause</button>
           <button id="speed" type="button">config.animation.speed = 2</button>
         </div>
         <pre id="log" aria-live="polite"></pre>
@@ -320,7 +322,7 @@
           const detail = e.detail;
           const extra =
             type === 'lc-config'
-              ? `${detail.source}: ${detail.changed.length} параметров`
+              ? `${detail.source}: ${detail.changed.length} parameters`
               : type === 'lc-error'
                 ? detail.message
                 : type === 'lc-fallback'
@@ -336,7 +338,7 @@
 
       document.getElementById('pause').addEventListener('click', (e) => {
         hero.paused = !hero.paused;
-        e.target.textContent = hero.paused ? 'Продолжить' : 'Пауза';
+        e.target.textContent = hero.paused ? 'Resume' : 'Pause';
       });
 
       let fast = false;

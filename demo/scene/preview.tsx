@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { type BubbleInfo, DemoScene } from './index';
+import { type BubbleInfo, DemoScene, isSceneLocale } from './index';
 import './preview.css';
 
 const MAX_LOG = 7;
@@ -8,6 +8,9 @@ const MAX_LOG = 7;
 // ?size=345 renders the frame at the reference resolution for a pixel-level comparison
 const sizeParam = Number(new URLSearchParams(window.location.search).get('size'));
 const frameSize = Number.isFinite(sizeParam) && sizeParam >= 100 ? sizeParam : 690;
+// ?lang=ru previews the Russian copy (English by default)
+const langParam = new URLSearchParams(window.location.search).get('lang');
+const locale = isSceneLocale(langParam) ? langParam : 'en';
 
 /** Static CSS stand-in for the WebGL background, only to judge the scene against the reference. */
 function StaticBackground({ grid }: { grid: boolean }) {
@@ -57,19 +60,19 @@ function Preview() {
     };
   }, []);
 
-  const label = (i: BubbleInfo) => `${i.label}${i.selected ? ' (выбрано)' : ''}`;
+  const label = (i: BubbleInfo) => `${i.label}${i.selected ? ' (selected)' : ''}`;
 
   return (
     <div className="lc-preview">
       <div className="lc-preview-bar">
         <button type="button" onClick={toggleFull}>
-          {full ? 'Выйти из полного экрана' : 'Полный экран'}
+          {full ? 'Exit full screen' : 'Full screen'}
         </button>
         <button type="button" onClick={() => setVisible((v) => !v)}>
-          {visible ? 'Скрыть (exit)' : 'Показать (enter)'}
+          {visible ? 'Hide (exit)' : 'Show (enter)'}
         </button>
         <label>
-          <input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> сетка
+          <input type="checkbox" checked={grid} onChange={(e) => setGrid(e.target.checked)} /> grid
         </label>
         <span className="lc-preview-count">bubbles mounted: {mounted}</span>
       </div>
@@ -81,6 +84,7 @@ function Preview() {
         <StaticBackground grid={grid} />
         <DemoScene
           visible={visible}
+          locale={locale}
           onBubbleMount={() => {
             setMounted((n) => n + 1);
             return () => setMounted((n) => n - 1);

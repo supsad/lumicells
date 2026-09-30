@@ -217,7 +217,7 @@ function createEngine(): void {
     paramsPrelude: src.prelude,
     paramsVec4Count: src.vec4Count,
     onError: (e) => {
-      hud.textContent = `ОШИБКА: ${e.message}`;
+      hud.textContent = `ERROR: ${e.message}`;
     },
   });
   // A fresh engine needs everything again.
@@ -606,14 +606,14 @@ function renderHud(): void {
   if (hud.classList.contains('hidden') || !engine) return;
   const e = engine;
   const lines = [
-    `FPS ${stats.fps.toFixed(1)}  кадр ${stats.frameMs.toFixed(2)} мс  CPU ${stats.cpuMs.toFixed(2)} мс  GPU ${
-      stats.gpuMs === null ? 'н/д' : `${stats.gpuMs.toFixed(2)} мс`
+    `FPS ${stats.fps.toFixed(1)}  frame ${stats.frameMs.toFixed(2)} ms  CPU ${stats.cpuMs.toFixed(2)} ms  GPU ${
+      stats.gpuMs === null ? 'n/a' : `${stats.gpuMs.toFixed(2)} ms`
     }`,
-    `${geo.cw}x${geo.ch}  шаг ${geo.pitch}px  сетка ${geo.cols}x${geo.rows}+${geo.pad}  lifts ${inputs.liftCount}`,
-    `вид ${['final', 'field', 'halo', 'bloom', 'haze', 'cells'][inputs.debugView]}  качество ${inputs.quality}  режимы: ${PRESETS[presetIndex]?.name}`,
+    `${geo.cw}x${geo.ch}  pitch ${geo.pitch}px  grid ${geo.cols}x${geo.rows}+${geo.pad}  lifts ${inputs.liftCount}`,
+    `view ${['final', 'field', 'halo', 'bloom', 'haze', 'cells'][inputs.debugView]}  quality ${inputs.quality}  modes: ${PRESETS[presetIndex]?.name}`,
     `HDR ${e.caps.hdr ? 'RGBA16F' : 'RGBA8'}  ${e.softwareFallback ? 'SOFTWARE ' : ''}${e.ready ? 'ready' : 'compiling'}  params ${src.real ? 'schema' : 'const'}`,
     `${e.caps.renderer}`,
-    '1-6 вид  q качество  m режимы  r жизнь  l потеря контекста  h скрыть  пробел пауза',
+    '1-6 view  q quality  m modes  r life  l lose context  h hide  space pause',
   ];
   hud.textContent = lines.join('\n');
 }

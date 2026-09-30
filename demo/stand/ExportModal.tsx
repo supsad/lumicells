@@ -2,7 +2,6 @@
 
 import {
   type LumiCellsConfig,
-  PRESETS,
   type PresetId,
   toConfigFile,
   toHtmlSnippet,
@@ -12,6 +11,7 @@ import {
   toTsSnippet,
 } from 'lumicells';
 import { useMemo, useState } from 'react';
+import { useSchemaText, useT } from './i18n';
 import { Button, CodeBlock, copyText, Modal, Tabs } from './ui';
 
 type Tab = 'json-full' | 'json-diff' | 'ts' | 'react' | 'html';
@@ -19,19 +19,6 @@ type Scope = 'diff' | 'full';
 
 /** Fixed height of the code area (also set in CSS): every tab gives the modal the same size. */
 const CODE_HEIGHT = '46vh';
-
-const TABS = [
-  { id: 'json-full', label: 'JSON (полный)' },
-  { id: 'json-diff', label: 'JSON (разница с пресетом)' },
-  { id: 'ts', label: 'TypeScript' },
-  { id: 'react', label: 'React' },
-  { id: 'html', label: 'HTML' },
-] as const;
-
-const SCOPES = [
-  { id: 'diff', label: 'Только отличия от пресета' },
-  { id: 'full', label: 'Все параметры' },
-] as const;
 
 /** Different names, so a full file never overwrites a diff file in the downloads folder. */
 const FULL_FILE_NAME = 'lumicells.config.json';
@@ -66,6 +53,25 @@ interface ExportModalProps {
 }
 
 export function ExportModal({ open, onClose, cfg, presetId, notify }: ExportModalProps) {
+  const t = useT();
+  const st = useSchemaText();
+  const tabs = useMemo(
+    () => [
+      { id: 'json-full', label: t.export.tabJsonFull },
+      { id: 'json-diff', label: t.export.tabJsonDiff },
+      { id: 'ts', label: 'TypeScript' },
+      { id: 'react', label: 'React' },
+      { id: 'html', label: 'HTML' },
+    ],
+    [t],
+  );
+  const scopes = useMemo(
+    () => [
+      { id: 'diff', label: t.export.scopeDiff },
+      { id: 'full', label: t.export.scopeFull },
+    ],
+    [t],
+  );
   const [tab, setTab] = useState<Tab>('json-diff');
   const [scope, setScope] = useState<Scope>('diff');
 
@@ -101,8 +107,8 @@ export function ExportModal({ open, onClose, cfg, presetId, notify }: ExportModa
       open={open}
       onClose={onClose}
       size="lg"
-      title="Экспорт настроек"
-      description={`Пресет-основа: ${PRESETS[presetId].label}. Файл ссылается на неё через extends; «разница» содержит только изменённые параметры.`}
+      title={t.export.title}
+      description={t.export.description(st.preset(presetId).label)}
       footer={
         <>
           <Button
@@ -110,51 +116,51 @@ export function ExportModal({ open, onClose, cfg, presetId, notify }: ExportModa
             icon="copy"
             onClick={async () => {
               const ok = await copyText(code);
-              notify(ok ? 'Скопировано' : 'Не удалось скопировать', ok ? 'success' : 'error');
+              notify(ok ? t.export.copied : t.export.copyFailed, ok ? 'success' : 'error');
             }}
           >
-            Копировать
+            {t.export.copy}
           </Button>
           <Button icon="download" onClick={downloadJson}>
-            Скачать JSON
+            {t.export.downloadJson}
           </Button>
           <Button
             icon="download"
             onClick={() =>
               downloadText('lumicells.schema.json', `${JSON.stringify(toJsonSchema(), null, 2)}\n`)
             }
-            title="JSON Schema для подсказок в редакторе"
+            title={t.export.schemaTitle}
           >
-            Скачать JSON Schema
+            {t.export.downloadSchema}
           </Button>
           <Button variant="ghost" onClick={onClose}>
-            Закрыть
+            {t.export.close}
           </Button>
         </>
       }
     >
       <div className="stand-export">
         <Tabs
-          items={TABS}
+          items={tabs}
           value={tab}
           onChange={(id) => setTab(id as Tab)}
-          aria-label="Формат экспорта"
+          aria-label={t.export.formatAria}
         />
         {/* The row keeps its height on the JSON tabs (hidden, not removed): no layout jump. */}
         <div className="stand-export__scope-slot" data-idle={!isCode || undefined} inert={!isCode}>
           <Tabs
             variant="pills"
-            items={SCOPES}
+            items={scopes}
             value={scope}
             onChange={(id) => setScope(id as Scope)}
-            aria-label="Объём данных"
+            aria-label={t.export.scopeAria}
             className="stand-export__scope"
           />
         </div>
         <CodeBlock
           code={code}
           language={LANGUAGE[tab]}
-          title={TABS.find((t) => t.id === tab)?.label}
+          title={tabs.find((x) => x.id === tab)?.label}
           maxHeight={CODE_HEIGHT}
           className="stand-export__code"
         />

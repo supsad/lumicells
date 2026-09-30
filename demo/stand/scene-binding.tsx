@@ -18,6 +18,7 @@ import type { BindElementOptions, InfluenceHandle, LumiCells } from 'lumicells';
 import { useLumiCells } from 'lumicells/react';
 import { memo, useEffect } from 'react';
 import { type BubbleInfo, DemoScene, type DemoSceneProps } from '../scene';
+import { useI18n } from './i18n';
 import type { ModulationTracker, TrackedModulator } from './modulation';
 
 // Light of a bubble: a colored glow under the pill (colorMix keeps some of the palette color).
@@ -30,7 +31,7 @@ const LIGHT_BASE: BindElementOptions = {
 const LIGHT_STRENGTH = 0.28;
 const LIGHT_HOVER_STRENGTH = 0.7;
 
-const SPHERE_BUMP = 0.12; // extra sphere radius right after "готово"
+const SPHERE_BUMP = 0.12; // extra sphere radius right after "done"
 const SPHERE_BUMP_MS = 1400;
 
 interface BubbleRec {
@@ -106,9 +107,9 @@ export class SceneBinder {
   }
 
   private attachBubble(rec: BubbleRec): void {
-    const pl = this.instance;
-    if (!pl || rec.handle) return;
-    rec.handle = pl.bindElement(rec.el, {
+    const cells = this.instance;
+    if (!cells || rec.handle) return;
+    rec.handle = cells.bindElement(rec.el, {
       ...LIGHT_BASE,
       color: rec.info.color,
       strength: this.strengthOf(rec),
@@ -116,10 +117,10 @@ export class SceneBinder {
   }
 
   private attachTitle(t: { el: HTMLElement; handle: InfluenceHandle | null }): void {
-    const pl = this.instance;
-    if (!pl || t.handle) return;
+    const cells = this.instance;
+    if (!cells || t.handle) return;
     // A soft shadow behind the caption keeps the text readable over bright cells.
-    t.handle = pl.bindElement(t.el, {
+    t.handle = cells.bindElement(t.el, {
       track: 'auto',
       type: 'shadow',
       strength: 0.65,
@@ -155,16 +156,16 @@ export class SceneBinder {
 
     onBubbleHover: (el, _info, hovering) => {
       const rec = this.bubbles.get(el);
-      const pl = this.instance;
+      const cells = this.instance;
       if (!rec || rec.hovered === hovering) return;
       rec.hovered = hovering;
       this.hoveredCount = Math.max(0, this.hoveredCount + (hovering ? 1 : -1));
       // Brighter light while hovered, back to normal on leave.
       this.pushStrength(rec);
-      if (hovering && pl) {
+      if (hovering && cells) {
         // Cells pop up around the bubble, as if the light attracted them.
         const c = centerOf(el);
-        pl.lift({ x: c.x, y: c.y, space: 'client', count: 3, radius: 1.5 });
+        cells.lift({ x: c.x, y: c.y, space: 'client', count: 3, radius: 1.5 });
       }
     },
 
@@ -190,7 +191,7 @@ export class SceneBinder {
 
     onFlight: (el, info, phase) => {
       const rec = this.bubbles.get(el);
-      const pl = this.instance;
+      const cells = this.instance;
       const entering = scenePhase(el) === 'entering';
       if (rec) {
         // The light is only on while the bubble is on screen (it rests invisible at its final
@@ -199,11 +200,11 @@ export class SceneBinder {
         if (!entering && phase === 'end') rec.live = false;
         this.pushStrength(rec);
       }
-      if (!pl || !entering) return;
+      if (!cells || !entering) return;
       if (phase === 'start') {
         // A bubble leaves the center: a faint ripple where it starts.
         const c = sceneCenter(el);
-        pl.pulse({
+        cells.pulse({
           x: c.x,
           y: c.y,
           space: 'client',
@@ -213,7 +214,7 @@ export class SceneBinder {
         });
       } else {
         const c = centerOf(el);
-        pl.pulse({
+        cells.pulse({
           x: c.x,
           y: c.y,
           space: 'client',
@@ -235,11 +236,11 @@ export class SceneBinder {
     },
 
     onAction: (action, el) => {
-      const pl = this.instance;
-      if (!pl || action !== 'done') return;
-      // "Готово": a strong ring from the center...
+      const cells = this.instance;
+      if (!cells || action !== 'done') return;
+      // "Done": a strong ring from the center...
       const c = sceneCenter(el);
-      pl.pulse({
+      cells.pulse({
         x: c.x,
         y: c.y,
         space: 'client',
@@ -252,7 +253,7 @@ export class SceneBinder {
       // bump, so the sphere returns to exactly the slider value afterwards.
       const t0 = performance.now();
       const bump = this.tracker.modulate(
-        pl,
+        cells,
         'modes.sphere.radius',
         () => {
           const u = (performance.now() - t0) / SPHERE_BUMP_MS;
@@ -272,10 +273,11 @@ export class SceneBinder {
 
 /** Renders the demo scene inside <LumiCells> and connects it to the instance from context. */
 export const SceneLayer = memo(function SceneLayer({ binder }: { binder: SceneBinder }) {
-  const pl = useLumiCells();
+  const cells = useLumiCells();
   useEffect(() => {
-    binder.setInstance(pl);
+    binder.setInstance(cells);
     return () => binder.setInstance(null);
-  }, [binder, pl]);
-  return <DemoScene {...binder.props} />;
+  }, [binder, cells]);
+  const { locale } = useI18n();
+  return <DemoScene {...binder.props} locale={locale} />;
 });

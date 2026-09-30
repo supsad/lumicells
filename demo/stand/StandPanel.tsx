@@ -5,6 +5,7 @@
  */
 
 import { memo, useMemo, useState } from 'react';
+import { useT } from './i18n';
 import { filterModel, getPanelModel } from './model';
 import type { Prefs } from './prefs';
 import { StatsBlock } from './StatsBlock';
@@ -17,6 +18,7 @@ interface StandPanelProps {
 }
 
 export const StandPanel = memo(function StandPanel({ prefs, patchPrefs }: StandPanelProps) {
+  const t = useT();
   const [query, setQuery] = useState('');
   // Search results are shown expanded, whatever the saved section state.
   const sections = useSectionState(query.trim() !== '');
@@ -28,7 +30,7 @@ export const StandPanel = memo(function StandPanel({ prefs, patchPrefs }: StandP
   return (
     <Panel
       title="LumiCells"
-      subtitle="Стенд: параметры строятся из схемы"
+      subtitle={t.panel.subtitle}
       width={380}
       collapsed={prefs.panelCollapsed}
       onCollapsedChange={(panelCollapsed) => patchPrefs({ panelCollapsed })}
@@ -36,13 +38,13 @@ export const StandPanel = memo(function StandPanel({ prefs, patchPrefs }: StandP
         <>
           <IconButton
             icon="plus"
-            label="Развернуть все секции"
+            label={t.panel.expandAll}
             size="sm"
             onClick={() => sections.setAll(true)}
           />
           <IconButton
             icon="minus"
-            label="Свернуть все секции"
+            label={t.panel.collapseAll}
             size="sm"
             onClick={() => sections.setAll(false)}
           />
@@ -57,7 +59,7 @@ export const StandPanel = memo(function StandPanel({ prefs, patchPrefs }: StandP
               checked={prefs.showAdvanced}
               onChange={(showAdvanced) => patchPrefs({ showAdvanced })}
             />
-            <label htmlFor="stand-adv">Показать расширенные</label>
+            <label htmlFor="stand-adv">{t.panel.showAdvanced}</label>
           </div>
         </div>
       }

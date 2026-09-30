@@ -1,4 +1,5 @@
 import { type KeyboardEvent, type ReactNode, useId, useRef } from 'react';
+import { useT } from '../i18n';
 import { Field, type FieldBaseProps, ModulatedBadge } from './Field';
 import { NumberInput } from './NumberInput';
 import {
@@ -102,6 +103,7 @@ export interface SliderProps extends NumericControlProps {
  */
 export function Slider(props: SliderProps) {
   const { value, onChange, min, max, unit, disabled, effective, default: def } = props;
+  const t = useT();
   const uid = useId();
   const num = useNumeric(props);
   const norm = num.toNorm(value);
@@ -184,7 +186,7 @@ export function Slider(props: SliderProps) {
           <div
             className="lcui-slider__eff"
             style={{ left: `${effNorm * 100}%` }}
-            title={`Эффективное значение: ${effective?.toFixed(num.decimals)}`}
+            title={t.ui.effectiveValue(effective?.toFixed(num.decimals) ?? '')}
           />
         )}
         <div className="lcui-slider__thumb" />
@@ -231,6 +233,7 @@ function arc(r: number, from: number, to: number): string {
  * arrow keys, double-click to reset.
  */
 export function Knob(props: KnobProps) {
+  const t = useT();
   const {
     value,
     onChange,
@@ -310,7 +313,7 @@ export function Knob(props: KnobProps) {
         style={{ width: size, height: size }}
         onKeyDown={(e) => !disabled && num.onKey(e, value, onChange)}
         onDoubleClick={() => !disabled && reset?.()}
-        title="Тяните вверх/вниз (Shift — точнее). Колесо — при фокусе. Двойной клик — сброс"
+        title={t.ui.knobTitle}
         {...drag}
       >
         <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">

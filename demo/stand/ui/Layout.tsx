@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useT } from '../i18n';
 import { Badge, IconButton } from './Button';
 import { Icon } from './Icon';
 import { cx } from './utils';
@@ -51,6 +52,7 @@ export function Section({
   id,
   className,
 }: SectionProps) {
+  const t = useT();
   const uid = useId();
   const bodyId = id ? `${id}-body` : `${uid}-body`;
   const [inner, setInner] = useState(defaultOpen);
@@ -78,8 +80,8 @@ export function Section({
           <Icon name="chevron" size={12} className="lcui-section__chev" />
           <span className="lcui-section__title">{title}</span>
           {advanced && (
-            <Badge tone="neutral" outline title="Расширенные настройки">
-              доп.
+            <Badge tone="neutral" outline title={t.ui.advancedTitle}>
+              {t.ui.advanced}
             </Badge>
           )}
           {badge}
@@ -109,11 +111,12 @@ export interface SearchInputProps {
 export function SearchInput({
   value,
   onChange,
-  placeholder = 'Поиск параметра…',
+  placeholder,
   count,
   className,
-  'aria-label': ariaLabel = 'Поиск параметра',
+  'aria-label': ariaLabel,
 }: SearchInputProps) {
+  const t = useT();
   const ref = useRef<HTMLInputElement>(null);
   return (
     <div className={cx('lcui-search', className)}>
@@ -123,8 +126,8 @@ export function SearchInput({
         type="search"
         className="lcui-search__input"
         value={value}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
+        placeholder={placeholder ?? t.ui.searchPlaceholder}
+        aria-label={ariaLabel ?? t.ui.searchAria}
         spellCheck={false}
         autoComplete="off"
         onChange={(e) => onChange(e.target.value)}
@@ -139,7 +142,7 @@ export function SearchInput({
       {value && (
         <IconButton
           icon="close"
-          label="Очистить поиск"
+          label={t.ui.clearSearch}
           size="xs"
           onClick={() => {
             onChange('');
@@ -195,13 +198,14 @@ export function Panel({
   style,
   'aria-label': ariaLabel,
 }: PanelProps) {
+  const t = useT();
   const [inner, setInner] = useState(defaultCollapsed);
   const collapsed = collapsedProp ?? inner;
   const setCollapsed = (v: boolean) => {
     if (collapsedProp === undefined) setInner(v);
     onCollapsedChange?.(v);
   };
-  const titleText = typeof title === 'string' ? title : 'Панель';
+  const titleText = typeof title === 'string' ? title : t.ui.panel;
   const arrow = collapsed === (side === 'right') ? 'chevron-left' : 'chevron-right';
   return (
     <aside
@@ -223,7 +227,7 @@ export function Panel({
         {!collapsed && headerActions && <div className="lcui-panel__actions">{headerActions}</div>}
         <IconButton
           icon={arrow}
-          label={collapsed ? 'Развернуть панель' : 'Свернуть панель'}
+          label={collapsed ? t.ui.expandPanel : t.ui.collapsePanel}
           aria-expanded={!collapsed}
           onClick={() => setCollapsed(!collapsed)}
         />

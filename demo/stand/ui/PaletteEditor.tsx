@@ -6,6 +6,7 @@ import {
   rgbToHex,
   samplePalette,
 } from '../../../src/core/color';
+import { useT } from '../i18n';
 import { Button, IconButton } from './Button';
 import { Field } from './Field';
 import { HexField } from './Inputs';
@@ -86,7 +87,7 @@ function midColor(a: string, b: string, interpolation: PaletteInterpolation): st
  * one-click quick palettes.
  */
 export function PaletteEditor({
-  label = 'Палитра',
+  label: labelProp,
   hint,
   path,
   value,
@@ -99,6 +100,8 @@ export function PaletteEditor({
   disabled,
   className,
 }: PaletteEditorProps) {
+  const t = useT();
+  const label = labelProp ?? t.palette.label;
   const uid = useId();
   const n = value.length;
 
@@ -234,7 +237,7 @@ export function PaletteEditor({
       changed={changed}
       onReset={def ? () => setAll(def) : undefined}
       badge={
-        <span className="lcui-pal__count" title="Число цветов / максимум">
+        <span className="lcui-pal__count" title={t.palette.countTitle}>
           {n}/{maxStops}
         </span>
       }
@@ -244,9 +247,9 @@ export function PaletteEditor({
           className="lcui-pal__bar"
           style={{ background: gradient }}
           onDoubleClick={onBarDouble}
-          title="Двойной клик — добавить цвет в этой точке"
+          title={t.palette.gradientTitle}
           role="img"
-          aria-label={`Градиент палитры, ${n} цветов`}
+          aria-label={t.palette.gradientAria(n)}
         />
         <div className="lcui-pal__chips" aria-hidden="true">
           {value.map((c, i) => (
@@ -290,8 +293,8 @@ export function PaletteEditor({
                   type="button"
                   className="lcui-pal__grip"
                   disabled={disabled}
-                  aria-label={`Цвет ${i + 1}: переместить (стрелки вверх/вниз или перетаскивание)`}
-                  title="Перетащить · стрелки ↑↓"
+                  aria-label={t.palette.moveAria(i + 1)}
+                  title={t.palette.moveTitle}
                   onPointerDown={(e) => {
                     if (e.button !== 0 || disabled) return;
                     e.currentTarget.setPointerCapture(e.pointerId);
@@ -341,33 +344,33 @@ export function PaletteEditor({
                   value={c}
                   onChange={(hex) => setColor(i, hex)}
                   disabled={disabled}
-                  aria-label={`Цвет ${i + 1}`}
+                  aria-label={t.palette.color(i + 1)}
                 />
                 <span className="lcui-pal__acts">
                   <IconButton
                     icon="up"
-                    label={`Цвет ${i + 1}: выше`}
+                    label={t.palette.up(i + 1)}
                     size="xs"
                     disabled={disabled || i === 0}
                     onClick={() => move(i, i - 1)}
                   />
                   <IconButton
                     icon="down"
-                    label={`Цвет ${i + 1}: ниже`}
+                    label={t.palette.down(i + 1)}
                     size="xs"
                     disabled={disabled || i === n - 1}
                     onClick={() => move(i, i + 1)}
                   />
                   <IconButton
                     icon="duplicate"
-                    label={`Цвет ${i + 1}: дублировать`}
+                    label={t.palette.duplicate(i + 1)}
                     size="xs"
                     disabled={disabled || n >= maxStops}
                     onClick={() => duplicate(i)}
                   />
                   <IconButton
                     icon="close"
-                    label={`Цвет ${i + 1}: удалить`}
+                    label={t.palette.remove(i + 1)}
                     size="xs"
                     variant="danger"
                     disabled={disabled || n <= minStops}
@@ -385,9 +388,9 @@ export function PaletteEditor({
             icon="plus"
             onClick={add}
             disabled={disabled || n >= maxStops}
-            title="Добавить цвет: средний между выбранным и следующим (для последнего: между предпоследним и последним)"
+            title={t.palette.addTitle}
           >
-            Добавить
+            {t.palette.add}
           </Button>
           <Button
             size="sm"
@@ -396,7 +399,7 @@ export function PaletteEditor({
             onClick={reverse}
             disabled={disabled || n < 2}
           >
-            Реверс
+            {t.palette.reverse}
           </Button>
           <Button
             size="sm"
@@ -406,7 +409,7 @@ export function PaletteEditor({
             onClick={() => setPasteOpen((o) => !o)}
             disabled={disabled}
           >
-            Вставить
+            {t.palette.paste}
           </Button>
           <Button
             size="sm"
@@ -417,7 +420,7 @@ export function PaletteEditor({
               if (await copyText(value.join('\n'))) flashCopied();
             }}
           >
-            {copied ? 'Скопировано' : 'Копировать'}
+            {copied ? t.ui.copied : t.ui.copy}
           </Button>
           {quickPalettes && quickPalettes.length > 0 && (
             <Button
@@ -427,7 +430,7 @@ export function PaletteEditor({
               onClick={() => setQuickOpen((o) => !o)}
               disabled={disabled}
             >
-              Готовые
+              {t.palette.presets}
             </Button>
           )}
         </div>
@@ -438,8 +441,8 @@ export function PaletteEditor({
               className="lcui-textarea"
               rows={3}
               value={pasteText}
-              placeholder={'#ff2a4a, #6a3cc8, #0476ff\nили JSON-массив, по одному на строку…'}
-              aria-label="Список цветов в формате HEX"
+              placeholder={t.palette.pastePlaceholder}
+              aria-label={t.palette.pasteAria}
               spellCheck={false}
               onChange={(e) => setPasteText(e.target.value)}
             />
@@ -451,8 +454,8 @@ export function PaletteEditor({
                 }}
               />
               <span className="lcui-pal__pastecount">
-                {parsed.length ? `найдено: ${parsed.length}` : 'нет цветов'}
-                {parsed.length > maxStops && ` (будет взято ${maxStops})`}
+                {parsed.length ? t.palette.found(parsed.length) : t.palette.none}
+                {parsed.length > maxStops && t.palette.willTake(maxStops)}
               </span>
               <Button
                 size="sm"
@@ -464,21 +467,21 @@ export function PaletteEditor({
                   setPasteText('');
                 }}
               >
-                Применить
+                {t.palette.apply}
               </Button>
             </div>
           </div>
         )}
 
         {quickOpen && quickPalettes && (
-          <ul className="lcui-pal__quick" aria-label="Готовые палитры">
+          <ul className="lcui-pal__quick" aria-label={t.palette.quickAria}>
             {quickPalettes.map((q) => (
               <li key={q.id ?? q.name}>
                 <button
                   type="button"
                   className="lcui-pal__quickitem"
                   disabled={disabled}
-                  title={`${q.name}: ${q.colors.length} цв.`}
+                  title={t.palette.quickTitle(q.name, q.colors.length)}
                   onClick={() => setAll(q.colors)}
                 >
                   <span

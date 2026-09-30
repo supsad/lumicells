@@ -84,15 +84,15 @@ export function toJsonSchema(): Json {
   const root = groupSchema(schema);
   const properties = {
     $schema: { type: 'string', title: 'JSON Schema URL' },
-    version: { const: CONFIG_VERSION, title: 'Версия формата' },
-    extends: { type: 'string', enum: [...PRESET_IDS], title: 'Базовый пресет' },
+    version: { const: CONFIG_VERSION, title: 'Format version' },
+    extends: { type: 'string', enum: [...PRESET_IDS], title: 'Base preset' },
     ...(root.properties as Json),
   };
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $id: 'lumicells.schema.json',
     title: 'LumiCells config',
-    description: 'Конфигурация живого пиксельного фона LumiCells.',
+    description: 'Configuration of the LumiCells live pixel-grid background.',
     type: 'object',
     additionalProperties: false,
     properties,

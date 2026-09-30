@@ -9,6 +9,7 @@ import {
 } from './bubbles';
 import { Choreographer } from './choreography';
 import { SCENE_ITEMS, TITLE_CENTER } from './layout';
+import { SCENE_TEXT } from './texts';
 import type { DemoSceneProps } from './types';
 
 const REDUCED_QUERY = '(prefers-reduced-motion: reduce)';
@@ -33,7 +34,8 @@ function useReducedMotion(): boolean {
  * Fills its (positioned) parent and scales with it via container query units.
  */
 export function DemoScene(props: DemoSceneProps) {
-  const { visible = true, className } = props;
+  const { visible = true, className, locale = 'en' } = props;
+  const text = SCENE_TEXT[locale];
 
   const hooks = useRef(props);
   hooks.current = props;
@@ -107,18 +109,28 @@ export function DemoScene(props: DemoSceneProps) {
           className="lc-scene-title"
           style={{ left: `${TITLE_CENTER.fx * 100}%`, top: `${TITLE_CENTER.fy * 100}%` }}
         >
-          <span className="lc-scene-title-line">
-            Какие темы <span className="lc-scene-title-hl">тебе</span>
-          </span>
-          <span className="lc-scene-title-line">интересны?</span>
+          {text.title.map((line) => (
+            <span key={line.map((r) => r.text).join('')} className="lc-scene-title-line">
+              {line.map((run) =>
+                run.hl ? (
+                  <span key={run.text} className="lc-scene-title-hl">
+                    {run.text}
+                  </span>
+                ) : (
+                  run.text
+                ),
+              )}
+            </span>
+          ))}
         </div>
         {SCENE_ITEMS.map((item) => {
           const isSelected = selected.has(item.id);
+          const t = text.items[item.id] ?? { label: item.id };
           if (item.kind === 'card') {
-            return <MusicCard key={item.id} item={item} selected={isSelected} ctx={ctx} />;
+            return <MusicCard key={item.id} item={item} text={t} selected={isSelected} ctx={ctx} />;
           }
           const Bubble = item.action ? ActionButton : TopicBubble;
-          return <Bubble key={item.id} item={item} selected={isSelected} ctx={ctx} />;
+          return <Bubble key={item.id} item={item} text={t} selected={isSelected} ctx={ctx} />;
         })}
       </div>
     </div>

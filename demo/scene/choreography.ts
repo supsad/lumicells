@@ -9,7 +9,7 @@ const ENTER_STAGGER = 48;
 const LEAVE_DURATION = 640;
 const RECALL_DURATION = 520;
 const LEAVE_STAGGER = 28;
-/** Pause between the exit and the next entrance after 'готово'. */
+/** Pause between the exit and the next entrance after 'done'. */
 const DONE_PAUSE = 1200;
 const BACK_PAUSE = 140;
 

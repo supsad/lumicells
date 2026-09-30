@@ -31,6 +31,7 @@ export type {
 } from './fields';
 export { isGroup, isNumericField } from './fields';
 export * from './json-schema';
+export * from './locale';
 export * from './normalize';
 export * from './paths';
 export * from './poster';

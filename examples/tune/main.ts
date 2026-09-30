@@ -16,7 +16,7 @@
  *   ldr=1          force the RGBA8 fallback render targets (see dev-flags.ts)
  *   prewrap=2      start the clock 2 scaled seconds before every phase wrap (see dev-flags.ts)
  *
- * Exposed for automation: window.tune = { pl, done, time, setConfig(patch) }.
+ * Exposed for automation: window.tune = { cells, done, time, setConfig(patch) }.
  */
 
 import './virtual-time';
@@ -61,18 +61,18 @@ ref.style.height = `${Math.min(hostW, hostH)}px`;
 if (q.get('ref') === '0') ref.hidden = true;
 
 interface TuneApi {
-  pl: LumiCellsCore | null;
+  cells: LumiCellsCore | null;
   done: boolean;
   time: number;
   setConfig(p: LumiCellsConfigInput): void;
 }
 
 const api: TuneApi = {
-  pl: null,
+  cells: null,
   done: false,
   time: 0,
   setConfig(p) {
-    api.pl?.setConfig(p, { transition: 0 });
+    api.cells?.setConfig(p, { transition: 0 });
   },
 };
 (window as unknown as { tune: TuneApi }).tune = api;
@@ -85,11 +85,11 @@ const tintScale = Number(q.get('tint') ?? 1);
 const shadowScale = Number(q.get('shadow') ?? 1);
 const shadowPad = q.get('shpad');
 
-function attach(pl: LumiCellsCore): void {
-  api.pl = pl;
+function attach(cells: LumiCellsCore): void {
+  api.cells = cells;
   if (lightScale !== 1 || tintScale !== 1 || shadowScale !== 1 || shadowPad !== null) {
-    const bind = pl.bindElement.bind(pl);
-    pl.bindElement = (el, opts = {}) => {
+    const bind = cells.bindElement.bind(cells);
+    cells.bindElement = (el, opts = {}) => {
       if (opts.type === 'shadow') {
         return bind(el, {
           ...opts,
@@ -109,17 +109,17 @@ function attach(pl: LumiCellsCore): void {
       return h;
     };
   }
-  pl.setDebugView(debug);
-  pl.on('frame', (e) => {
+  cells.setDebugView(debug);
+  cells.on('frame', (e) => {
     api.time = e.time;
     if (stopAt > 0 && e.time >= stopAt && !api.done) {
       api.done = true;
       // Stop after this frame is drawn: the canvas keeps showing it.
-      queueMicrotask(() => pl.stop());
+      queueMicrotask(() => cells.stop());
       document.body.dataset.done = '1';
     }
   });
-  pl.on('error', (e) => console.error('[tune]', e));
+  cells.on('error', (e) => console.error('[tune]', e));
 }
 
 if (withScene) {
@@ -135,7 +135,7 @@ if (withScene) {
         style: { width: '100%', height: '100%', background: '#000032' },
         ref: (inst: LumiCellsCore | null) => {
           tracker.setInstance(inst);
-          if (inst && api.pl !== inst) attach(inst);
+          if (inst && api.cells !== inst) attach(inst);
         },
       },
       createElement(SceneLayer, { binder }),

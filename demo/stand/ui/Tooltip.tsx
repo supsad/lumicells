@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../i18n';
 import { Icon } from './Icon';
 import { clamp, cx } from './utils';
 
@@ -136,10 +137,11 @@ export interface HintProps {
 }
 
 /** Small "i" glyph with a tooltip; focusable so keyboard users can read it. */
-export function Hint({ children, placement, label = 'Подсказка' }: HintProps) {
+export function Hint({ children, placement, label }: HintProps) {
+  const t = useT();
   return (
     <Tooltip content={children} placement={placement}>
-      <button type="button" className="lcui-hint" aria-label={label}>
+      <button type="button" className="lcui-hint" aria-label={label ?? t.ui.hint}>
         <Icon name="info" size={12} />
       </button>
     </Tooltip>

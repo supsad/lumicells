@@ -56,12 +56,12 @@ const REFERENCE_PALETTE = [
 ];
 
 const QUICK = [
-  { name: 'Референс', colors: REFERENCE_PALETTE },
-  { name: 'Неон', colors: ['#ff2a4a', '#e0267a', '#6a3cc8', '#0476ff', '#19e6d0'] },
-  { name: 'Матрица', colors: ['#001a0a', '#00a83c', '#38ff7a', '#d6ffe4'] },
-  { name: 'Закат', colors: ['#2b0a3d', '#b1235c', '#ff6a3d', '#ffd166'] },
-  { name: 'Лёд', colors: ['#031233', '#0b5cff', '#4de3ff', '#eaffff'] },
-  { name: 'Моно', colors: ['#ffffff'] },
+  { name: 'Reference', colors: REFERENCE_PALETTE },
+  { name: 'Neon', colors: ['#ff2a4a', '#e0267a', '#6a3cc8', '#0476ff', '#19e6d0'] },
+  { name: 'Matrix', colors: ['#001a0a', '#00a83c', '#38ff7a', '#d6ffe4'] },
+  { name: 'Sunset', colors: ['#2b0a3d', '#b1235c', '#ff6a3d', '#ffd166'] },
+  { name: 'Ice', colors: ['#031233', '#0b5cff', '#4de3ff', '#eaffff'] },
+  { name: 'Mono', colors: ['#ffffff'] },
 ];
 
 const SNIPPET = `import type { LumiCellsConfigInput } from 'lumicells';
@@ -190,37 +190,37 @@ function App() {
     <div className="pv-stage">
       <main className="pv-main">
         <header className="pv-head">
-          <h1>LumiCells — набор контролов</h1>
+          <h1>LumiCells — UI kit</h1>
           <p>
-            Все компоненты стенда. Панель справа — рабочий образец с поиском и 120 сгенерированными
-            параметрами.
+            Every component of the tuning stand. The panel on the right is a working sample with
+            search and 120 generated parameters.
           </p>
         </header>
 
         <div className="pv-grid">
           <Card title="Toolbar · Button · IconButton · Badge">
-            <Toolbar aria-label="Пример панели инструментов">
-              <IconButton icon="play" label="Запуск" />
-              <IconButton icon="pause" label="Пауза" active />
+            <Toolbar aria-label="Sample toolbar">
+              <IconButton icon="play" label="Play" />
+              <IconButton icon="pause" label="Pause" active />
               <ToolbarSeparator />
-              <IconButton icon="download" label="Скачать" />
-              <IconButton icon="upload" label="Загрузить" />
+              <IconButton icon="download" label="Download" />
+              <IconButton icon="upload" label="Upload" />
               <ToolbarSpacer />
               <Badge tone="ok">60 fps</Badge>
             </Toolbar>
             <div className="pv-row">
               <Button variant="primary" icon="check">
-                Применить
+                Apply
               </Button>
-              <Button>Обычная</Button>
+              <Button>Default</Button>
               <Button variant="ghost" icon="reset">
-                Сбросить
+                Reset
               </Button>
               <Button variant="danger" icon="trash">
-                Удалить
+                Delete
               </Button>
-              <Button disabled>Отключена</Button>
-              <Button size="sm">Мелкая</Button>
+              <Button disabled>Disabled</Button>
+              <Button size="sm">Small</Button>
             </div>
             <div className="pv-row">
               <Badge>neutral</Badge>
@@ -236,81 +236,79 @@ function App() {
 
           <Card title="Tabs · Tooltip · Hint">
             <Tabs
-              aria-label="Формат"
+              aria-label="Format"
               value={tab}
               onChange={setTab}
               items={[
                 { id: 'json', label: 'JSON' },
                 { id: 'ts', label: 'TypeScript', badge: 3 },
                 { id: 'html', label: 'HTML' },
-                { id: 'off', label: 'Недоступно', disabled: true },
+                { id: 'off', label: 'Unavailable', disabled: true },
               ]}
             >
-              <TabPanel value="json">Вкладка JSON: конфигурация целиком.</TabPanel>
-              <TabPanel value="ts">Вкладка TypeScript: типизированный объект.</TabPanel>
-              <TabPanel value="html">Вкладка HTML: веб-компонент.</TabPanel>
+              <TabPanel value="json">JSON tab: the whole config.</TabPanel>
+              <TabPanel value="ts">TypeScript tab: a typed object.</TabPanel>
+              <TabPanel value="html">HTML tab: the Web Component.</TabPanel>
             </Tabs>
             <Tabs
               variant="pills"
               fill
-              aria-label="Вид"
+              aria-label="View"
               value={pill}
               onChange={setPill}
               items={[
-                { id: 'a', label: 'Итог' },
-                { id: 'b', label: 'Поле' },
-                { id: 'c', label: 'Свечение' },
+                { id: 'a', label: 'Final' },
+                { id: 'b', label: 'Field' },
+                { id: 'c', label: 'Glow' },
               ]}
             />
             <div className="pv-row">
-              <Tooltip content="Подсказка над кнопкой">
-                <Button size="sm">Наведи курсор</Button>
+              <Tooltip content="Tooltip above the button">
+                <Button size="sm">Hover me</Button>
               </Tooltip>
               <Tooltip
-                content="Снизу и с переносом длинного текста, чтобы проверить ширину"
+                content="Below, with a long text that wraps to check the width"
                 placement="bottom"
               >
                 <Button size="sm" variant="ghost">
-                  Снизу
+                  Below
                 </Button>
               </Tooltip>
               <span className="pv-inline">
-                Параметр <Hint>Хинт доступен и с клавиатуры (Tab).</Hint>
+                Parameter <Hint>The hint is reachable from the keyboard too (Tab).</Hint>
               </span>
             </div>
           </Card>
 
           <Card title="Modal · Toast · FileDrop">
             <div className="pv-row">
-              <Button onClick={() => setModal(true)}>Открыть окно</Button>
+              <Button onClick={() => setModal(true)}>Open dialog</Button>
               <Button
                 variant="ghost"
-                onClick={() => toasts.push('Конфиг скопирован в буфер', { tone: 'success' })}
+                onClick={() => toasts.push('Config copied to the clipboard', { tone: 'success' })}
               >
-                Успех
+                Success
               </Button>
               <Button
                 variant="ghost"
                 onClick={() =>
-                  toasts.push('Не удалось разобрать файл', { tone: 'error', title: 'Ошибка' })
+                  toasts.push('Could not parse the file', { tone: 'error', title: 'Error' })
                 }
               >
-                Ошибка
+                Error
               </Button>
               <Button
                 variant="ghost"
-                onClick={() =>
-                  toasts.push('Изменено значение вне диапазона: 7 → 4', { tone: 'warn' })
-                }
+                onClick={() => toasts.push('Out-of-range value changed: 7 → 4', { tone: 'warn' })}
               >
-                Предупреждение
+                Warning
               </Button>
             </div>
             <FileDrop
               onText={(t, f) =>
-                toasts.push(`${f.name}: ${t.length} символов`, {
+                toasts.push(`${f.name}: ${t.length} characters`, {
                   tone: 'info',
-                  title: 'Файл прочитан',
+                  title: 'File read',
                 })
               }
               onError={(m) => toasts.push(m, { tone: 'error' })}
@@ -322,11 +320,11 @@ function App() {
               code={SNIPPET}
               language="ts"
               title="lumicells.config.ts"
-              onCopy={() => toasts.push('Скопировано', { tone: 'success', duration: 1500 })}
+              onCopy={() => toasts.push('Copied', { tone: 'success', duration: 1500 })}
             />
           </Card>
 
-          <Card title="StatsGraph (240 отсчётов, без React-состояния)">
+          <Card title="StatsGraph (240 samples, no React state)">
             <div className="pv-stats">
               <StatsGraph
                 ref={fps}
@@ -340,21 +338,21 @@ function App() {
               <StatsGraph
                 ref={gpu}
                 label="GPU"
-                unit="мс"
+                unit="ms"
                 guides={[8.33, 16.67]}
                 warnAbove={12}
                 decimals={1}
               />
             </div>
-            <Readout label="Сетка" value="31 × 31" />
-            <Readout label="Качество" value="high" tone="ok" />
-            <Readout label="Пропуски кадров" value="12%" tone="warn" />
+            <Readout label="Grid" value="31 × 31" />
+            <Readout label="Quality" value="high" tone="ok" />
+            <Readout label="Dropped frames" value="12%" tone="warn" />
           </Card>
 
-          <Card title="Слайдеры: состояния">
+          <Card title="Sliders: states">
             <div className="pv-well">
               <Slider
-                label="Обычный"
+                label="Default"
                 value={big}
                 onChange={setBig}
                 min={0}
@@ -362,7 +360,7 @@ function App() {
                 step={0.01}
                 default={0.5}
                 path="demo.normal"
-                hint="Двойной клик по подписи сбрасывает значение."
+                hint="Double-click the label to reset the value."
               />
               <Slider
                 label="Modulated"
@@ -374,10 +372,10 @@ function App() {
                 default={1}
                 effective={eff}
                 path="animation.energy"
-                hint="Эффективное значение двигается модулятором."
+                hint="A modulator moves the effective value."
               />
               <Slider
-                label="Лог. масштаб"
+                label="Log scale"
                 value={zoom}
                 onChange={setZoom}
                 min={0.25}
@@ -386,9 +384,9 @@ function App() {
                 default={1}
                 decimals={2}
               />
-              <Slider label="Отключён" value={0.3} onChange={() => {}} min={0} max={1} disabled />
+              <Slider label="Disabled" value={0.3} onChange={() => {}} min={0} max={1} disabled />
               <Slider
-                label="Очень длинная подпись параметра"
+                label="A very long parameter label"
                 value={0.7}
                 onChange={() => {}}
                 min={0}
@@ -403,16 +401,16 @@ function App() {
 
       <div className="pv-dock">
         <Panel
-          title="Стенд"
-          subtitle="LumiCells · образец панели"
+          title="Stand"
+          subtitle="LumiCells · sample panel"
           side="right"
           width={360}
           collapsed={collapsed}
           onCollapsedChange={setCollapsed}
           headerActions={
             <>
-              <IconButton icon="download" label="Экспорт" />
-              <IconButton icon="upload" label="Импорт" />
+              <IconButton icon="download" label="Export" />
+              <IconButton icon="upload" label="Import" />
             </>
           }
           search={
@@ -420,35 +418,35 @@ function App() {
               value={search}
               onChange={setSearch}
               count={denseShown.length}
-              placeholder="Поиск параметра…"
+              placeholder="Search parameters…"
             />
           }
           footer={
             <div className="pv-foot">
               <Button size="sm" variant="ghost" icon="reset">
-                Сбросить всё
+                Reset all
               </Button>
               <Button size="sm" variant="primary" icon="copy">
-                Копировать
+                Copy
               </Button>
             </div>
           }
         >
-          {show('сетка grid колонки gap шаг') && (
-            <Section title="Сетка">
+          {show('grid columns gap pitch') && (
+            <Section title="Grid">
               <Segmented
-                label="Размер"
+                label="Sizing"
                 value={sizing}
                 onChange={setSizing}
                 default="columns"
                 options={[
-                  { value: 'pitch', label: 'Шаг в px' },
-                  { value: 'columns', label: 'Число колонок' },
+                  { value: 'pitch', label: 'Pitch in px' },
+                  { value: 'columns', label: 'Column count' },
                 ]}
               />
               {sizing === 'columns' ? (
                 <Slider
-                  label="Колонки"
+                  label="Columns"
                   value={columns}
                   onChange={setColumns}
                   min={8}
@@ -456,11 +454,11 @@ function App() {
                   step={1}
                   default={31}
                   path="grid.columns"
-                  hint="Число колонок сетки по ширине хоста."
+                  hint="Number of grid columns across the host width."
                 />
               ) : (
                 <Slider
-                  label="Шаг"
+                  label="Pitch"
                   value={pitch}
                   onChange={setPitch}
                   min={4}
@@ -472,7 +470,7 @@ function App() {
                 />
               )}
               <Slider
-                label="Зазор"
+                label="Gap"
                 value={gap}
                 onChange={setGap}
                 min={0.02}
@@ -480,10 +478,10 @@ function App() {
                 step={0.01}
                 default={0.27}
                 path="grid.gap"
-                hint="Доля шага между телами клеток."
+                hint="Share of the pitch between cell bodies."
               />
               <Slider
-                label="Зум"
+                label="Zoom"
                 value={zoom}
                 onChange={setZoom}
                 min={0.25}
@@ -493,7 +491,7 @@ function App() {
                 path="scene.zoom"
               />
               <Vec2Pad
-                label="Центр"
+                label="Center"
                 value={center}
                 onChange={setCenter}
                 min={-1}
@@ -501,18 +499,18 @@ function App() {
                 step={0.01}
                 default={[-0.02, -0.02]}
                 path="scene.center"
-                hint="Центр композиции, единицы режима."
+                hint="Composition center, in mode units."
               />
             </Section>
           )}
 
-          {show('режим сфера sphere вес радиус') && (
+          {show('mode sphere weight radius') && (
             <Section
-              title="Сфера"
+              title="Sphere"
               dimmed={weightSphere === 0}
               header={
                 <Slider
-                  label="Вес"
+                  label="Weight"
                   value={weightSphere}
                   onChange={setWeightSphere}
                   min={0}
@@ -524,7 +522,7 @@ function App() {
               }
             >
               <Slider
-                label="Радиус"
+                label="Radius"
                 value={radius}
                 onChange={setRadius}
                 min={0.1}
@@ -533,7 +531,7 @@ function App() {
                 default={0.66}
               />
               <Slider
-                label="Дыра"
+                label="Hole"
                 value={hole}
                 onChange={setHole}
                 min={0}
@@ -542,7 +540,7 @@ function App() {
                 default={0.24}
               />
               <AngleInput
-                label="Наклон"
+                label="Tilt"
                 value={tilt}
                 onChange={setTilt}
                 min={-60}
@@ -553,7 +551,7 @@ function App() {
               <Grid columns={3}>
                 <Knob
                   layout="stack"
-                  label="Свет"
+                  label="Light"
                   value={light}
                   onChange={setLight}
                   default={0.45}
@@ -586,14 +584,14 @@ function App() {
             </Section>
           )}
 
-          {show('режим пульсация pulse вес') && (
+          {show('mode pulse weight') && (
             <Section
-              title="Пульсация"
+              title="Pulse"
               dimmed={weightPulse === 0}
               advanced
               header={
                 <Slider
-                  label="Вес"
+                  label="Weight"
                   value={weightPulse}
                   onChange={setWeightPulse}
                   min={0}
@@ -605,7 +603,7 @@ function App() {
               defaultOpen={false}
             >
               <Slider
-                label="Частота"
+                label="Frequency"
                 value={freq}
                 onChange={setFreq}
                 min={0.5}
@@ -614,7 +612,7 @@ function App() {
                 default={3}
               />
               <Knob
-                label="Ширина"
+                label="Width"
                 value={width}
                 onChange={setWidth}
                 min={0.02}
@@ -625,10 +623,10 @@ function App() {
             </Section>
           )}
 
-          {show('цвет палитра color palette фон') && (
-            <Section title="Цвет">
+          {show('color palette background') && (
+            <Section title="Color">
               <PaletteEditor
-                label="Палитра"
+                label="Palette"
                 value={palette}
                 onChange={setPalette}
                 interpolation={interp}
@@ -636,43 +634,43 @@ function App() {
                 default={REFERENCE_PALETTE}
                 quickPalettes={QUICK}
                 path="color.palette"
-                hint="Стопы вдоль оси; интерполяция в OKLab."
+                hint="Stops along the axis; OKLab interpolation."
               />
               <Segmented
-                label="Интерполяция"
+                label="Interpolation"
                 value={interp}
                 onChange={setInterp}
                 default="oklab"
                 options={['oklab', 'linear', 'steps']}
               />
               <AngleInput
-                label="Угол оси"
+                label="Axis angle"
                 value={angle}
                 onChange={setAngle}
                 default={32}
                 path="color.angle"
-                hint="0° — вправо, по часовой."
+                hint="0° points right, clockwise."
               />
               <ColorInput
-                label="Фон"
+                label="Background"
                 value={bg}
                 onChange={setBg}
                 default="#000032"
                 path="background.color"
               />
               <Select
-                label="Смешение"
+                label="Blending"
                 value={blend}
                 onChange={setBlend}
                 default="screen"
                 options={[
                   { value: 'screen', label: 'Screen' },
-                  { value: 'add', label: 'Сложение' },
-                  { value: 'max', label: 'Максимум' },
+                  { value: 'add', label: 'Add' },
+                  { value: 'max', label: 'Max' },
                 ]}
               />
               <Slider
-                label="Скорость"
+                label="Speed"
                 value={speed}
                 onChange={setSpeed}
                 min={0}
@@ -683,8 +681,8 @@ function App() {
             </Section>
           )}
 
-          {show('свечение glow bloom halo') && (
-            <Section title="Свечение">
+          {show('glow bloom halo') && (
+            <Section title="Glow">
               <Slider
                 label="Bloom"
                 value={bloom}
@@ -706,33 +704,29 @@ function App() {
             </Section>
           )}
 
-          {show('всплывающие lift pointer тумблер') && (
-            <Section title="Интерактив">
+          {show('lift pointer toggle') && (
+            <Section title="Interaction">
               <Toggle
-                label="Всплывающие"
+                label="Lifted pixels"
                 checked={lift}
                 onChange={setLift}
                 default
                 path="lift.enabled"
-                hint="Клетки поднимаются над сеткой."
+                hint="Cells rise above the grid."
               />
-              <Toggle label="Указатель" checked={pointer} onChange={setPointer} default={false} />
-              <Toggle label="Отключено" checked disabled onChange={() => {}} />
+              <Toggle label="Pointer" checked={pointer} onChange={setPointer} default={false} />
+              <Toggle label="Disabled" checked disabled onChange={() => {}} />
               <div className="pv-header-switch">
                 <span>Bare Switch</span>
-                <Switch checked={lift} onChange={setLift} aria-label="Пример Switch" />
+                <Switch checked={lift} onChange={setLift} aria-label="Sample switch" />
               </div>
             </Section>
           )}
 
           <Divider />
 
-          <Section
-            title={`Плотность: ${denseShown.length} из ${DENSE.length}`}
-            advanced
-            defaultOpen
-          >
-            {denseShown.length === 0 && <EmptyState>Ничего не найдено</EmptyState>}
+          <Section title={`Density: ${denseShown.length} of ${DENSE.length}`} advanced defaultOpen>
+            {denseShown.length === 0 && <EmptyState>Nothing found</EmptyState>}
             {denseShown.map((d) => (
               <Slider
                 key={d.key}
@@ -745,7 +739,7 @@ function App() {
                 scale={d.scale}
                 default={d.def}
                 path={d.key}
-                hint={`Сгенерированный параметр ${d.key}`}
+                hint={`Generated parameter ${d.key}`}
               />
             ))}
           </Section>
@@ -755,28 +749,28 @@ function App() {
       <Modal
         open={modal}
         onClose={() => setModal(false)}
-        title="Импорт конфигурации"
-        description="Вставьте JSON или перетащите файл. Неизвестные ключи будут отброшены."
+        title="Import config"
+        description="Paste JSON or drop a file. Unknown keys are dropped."
         footer={
           <>
             <Button variant="ghost" onClick={() => setModal(false)}>
-              Отмена
+              Cancel
             </Button>
             <Button
               variant="primary"
               onClick={() => {
                 setModal(false);
-                toasts.push('Конфиг применён', { tone: 'success' });
+                toasts.push('Config applied', { tone: 'success' });
               }}
             >
-              Применить
+              Apply
             </Button>
           </>
         }
       >
         <FileDrop />
         <div style={{ height: 10 }} />
-        <ColorInput label="Цвет в окне" value={bg} onChange={setBg} />
+        <ColorInput label="Color in a dialog" value={bg} onChange={setBg} />
       </Modal>
 
       <ToastList items={toasts.toasts} onDismiss={toasts.dismiss} />

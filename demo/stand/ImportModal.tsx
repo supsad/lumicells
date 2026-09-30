@@ -8,6 +8,7 @@ import {
   type PresetId,
 } from 'lumicells';
 import { useEffect, useMemo, useState } from 'react';
+import { useT } from './i18n';
 import { Badge, type BadgeTone, Button, EmptyState, FileDrop, Modal } from './ui';
 
 interface Parsed {
@@ -16,6 +17,7 @@ interface Parsed {
   issues: ConfigIssue[];
 }
 
+/** `error` is the raw JSON.parse message; the dialog wraps it in a localized sentence. */
 type ParseResult = { ok: true; value: Parsed } | { ok: false; error: string } | null;
 
 const CODE_TONE: Record<ConfigIssue['code'], BadgeTone> = {
@@ -33,7 +35,7 @@ function parse(text: string): ParseResult {
   try {
     raw = JSON.parse(text);
   } catch (e) {
-    return { ok: false, error: `Некорректный JSON: ${(e as Error).message}` };
+    return { ok: false, error: (e as Error).message };
   }
   // normalizeConfig never throws: a broken file yields defaults plus a list of issues.
   const { config, issues } = normalizeConfig(raw);
@@ -48,6 +50,7 @@ interface ImportModalProps {
 }
 
 export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
+  const t = useT();
   const [text, setText] = useState('');
   const [fileError, setFileError] = useState<string | null>(null);
 
@@ -66,8 +69,8 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
       open={open}
       onClose={onClose}
       size="lg"
-      title="Импорт настроек"
-      description="Загрузите файл lumicells.config.json или вставьте JSON. Значения вне диапазона будут исправлены, неизвестные ключи отброшены."
+      title={t.import.title}
+      description={t.import.description}
       footer={
         <>
           <Button
@@ -79,10 +82,10 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
               onClose();
             }}
           >
-            Применить
+            {t.import.apply}
           </Button>
           <Button variant="ghost" onClick={onClose}>
-            Отмена
+            {t.import.cancel}
           </Button>
         </>
       }
@@ -96,7 +99,7 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
           }}
           onError={setFileError}
         >
-          Перетащите JSON-файл сюда или выберите его
+          {t.import.drop}
         </FileDrop>
         {fileError && <p className="stand-import__error">{fileError}</p>}
         <textarea
@@ -105,17 +108,19 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
           onChange={(e) => setText(e.target.value)}
           placeholder='{ "extends": "orb", "modes": { "sphere": { "radius": 0.8 } } }'
           spellCheck={false}
-          aria-label="JSON конфигурации"
+          aria-label={t.import.jsonAria}
           rows={8}
         />
-        {result && !result.ok && <p className="stand-import__error">{result.error}</p>}
+        {result && !result.ok && (
+          <p className="stand-import__error">{t.import.badJson(result.error)}</p>
+        )}
         {value && (
-          <section className="stand-issues" aria-label="Результат проверки">
+          <section className="stand-issues" aria-label={t.import.resultAria}>
             <div className="stand-issues__head">
               {value.issues.length === 0 ? (
-                <Badge tone="ok">Проблем нет</Badge>
+                <Badge tone="ok">{t.import.noIssues}</Badge>
               ) : (
-                <Badge tone="warn">Замечаний: {value.issues.length}</Badge>
+                <Badge tone="warn">{t.import.issues(value.issues.length)}</Badge>
               )}
               {value.presetId && <Badge tone="azure">extends: {value.presetId}</Badge>}
             </div>
@@ -123,16 +128,16 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
               <table className="stand-issues__table">
                 <thead>
                   <tr>
-                    <th>Путь</th>
-                    <th>Код</th>
-                    <th>Сообщение</th>
+                    <th>{t.import.path}</th>
+                    <th>{t.import.code}</th>
+                    <th>{t.import.message}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {value.issues.map((i) => (
                     <tr key={`${i.path}:${i.code}:${i.message}`}>
                       <td>
-                        <code>{i.path || '(корень)'}</code>
+                        <code>{i.path || t.import.root}</code>
                       </td>
                       <td>
                         <Badge tone={CODE_TONE[i.code]} outline>
@@ -145,7 +150,7 @@ export function ImportModal({ open, onClose, onApply }: ImportModalProps) {
                 </tbody>
               </table>
             ) : (
-              <EmptyState>Файл корректен и будет применён как есть.</EmptyState>
+              <EmptyState>{t.import.valid}</EmptyState>
             )}
           </section>
         )}

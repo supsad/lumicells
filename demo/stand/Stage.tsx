@@ -7,6 +7,7 @@
 import type { LumiCellsConfig, LumiCells as LumiCellsInstance } from 'lumicells';
 import { LumiCells } from 'lumicells/react';
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react';
+import { useT } from './i18n';
 import { frameSize, MAX_STAGE, MIN_STAGE, type Prefs } from './prefs';
 import { type SceneBinder, SceneLayer } from './scene-binding';
 import { useSelector, useStore } from './store';
@@ -34,6 +35,7 @@ export function Stage({
   onError,
 }: StageProps) {
   const store = useStore();
+  const t = useT();
   const size = frameSize(prefs);
   const overflow = useSelector((s) => s.cfg.render.overflow);
   const [hintDismissed, setHintDismissed] = useState(false);
@@ -86,8 +88,8 @@ export function Stage({
               <div
                 className="stand-frame__handle"
                 role="separator"
-                aria-label="Изменить размер сцены"
-                title="Потяните, чтобы изменить размер"
+                aria-label={t.stage.resizeAria}
+                title={t.stage.resizeTitle}
                 onPointerDown={onHandleDown}
                 onPointerMove={onHandleMove}
                 onPointerUp={onHandleUp}
@@ -100,7 +102,9 @@ export function Stage({
       {showHint && (
         <div className="stand-hint" role="note">
           <span>
-            Включите <code>render.overflow</code>, чтобы пиксели вылетали за край
+            {t.stage.overflowBefore}
+            <code>render.overflow</code>
+            {t.stage.overflowAfter}
           </span>
           <Button
             size="sm"
@@ -115,11 +119,11 @@ export function Stage({
               )
             }
           >
-            Включить
+            {t.stage.enable}
           </Button>
           <IconButton
             icon="close"
-            label="Скрыть подсказку"
+            label={t.stage.hideHint}
             size="xs"
             onClick={() => setHintDismissed(true)}
           />

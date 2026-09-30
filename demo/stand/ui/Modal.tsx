@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useId, useRef } from 'react';
+import { useT } from '../i18n';
 import { IconButton } from './Button';
 import { cx, useLatest } from './utils';
 
@@ -58,6 +59,7 @@ function ModalInner({
   dismissable,
   className,
 }: Omit<ModalProps, 'open'> & { size: NonNullable<ModalProps['size']> }) {
+  const t = useT();
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
   const close = useLatest(onClose);
@@ -93,7 +95,7 @@ function ModalInner({
           <h2 id={`${id}-t`} className="lcui-modal__title">
             {title}
           </h2>
-          <IconButton icon="close" label="Закрыть" size="sm" onClick={() => close.current()} />
+          <IconButton icon="close" label={t.ui.close} size="sm" onClick={() => close.current()} />
         </header>
         {description && (
           <p id={`${id}-d`} className="lcui-modal__desc">

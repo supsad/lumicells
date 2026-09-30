@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { useT } from '../i18n';
 import { IconButton } from './Button';
 import { Icon, type IconName } from './Icon';
 import { cx } from './utils';
@@ -36,26 +37,28 @@ export function ToastList({
   placement = 'bottom-right',
   className,
 }: ToastListProps) {
+  const t = useT();
   return (
     <section
       className={cx('lcui-toasts', `lcui-toasts--${placement}`, className)}
-      aria-label="Уведомления"
+      aria-label={t.ui.notifications}
       aria-live="polite"
     >
-      {items.map((t) => (
-        <ToastView key={t.id} item={t} onDismiss={onDismiss} />
+      {items.map((item) => (
+        <ToastView key={item.id} item={item} onDismiss={onDismiss} />
       ))}
     </section>
   );
 }
 
 function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss(id: number): void }) {
+  const t = useT();
   const { id, duration = 4000, tone = 'info' } = item;
   const [paused, setPaused] = useState(false);
   useEffect(() => {
     if (!duration || paused) return;
-    const t = window.setTimeout(() => onDismiss(id), duration);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => onDismiss(id), duration);
+    return () => window.clearTimeout(timer);
   }, [id, duration, paused, onDismiss]);
 
   return (
@@ -72,7 +75,7 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss(id: number)
       </div>
       <IconButton
         icon="close"
-        label="Закрыть уведомление"
+        label={t.ui.dismissNotification}
         size="xs"
         onClick={() => onDismiss(id)}
       />

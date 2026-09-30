@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { isHexColor, normalizeHex } from '../../../src/core/color';
+import { useT } from '../i18n';
 import { Field, type FieldBaseProps } from './Field';
 import { NumberInput } from './NumberInput';
 import {
@@ -228,6 +229,7 @@ function angleFromPointer(cx0: number, cy0: number, x: number, y: number) {
 /** Dial (drag; Shift snaps to 15°) plus an exact number field. */
 export function AngleInput(props: AngleInputProps) {
   const { value, onChange, min = 0, max = 360, disabled, default: def, step = 1 } = props;
+  const t = useT();
   const uid = useId();
   const full = max - min >= 360;
   const latest = useLatest({ value, onChange });
@@ -271,7 +273,7 @@ export function AngleInput(props: AngleInputProps) {
         aria-valuenow={value}
         aria-valuetext={`${Math.round(value * 10) / 10}°`}
         aria-disabled={disabled || undefined}
-        title="Тяните по кругу (Shift — шаг 15°)"
+        title={t.ui.angleTitle}
         {...drag}
         onKeyDown={(e) => {
           if (disabled) return;
@@ -342,6 +344,8 @@ export interface Vec2PadProps extends FieldBaseProps {
 /** 2D pad with crosshair (Shift = fine drag, double-click = reset) and two exact inputs. */
 export function Vec2Pad(props: Vec2PadProps) {
   const { value, onChange, min, max, disabled, default: def, yUp = false, size = 76 } = props;
+  const t = useT();
+  const name = typeof props.label === 'string' ? props.label : t.ui.vector;
   const uid = useId();
   const step = props.step ?? autoStep(min, max) * 10;
   const decimals = decimalsOf(step);
@@ -416,11 +420,11 @@ export function Vec2Pad(props: Vec2PadProps) {
           className="lcui-vec2__pad"
           role="application"
           tabIndex={disabled ? -1 : 0}
-          aria-roledescription="двумерная панель"
-          aria-label={`${typeof props.label === 'string' ? props.label : 'Вектор'}: x ${value[0].toFixed(decimals)}, y ${value[1].toFixed(decimals)}`}
+          aria-roledescription={t.ui.vec2Role}
+          aria-label={`${name}: x ${value[0].toFixed(decimals)}, y ${value[1].toFixed(decimals)}`}
           aria-disabled={disabled || undefined}
           style={{ width: size, height: size }}
-          title="Shift — точнее, двойной клик — сброс"
+          title={t.ui.vec2Title}
           onDoubleClick={() => !disabled && def && onChange([def[0], def[1]])}
           onKeyDown={(e) => {
             if (disabled) return;
@@ -466,7 +470,7 @@ export function Vec2Pad(props: Vec2PadProps) {
               decimals={Math.max(2, decimals)}
               trim
               disabled={disabled}
-              aria-label={`${typeof props.label === 'string' ? props.label : 'Вектор'}: X`}
+              aria-label={`${name}: X`}
             />
           </div>
           <div className="lcui-vec2__axislabel">
@@ -480,7 +484,7 @@ export function Vec2Pad(props: Vec2PadProps) {
               decimals={Math.max(2, decimals)}
               trim
               disabled={disabled}
-              aria-label={`${typeof props.label === 'string' ? props.label : 'Вектор'}: Y`}
+              aria-label={`${name}: Y`}
             />
           </div>
           <span className="lcui-vec2__range">
@@ -506,6 +510,7 @@ const HEX_LIVE = /^#?[0-9a-f]{6}$/i;
 /** Swatch that opens the native picker + a validated hex text field. */
 export function ColorInput(props: ColorInputProps) {
   const { value, onChange, disabled, default: def } = props;
+  const t = useT();
   const uid = useId();
   const [draft, setDraft] = useState<string | null>(null);
   const shown = draft ?? value;
@@ -528,14 +533,14 @@ export function ColorInput(props: ColorInputProps) {
       changed={def !== undefined && normalizeHex(def) !== value.toLowerCase()}
       onReset={def !== undefined ? () => onChange(normalizeHex(def)) : undefined}
     >
-      <label className="lcui-swatch" style={{ background: valid }} title="Выбрать цвет">
+      <label className="lcui-swatch" style={{ background: valid }} title={t.ui.pickColor}>
         <input
           type="color"
           className="lcui-swatch__input"
           value={valid}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value.toLowerCase())}
-          aria-label={`${typeof props.label === 'string' ? props.label : 'Цвет'}: выбор цвета`}
+          aria-label={t.ui.colorPicker(typeof props.label === 'string' ? props.label : t.ui.color)}
         />
       </label>
       <input
@@ -578,6 +583,7 @@ export interface HexFieldProps {
 }
 
 export function HexField({ value, onChange, disabled, inputRef, ...aria }: HexFieldProps) {
+  const t = useT();
   const [draft, setDraft] = useState<string | null>(null);
   const invalid = draft !== null && draft.trim() !== '' && !isHexColor(draft);
   const valid = isHexColor(value) ? normalizeHex(value) : '#000000';
@@ -605,7 +611,7 @@ export function HexField({ value, onChange, disabled, inputRef, ...aria }: HexFi
           value={valid}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value.toLowerCase())}
-          aria-label={`${aria['aria-label']}: выбор цвета`}
+          aria-label={t.ui.colorPicker(aria['aria-label'])}
         />
       </label>
       <input

@@ -33,7 +33,10 @@ export type BubbleContext = {
   action: (action: SceneAction, el: HTMLElement) => void;
 };
 
-type BubbleProps = { item: SceneItem; selected: boolean; ctx: BubbleContext };
+/** Localized copy of one item (texts.ts). */
+export type BubbleText = { label: string; caption?: string };
+
+type BubbleProps = { item: SceneItem; text: BubbleText; selected: boolean; ctx: BubbleContext };
 
 function bubbleColor(item: SceneItem, selected: boolean): string {
   switch (item.kind) {
@@ -47,18 +50,18 @@ function bubbleColor(item: SceneItem, selected: boolean): string {
   }
 }
 
-function useBubble(item: SceneItem, selected: boolean, ctx: BubbleContext) {
+function useBubble(item: SceneItem, label: string, selected: boolean, ctx: BubbleContext) {
   const elRef = useRef<HTMLButtonElement | null>(null);
   const hoverRef = useRef(false);
   const info = useMemo<BubbleInfo>(
     () => ({
       id: item.id,
-      label: item.label,
+      label,
       kind: item.kind,
       color: bubbleColor(item, selected),
       selected,
     }),
-    [item, selected],
+    [item, label, selected],
   );
   const infoRef = useRef(info);
   infoRef.current = info;
@@ -155,8 +158,8 @@ function Slot({ item, children }: { item: SceneItem; children: ReactNode }) {
 }
 
 /** Red pill that turns blue when selected. Also renders the blue primary/secondary variants. */
-export const TopicBubble = memo(function TopicBubble({ item, selected, ctx }: BubbleProps) {
-  const { elRef, handlers } = useBubble(item, selected, ctx);
+export const TopicBubble = memo(function TopicBubble({ item, text, selected, ctx }: BubbleProps) {
+  const { elRef, handlers } = useBubble(item, text.label, selected, ctx);
   const toggles = item.kind === 'topic' || item.kind === 'primary';
   return (
     <Slot item={item}>
@@ -170,18 +173,18 @@ export const TopicBubble = memo(function TopicBubble({ item, selected, ctx }: Bu
         aria-pressed={toggles ? selected : undefined}
         {...handlers}
       >
-        <span className="lc-scene-label">{item.label}</span>
-        {item.caption ? <span className="lc-scene-caption">{item.caption}</span> : null}
+        <span className="lc-scene-label">{text.label}</span>
+        {text.caption ? <span className="lc-scene-caption">{text.caption}</span> : null}
       </button>
     </Slot>
   );
 });
 
-/** 'готово' / 'назад': a pill that triggers a scene action instead of toggling. */
+/** 'done' / 'back': a pill that triggers a scene action instead of toggling. */
 export const ActionButton = TopicBubble;
 
-export const MusicCard = memo(function MusicCard({ item, selected, ctx }: BubbleProps) {
-  const { elRef, handlers } = useBubble(item, selected, ctx);
+export const MusicCard = memo(function MusicCard({ item, text, selected, ctx }: BubbleProps) {
+  const { elRef, handlers } = useBubble(item, text.label, selected, ctx);
   return (
     <Slot item={item}>
       <button
@@ -190,11 +193,11 @@ export const MusicCard = memo(function MusicCard({ item, selected, ctx }: Bubble
         className="lc-scene-bubble lc-scene-card"
         data-kind="card"
         data-id={item.id}
-        aria-label={item.label}
+        aria-label={text.label}
         {...handlers}
       >
         <Headphones className="lc-scene-card-art" />
-        <span className="lc-scene-card-tag">{item.label}</span>
+        <span className="lc-scene-card-tag">{text.label}</span>
       </button>
     </Slot>
   );

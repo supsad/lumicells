@@ -129,7 +129,13 @@
 .lc-scene-pill {
   --g-c: rgba(236, 40, 90, 0.3);
   --g-r: 10;
+  /* Width follows the (localized) text: padding plus a minimum keeps short words pill-shaped. */
+  --pad: 12.5;
+  --min-w: 34;
 
+  width: auto;
+  min-width: calc(var(--min-w) * var(--s));
+  padding: 0 calc(var(--pad) * var(--s));
   border-radius: calc(3.5 * var(--s));
   font: 500 calc(7 * var(--s)) / 1 var(--lc-scene-font);
   letter-spacing: 0.01em;
@@ -185,8 +191,10 @@
   --g-r: 18;
 }
 
-/* primary ('наука'): larger, with the clear soft blue glow */
+/* primary ('science'): larger, with the clear soft blue glow */
 .lc-scene-pill[data-kind="primary"] {
+  --pad: 16;
+  --min-w: 56;
   border-radius: calc(5 * var(--s));
   font-size: calc(11.5 * var(--s));
   font-weight: 600;
@@ -253,8 +261,11 @@
   position: absolute;
   left: calc(42 * var(--s));
   top: calc(10 * var(--s));
-  width: calc(24 * var(--s));
+  box-sizing: border-box;
+  min-width: calc(24 * var(--s));
   height: calc(10 * var(--s));
+  padding: 0 calc(3 * var(--s));
+  white-space: nowrap;
   border-radius: calc(2 * var(--s));
   font: 500 calc(4 * var(--s)) / calc(10 * var(--s)) var(--lc-scene-font);
   letter-spacing: 0.02em;

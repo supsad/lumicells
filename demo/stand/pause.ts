@@ -11,7 +11,7 @@
  *
  * Modulators live in the runtime layer, never in the stored config, so exports, share links and
  * autosave are untouched, and the sliders keep their values (the panel shows the effective one
- * with a "мод." badge). Disposing the modulators on resume returns everything to the config.
+ * with a "mod" badge). Disposing the modulators on resume returns everything to the config.
  */
 
 import type { LumiCells, ModulatablePath } from 'lumicells';

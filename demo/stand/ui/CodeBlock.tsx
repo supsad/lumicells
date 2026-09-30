@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useT } from '../i18n';
 import { Icon } from './Icon';
 import { copyText, cx, useFlash } from './utils';
 
@@ -24,6 +25,7 @@ export function CodeBlock({
   onCopy,
   className,
 }: CodeBlockProps) {
+  const t = useT();
   const [copied, flash] = useFlash();
   const doCopy = async () => {
     if (await copyText(code)) {
@@ -40,10 +42,10 @@ export function CodeBlock({
           type="button"
           className={cx('lcui-code__copy', copied && 'is-done')}
           onClick={doCopy}
-          aria-label="Скопировать код"
+          aria-label={t.ui.copyCode}
         >
           <Icon name={copied ? 'check' : 'copy'} size={12} />
-          <span aria-live="polite">{copied ? 'Скопировано' : 'Копировать'}</span>
+          <span aria-live="polite">{copied ? t.ui.copied : t.ui.copy}</span>
         </button>
       </figcaption>
       <pre

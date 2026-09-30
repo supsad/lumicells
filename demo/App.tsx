@@ -4,6 +4,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { ExportModal } from './stand/ExportModal';
 import { hotkeyOf } from './stand/hotkeys';
 import { ImportModal } from './stand/ImportModal';
+import {
+  I18nProvider,
+  type Locale,
+  localeFromUrl,
+  MESSAGES,
+  type Messages,
+  syncUrlLocale,
+} from './stand/i18n';
 import { ModulationContext, ModulationTracker } from './stand/modulation';
 import { usePauseModulators } from './stand/pause';
 import {
@@ -62,12 +70,10 @@ function isTyping(target: EventTarget | null): boolean {
 function notifyShared(
   notify: (message: string, tone: 'success' | 'warn') => void,
   shared: Pick<LoadedState, 'issues'>,
+  t: Messages,
 ): void {
   const n = shared.issues.length;
-  notify(
-    n ? `Настройки из ссылки применены, замечаний: ${n}` : 'Настройки загружены из ссылки',
-    n ? 'warn' : 'success',
-  );
+  notify(n ? t.app.sharedWithIssues(n) : t.app.sharedLoaded, n ? 'warn' : 'success');
 }
 
 interface StandProps {
@@ -108,6 +114,23 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
     });
   }, [prefs]);
 
+  // `?lang=` wins for this visit; picking a language in the switcher stores it in the prefs.
+  const [urlLocale, setUrlLocale] = useState<Locale | null>(localeFromUrl);
+  const locale = urlLocale ?? prefs.locale;
+  const t = MESSAGES[locale];
+  const setLocale = useCallback(
+    (next: Locale) => {
+      setUrlLocale(null);
+      syncUrlLocale(next);
+      patchPrefs({ locale: next });
+    },
+    [patchPrefs],
+  );
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.title = MESSAGES[locale].meta.title;
+  }, [locale]);
+
   const [paused, setPaused] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -146,20 +169,15 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
       instance.on('fallback', (e) => {
         // A lost context has its own notice below.
         if (e.reason === 'context-lost') return;
-        notify(
-          e.reason === 'no-webgl2'
-            ? 'WebGL2 недоступен: показана статичная заставка'
-            : `Отказ рендера: ${e.reason}`,
-          'warn',
-        );
+        notify(e.reason === 'no-webgl2' ? t.app.noWebgl2 : t.app.fallback(e.reason), 'warn');
       }),
-      instance.on('contextlost', () => notify('WebGL-контекст потерян', 'warn')),
-      instance.on('contextrestored', () => notify('Контекст восстановлен', 'success')),
+      instance.on('contextlost', () => notify(t.app.contextLost, 'warn')),
+      instance.on('contextrestored', () => notify(t.app.contextRestored, 'success')),
     ];
     return () => {
       for (const off of offs) off();
     };
-  }, [instance, notify]);
+  }, [instance, notify, t]);
 
   // ------------------------------------------------------------ history and autosave
 
@@ -203,8 +221,8 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
     if (announced.current) return;
     announced.current = true;
     const init = getInitialState();
-    if (init.source === 'hash') notifyShared(notify, init);
-  }, [notify]);
+    if (init.source === 'hash') notifyShared(notify, init, t);
+  }, [notify, t]);
 
   // A share link pasted into a tab where the stand is already open is a same-document fragment
   // navigation (no reload): apply it here, the same way as on load.
@@ -213,7 +231,7 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
       const shared = decodeShareHash(window.location.hash);
       if (!shared) return;
       store.replace(shared.cfg, shared.presetId);
-      notifyShared(notify, shared);
+      notifyShared(notify, shared, t);
       try {
         const { pathname, search } = window.location;
         window.history.replaceState(null, '', pathname + search);
@@ -223,7 +241,7 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, [store, notify]);
+  }, [store, notify, t]);
 
   // ------------------------------------------------------------------------ hotkeys
 
@@ -264,20 +282,20 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
   const copyLink = useCallback(async () => {
     const s = store.getSnapshot();
     const ok = await copyText(shareUrl(s.cfg, s.presetId));
-    notify(ok ? 'Ссылка скопирована' : 'Не удалось скопировать ссылку', ok ? 'success' : 'error');
-  }, [store, notify]);
+    notify(ok ? t.app.linkCopied : t.app.linkCopyFailed, ok ? 'success' : 'error');
+  }, [store, notify, t]);
 
   const applyImport = useCallback(
     (config: LumiCellsConfig, presetId: PresetId | null) => {
       store.replace(config, presetId ?? store.getSnapshot().presetId);
-      notify('Настройки применены', 'success');
+      notify(t.app.settingsApplied, 'success');
     },
-    [store, notify],
+    [store, notify, t],
   );
 
   const onError = useCallback(
-    (e: Error) => notify(`Ошибка рендера: ${e.message}`, 'error'),
-    [notify],
+    (e: Error) => notify(t.app.renderError(e.message), 'error'),
+    [notify, t],
   );
   const onResize = useCallback(
     (w: number, h: number) => patchPrefs({ size: 'custom', customW: w, customH: h }),
@@ -285,44 +303,46 @@ function Stand({ store, tracker, instance, setInstance }: StandProps) {
   );
 
   return (
-    <div className="stand" data-collapsed={prefs.panelCollapsed || undefined}>
-      <div className="stand__bar">
-        <StandToolbar
-          prefs={prefs}
-          patchPrefs={patchPrefs}
-          paused={paused}
-          onPaused={setPaused}
-          onExport={openExport}
-          onImport={openImport}
-          onCopyLink={copyLink}
-        />
-      </div>
-      <div className="stand__body">
-        <main className="stand__main">
-          <Stage
-            cfg={snap.cfg}
-            transition={snap.transition}
+    <I18nProvider locale={locale} setLocale={setLocale}>
+      <div className="stand" data-collapsed={prefs.panelCollapsed || undefined}>
+        <div className="stand__bar">
+          <StandToolbar
             prefs={prefs}
-            binder={binder}
-            onInstance={setInstance}
-            onResize={onResize}
-            onError={onError}
+            patchPrefs={patchPrefs}
+            paused={paused}
+            onPaused={setPaused}
+            onExport={openExport}
+            onImport={openImport}
+            onCopyLink={copyLink}
           />
-        </main>
-        <div className="stand__dock">
-          <StandPanel prefs={prefs} patchPrefs={patchPrefs} />
         </div>
-      </div>
+        <div className="stand__body">
+          <main className="stand__main">
+            <Stage
+              cfg={snap.cfg}
+              transition={snap.transition}
+              prefs={prefs}
+              binder={binder}
+              onInstance={setInstance}
+              onResize={onResize}
+              onError={onError}
+            />
+          </main>
+          <div className="stand__dock">
+            <StandPanel prefs={prefs} patchPrefs={patchPrefs} />
+          </div>
+        </div>
 
-      <ExportModal
-        open={exportOpen}
-        onClose={() => setExportOpen(false)}
-        cfg={snap.cfg}
-        presetId={snap.presetId}
-        notify={notify}
-      />
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onApply={applyImport} />
-      <ToastList items={toasts.toasts} onDismiss={toasts.dismiss} placement="bottom-left" />
-    </div>
+        <ExportModal
+          open={exportOpen}
+          onClose={() => setExportOpen(false)}
+          cfg={snap.cfg}
+          presetId={snap.presetId}
+          notify={notify}
+        />
+        <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onApply={applyImport} />
+        <ToastList items={toasts.toasts} onDismiss={toasts.dismiss} placement="bottom-left" />
+      </div>
+    </I18nProvider>
   );
 }
