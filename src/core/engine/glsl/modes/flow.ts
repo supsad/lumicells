@@ -13,7 +13,9 @@ vec3 mode_flow(ModeIn m) {
   vec2 q = vec2(dot(m.p, d), dot(m.p, vec2(-d.y, d.x))) * sc;
   float ph = f_phaseA.x;
   float fw = sc * m.cs;
-  float n = 0.5 * gnoise3(vec3(q.x - ph, q.y, ph * 0.25));
+  // Octave 0 carries the structure: it fades only once the noise itself gets finer than a cell
+  // (e.g. a large scale at low zoom), instead of turning into shimmering salt-and-pepper.
+  float n = 0.5 * noiseBand(fw) * gnoise3(vec3(q.x - ph, q.y, ph * 0.25));
   vec2 q1 = NOISE_ROT * q * 2.0 + vec2(19.0, 7.0);
   n += 0.25 * bandLimit(2.0 * fw) * gnoise3(vec3(q1.x - ph * 1.5, q1.y, ph * 0.5));
   vec2 q2 = NOISE_ROT * q1 * 2.0 + vec2(-11.0, 23.0);

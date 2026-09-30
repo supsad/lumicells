@@ -11,7 +11,14 @@ import { FULLSCREEN_VS } from '../glsl/common';
 import { INFLUENCE_GLSL } from '../glsl/influence';
 import { LIFE_LEVEL_GLSL } from '../glsl/modes/life';
 import type { FrameInputs } from '../types';
-import { bindTexture, LazyProgram, type PassContext, setSampler, UNIT_SRC } from './shared';
+import {
+  bindTexture,
+  discardTargets,
+  LazyProgram,
+  type PassContext,
+  setSampler,
+  UNIT_SRC,
+} from './shared';
 
 export const LIFE_MODE_STEP = 0;
 export const LIFE_MODE_RESET = 1;
@@ -114,6 +121,8 @@ export class LifePass {
     const gl = this.ctx.gl;
     const p = this.prog.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, dst);
+    // Every texel of the logical rect is rewritten: tiled GPUs need not load the old contents.
+    discardTargets(this.ctx);
     gl.viewport(0, 0, w, h);
     bindTexture(gl, UNIT_SRC, src);
     gl.uniform4i(p.uniform('u_size'), w, h, Math.max(1, prevW), Math.max(1, prevH));

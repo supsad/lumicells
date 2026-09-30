@@ -22,6 +22,8 @@ import {
   FRAME_FLOATS,
   OFF_CLOCK,
   OFF_COUNTS,
+  OFF_EPOCH_A,
+  OFF_EPOCH_B,
   OFF_GRID,
   OFF_HOST,
   OFF_MISC,
@@ -29,6 +31,7 @@ import {
   OFF_PHASE_A,
   OFF_PHASE_B,
   OFF_SPACE,
+  writeEpochPhase,
 } from '../engine/frame-block';
 import type { FrameInputs } from '../engine/types';
 import { Clock, type ClockRates } from './clock';
@@ -150,6 +153,10 @@ export class Controller {
     rain: 0,
     drift: 0,
     lifeRate: 0,
+    sparsity: 0,
+    flicker: 0,
+    sparkle: 0,
+    ripple: 0,
   };
   private readonly liftParams: LiftParams = createLiftParams();
   private readonly geoIn: GeometryInput = {
@@ -230,7 +237,7 @@ export class Controller {
       frame: new Float32Array(FRAME_FLOATS),
       lut: this.lut.bytes,
       lutDirty: true,
-      lifeStep: false,
+      lifeSteps: 0,
       lifeReset: true,
       lifeSeed: (this.random() * 4294967296) >>> 0,
       lifeRule: 0,
@@ -240,6 +247,8 @@ export class Controller {
       liftCount: 0,
       bloomSigma: 1.2,
       hazeSigma: 6,
+      bloomStrength: 0.8,
+      hazeStrength: 0.12,
       quality: 'high',
       opaque: true,
       debugView: 0,
@@ -571,12 +580,17 @@ export class Controller {
     r.rain = s.num(ids.rainSpeed);
     r.drift = s.num(ids.drift);
     r.lifeRate = s.num(ids.lifeWeight) > 0.001 ? s.num(ids.lifeRate) : 0;
+    // Epoch rates use the same clamps as the field / ripple shaders.
+    r.sparsity = 1 / Math.max(s.num(ids.sparsityPeriod), 0.1);
+    r.flicker = Math.max(0, s.num(ids.flickerRate));
+    r.sparkle = 1 / Math.max(s.num(ids.sparkleDuration), 0.05);
+    r.ripple = 1 / Math.max(s.num(ids.rippleLife), 0.1);
     const c = this.clock;
     c.advance(step, r);
 
-    // Life
-    f.lifeStep = c.lifeSteps > 0;
-    if (f.lifeStep) f.lifeSeed = (f.lifeSeed + c.lifeSteps) >>> 0;
+    // Life: every due step runs (0..2 per frame), each with its own seed.
+    f.lifeSteps = c.lifeSteps;
+    f.lifeSeed = (f.lifeSeed + c.lifeSteps) >>> 0;
     f.lifeRule = s.num(ids.lifeRule);
     f.lifeBirth = s.num(ids.lifeBirth);
     f.lifeSeedDensity = s.num(ids.lifeDensity);
@@ -633,7 +647,13 @@ export class Controller {
     fr[OFF_MISC] = s.crossfadePrev(ids.mapping);
     fr[OFF_MISC + 1] = s.crossfadeMix(ids.mapping);
     fr[OFF_MISC + 2] = this.software ? 1 : 0;
-    fr[OFF_MISC + 3] = 0;
+    // Drift folds the palette with tri(); keyed on the rate as well as the phase, so a phase that
+    // lands exactly on 0 does not switch to the unfolded mapping for a frame.
+    fr[OFF_MISC + 3] = r.drift !== 0 || c.drift !== 0 ? 1 : 0;
+    writeEpochPhase(fr, OFF_EPOCH_A, c.sparsity);
+    writeEpochPhase(fr, OFF_EPOCH_A + 2, c.sparkle);
+    writeEpochPhase(fr, OFF_EPOCH_B, c.flicker);
+    writeEpochPhase(fr, OFF_EPOCH_B + 2, c.ripple);
 
     f.canvasWidth = g.canvasW;
     f.canvasHeight = g.canvasH;
@@ -644,6 +664,8 @@ export class Controller {
     f.liftCount = nLift;
     f.bloomSigma = s.num(ids.bloomSigma);
     f.hazeSigma = s.num(ids.hazeSigma);
+    f.bloomStrength = s.num(ids.bloomStrength);
+    f.hazeStrength = s.num(ids.hazeStrength);
     f.quality = this.perf.quality;
     f.opaque = this.config.render.overflow <= 0;
     return f;
@@ -793,6 +815,10 @@ function resolveIds(s: ParamStore) {
     vortexSpeed: s.id('modes.vortex.speed'),
     rainSpeed: s.id('modes.rain.speed'),
     drift: s.id('color.drift'),
+    sparsityPeriod: s.id('animation.sparsity.period'),
+    flickerRate: s.id('animation.flicker.rate'),
+    sparkleDuration: s.id('animation.sparkle.duration'),
+    rippleLife: s.id('modes.ripple.life'),
     lifeWeight: s.id('modes.life.weight'),
     lifeRate: s.id('modes.life.stepRate'),
     lifeBirth: s.id('modes.life.birthRate'),
@@ -801,6 +827,8 @@ function resolveIds(s: ParamStore) {
     mapping: s.id('color.mapping'),
     bloomSigma: s.id('glow.bloom.radius'),
     hazeSigma: s.id('glow.haze.radius'),
+    bloomStrength: s.id('glow.bloom.strength'),
+    hazeStrength: s.id('glow.haze.strength'),
     pitch: s.id('grid.pitch'),
     count: s.id('grid.count'),
     maxDpr: s.id('render.maxDpr'),

@@ -111,7 +111,12 @@ export function bucketSize(n: number, step = 32): number {
   return Math.max(step, Math.ceil(Math.max(1, n) / step) * step);
 }
 
-/** Whether an allocation of `alloc` must change to hold `need` (grow, or shrink below half). */
+/**
+ * Whether an allocation of `alloc` must change to hold `need`: grow when it does not fit, shrink
+ * only when the needed bucket is less than half of it. The strict test is the hysteresis: with
+ * `<=`, a size oscillating across a bucket boundary would reallocate every frame (need 33 grows
+ * 32 -> 64, need 32 shrinks back because 32 * 2 <= 64); now it grows once and stays.
+ */
 export function needsRealloc(alloc: number, need: number, step = 32): boolean {
-  return need > alloc || bucketSize(need, step) * 2 <= alloc;
+  return need > alloc || bucketSize(need, step) * 2 < alloc;
 }

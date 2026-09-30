@@ -13,9 +13,13 @@ export const UNIT_LIFE = 0;
 export const UNIT_LUT = 1;
 export const UNIT_FIELD_A = 2;
 export const UNIT_FIELD_B = 3;
-export const UNIT_BLOOM = 4;
+/** Combined bloom + haze (the only glow texture the composite samples). */
+export const UNIT_GLOW = 4;
 export const UNIT_HAZE = 5;
 export const UNIT_SRC = 6;
+/** Cell stamp (see passes/stamp.ts). */
+export const UNIT_STAMP_A = 7;
+export const UNIT_STAMP_B = 8;
 
 export const BIND_PARAMS = 0;
 export const BIND_FRAME = 1;
@@ -107,4 +111,23 @@ export function setSampler(gl: WebGL2RenderingContext, p: Program, name: string,
 export function bindTexture(gl: WebGL2RenderingContext, unit: number, tex: WebGLTexture | null) {
   gl.activeTexture(gl.TEXTURE0 + unit);
   gl.bindTexture(gl.TEXTURE_2D, tex);
+}
+
+// COLOR_ATTACHMENT0..2 (constant values, so the lists exist before a context does).
+const DISCARD: readonly (readonly GLenum[])[] = [
+  [],
+  [0x8ce0],
+  [0x8ce0, 0x8ce1],
+  [0x8ce0, 0x8ce1, 0x8ce2],
+];
+
+/**
+ * Tells the driver the bound framebuffer's first `count` color attachments are about to be fully
+ * overwritten, so a tiled GPU skips loading their old contents into tile memory (no-op on other
+ * GPUs, see GLCaps.tiled). Every cell pass rewrites its whole logical rect and nothing reads the
+ * headroom texels outside it.
+ */
+export function discardTargets(ctx: PassContext, count = 1): void {
+  if (!ctx.caps.tiled) return;
+  ctx.gl.invalidateFramebuffer(ctx.gl.FRAMEBUFFER, DISCARD[count] as GLenum[]);
 }

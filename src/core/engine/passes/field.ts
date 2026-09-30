@@ -6,14 +6,18 @@
  * fieldA (HDR): rgb = linear base color, a = intensity (socket-dimmed).
  * fieldB (RGBA8): r = palette t, g = hot amount, b = dead-cell visibility,
  *                 a = intensity before socket dimming / 2 (read by the lift pass for gating).
+ * bloom (third attachment, HDR): the bloom source (thresholded, fill-scaled emission), computed
+ *                 here from the unencoded values instead of in a prefilter pass of its own.
  */
 
 import { FULLSCREEN_VS } from '../glsl/common';
 import { INFLUENCE_GLSL } from '../glsl/influence';
 import { MODE_STRUCT_GLSL, MODES_EVAL_GLSL, MODES_GLSL } from '../glsl/modes/index';
 import { NOISE_GLSL } from '../glsl/noise';
+import { BLOOM_SOURCE_GLSL } from './bloom';
 import {
   bindTexture,
+  discardTargets,
   LazyProgram,
   type PassContext,
   setSampler,
@@ -28,7 +32,9 @@ uniform sampler2D u_life;
 uniform sampler2D u_lut;
 layout(location = 0) out vec4 o_fieldA;
 layout(location = 1) out vec4 o_fieldB;
+layout(location = 2) out vec4 o_bloom;
 ${INFLUENCE_GLSL}
+${BLOOM_SOURCE_GLSL}
 ${MODE_STRUCT_GLSL}
 ${MODES_GLSL}
 
@@ -53,12 +59,21 @@ float flickerF(uvec2 key, float h, float env) {
             * (1.0 + 1.2 * (1.0 - smoothstep(0.3, 0.9, env)));
   amt = min(amt, 0.9);
   if (amt <= 0.001) return 1.0;
-  float tt = f_clock.x * P_animation_flicker_rate * (0.6 + 0.8 * h) + h * 7.0;
+  // Each cell runs at k / FLICKER_RATE_STEPS (0.6..1.4) of the base phase. The whole part is
+  // multiplied in integers: an EPOCH_WRAP jump of the base phase moves every cell by k whole
+  // multiples of the cell's index period (EPOCH_WRAP / FLICKER_RATE_STEPS), so the wrap is
+  // seamless, and the fraction keeps full precision.
+  float q = float(FLICKER_RATE_STEPS);
+  float k = floor((0.6 + 0.8 * h) * q + 0.5);
+  uint pk = uint(f_epochB.x) * uint(k);
+  float tt = (float(pk % FLICKER_RATE_STEPS) + f_epochB.y * k) / q + h * 7.0;
   float e = floor(tt);
   float f = tt - e;
-  uint ue = uint(e);
+  uint mask = EPOCH_MASK / FLICKER_RATE_STEPS;
+  uint ue = (pk / FLICKER_RATE_STEPS + uint(e)) & mask;
+  uint ue1 = (ue + 1u) & mask;
   float a = u01(hash3(uvec3(key.x ^ 0x68bc21ebu, key.y, ue)));
-  float b = u01(hash3(uvec3(key.x ^ 0x68bc21ebu, key.y, ue + 1u)));
+  float b = u01(hash3(uvec3(key.x ^ 0x68bc21ebu, key.y, ue1)));
   return 1.0 - amt * (1.0 - mix(a, b, f * f * (3.0 - 2.0 * f)));
 }
 
@@ -75,12 +90,11 @@ float presenceF(uvec2 key, float h, float env, out float killP, out float vary) 
   vary = 1.0;
   if (killP <= 0.001) return 1.0;
   float period = max(P_animation_sparsity_period, 0.1);
-  float tt = f_clock.x / period + h;
-  float e = floor(tt);
-  float x = smoothstep(period - 0.4, period, (tt - e) * period);
-  uint ue = uint(e);
+  uint ue;
+  float fr = epochAt(f_epochA.xy, h, ue);
+  float x = smoothstep(period - 0.4, period, fr * period);
   uint ka = hash3(uvec3(key.x ^ 0x02e5be93u, key.y, ue));
-  uint kb = hash3(uvec3(key.x ^ 0x02e5be93u, key.y, ue + 1u));
+  uint kb = hash3(uvec3(key.x ^ 0x02e5be93u, key.y, (ue + 1u) & EPOCH_MASK));
   float a = smoothstep(killP - 0.04, killP + 0.04, u01(ka));
   float b = smoothstep(killP - 0.04, killP + 0.04, u01(kb));
   vary = mix(1.0, mix(0.45 + 1.1 * u01(pcg(ka)), 0.45 + 1.1 * u01(pcg(kb)), x), sat(1.6 * killP));
@@ -92,10 +106,9 @@ float sparkleF(uvec2 key, float h, float I) {
   float rate = P_animation_sparkle_rate;
   if (rate <= 0.0 || P_animation_sparkle_amount <= 0.0) return 0.0;
   float D = max(P_animation_sparkle_duration, 0.05);
-  float tt = f_clock.x / D + h;
-  float e = floor(tt);
-  float x = tt - e;
-  float fire = step(u01(hash3(uvec3(key.x ^ 0x2c1b3c6du, key.y, uint(e)))), rate * D);
+  uint ue;
+  float x = epochAt(f_epochA.zw, h, ue);
+  float fire = step(u01(hash3(uvec3(key.x ^ 0x2c1b3c6du, key.y, ue))), rate * D);
   float env = x < 0.3 ? smoothstep(0.0, 0.3, x) : sq((1.0 - x) / 0.7);
   return fire * env * smoothstep(0.2, 0.45, I) * (1.0 - f_clock.w);
 }
@@ -104,7 +117,7 @@ float sparkleF(uvec2 key, float h, float I) {
 // violet to azure (right), with the far right fading into the palette's navy end.
 #define SPATIAL_T0 0.45
 #define SPATIAL_K 1.2
-float mapT(float mode, vec2 p, float I) {
+float mapT(float mode, vec2 p, float I, float cs) {
   float sc = P_color_scale;
   if (mode < 0.5) {
     // bend > 0 curves the color boundaries into arcs around the center: the ends of a boundary
@@ -120,15 +133,19 @@ float mapT(float mode, vec2 p, float I) {
     return 0.5 + (0.5 - abs(2.0 * u - 1.0)) * sc;
   }
   if (mode < 3.5) return 0.5 + (I - 0.5) * sc;
-  return 0.5 + 0.9 * sc * fbm3(vec3(p * P_color_warpScale * 0.8 + 13.0, f_clock.x * 0.0625), 3);
+  float fq = P_color_warpScale * 0.8;
+  return 0.5 + 0.9 * sc * fbm3(vec3(p * fq + 13.0, f_clock.x * 0.0625), 3, fq * cs);
 }
 
 void main() {
   ivec2 cell = ivec2(gl_FragCoord.xy);
   float pitch = f_grid.z;
   vec2 cpx = f_origin.xy + (vec2(cell) + 0.5) * pitch;
-  // Hash key relative to the first visible cell, so changing the pad does not re-roll cells.
-  uvec2 key = uvec2(cell - ivec2(int(f_grid.w + 0.5)) + 4096);
+  // Hash key relative to the center cell (cols and rows are odd): neither a pad change nor
+  // symmetric grid growth (cols/rows change in steps of 2 around a fixed center) re-rolls the
+  // cells that stay in place.
+  ivec2 ctr = ivec2(int(f_grid.w + 0.5)) + (ivec2(f_grid.xy + 0.5) - 1) / 2;
+  uvec2 key = uvec2(cell - ctr + 4096);
   uint hk = hash2(key);
   float h = u01(hk);
   float h2 = u01(pcg(hk ^ 0x9e3779b9u));
@@ -232,12 +249,16 @@ ${MODES_EVAL_GLSL}
   float hot = (smoothstep(P_color_hot_threshold, 1.0, Iheat) * P_color_hot_amount + hotAdd) * shade;
 
   // Palette position: mapping (+ crossfade from the previous mapping), warp, jitter, drift.
-  float t = mapT(P_color_mapping, p, Ipre);
-  if (f_misc.y < 0.999) t = mix(mapT(f_misc.x, p, Ipre), t, sat(f_misc.y));
-  float warpN = P_color_warp > 0.0 ? fbm3(vec3(p * P_color_warpScale, f_clock.x * 0.0625), 2) : 0.0;
+  float t = mapT(P_color_mapping, p, Ipre, cs);
+  if (f_misc.y < 0.999) t = mix(mapT(f_misc.x, p, Ipre, cs), t, sat(f_misc.y));
+  float warpN = P_color_warp > 0.0
+    ? fbm3(vec3(p * P_color_warpScale, f_clock.x * 0.0625), 2, P_color_warpScale * cs)
+    : 0.0;
   t += P_color_offset + P_color_warp * warpN + P_color_jitter * (h2 - 0.5)
      + P_color_intensityShift * (Ipre - 0.5);
-  t = f_phaseB.w != 0.0 ? tri(t + f_phaseB.w) : sat(t);
+  // Drift: tri() folds the palette (period 2, the drift phase wraps at 2 as well). The switch is a
+  // per-frame flag (rate or phase nonzero), never the phase value itself.
+  t = f_misc.w > 0.5 ? tri(t + f_phaseB.w) : sat(t);
 
   vec3 base = texture(u_lut, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.25)).rgb;
   // Hue cues from the reference: organic inner-edge patches take the accent color on the cool
@@ -262,6 +283,7 @@ ${MODES_EVAL_GLSL}
   dead *= min(dead * 4.0, 1.0);
   o_fieldA = enc4(vec4(base, I));
   o_fieldB = vec4(t, sat(hot), sat(dead), sat(Ipre * 0.5));
+  o_bloom = enc4(vec4(bloomSource(base * I), 1.0));
 }
 `;
 }
@@ -280,10 +302,12 @@ export class FieldPass {
     return this.prog.poll();
   }
 
+  /** `fb` has three attachments: fieldA, fieldB and the bloom source. */
   run(fb: WebGLFramebuffer, w: number, h: number, life: WebGLTexture): void {
     const gl = this.ctx.gl;
     this.prog.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    discardTargets(this.ctx, 3);
     gl.viewport(0, 0, w, h);
     bindTexture(gl, UNIT_LIFE, life);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

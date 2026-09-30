@@ -3,10 +3,11 @@
  *
  * Grid size changes (continuous pitch tweens, window resizes) usually stay inside the current
  * allocation: only the logical size changes, passes set their viewport to it and clamp every
- * sample to it. Textures are reallocated only when a bucket overflows (or shrinks below half).
+ * sample to it. Textures are reallocated only when a bucket overflows, or when the needed bucket
+ * drops below half of the allocation (see needsRealloc: no churn across a bucket boundary).
  */
 
-import type { GLCaps } from '../gl/caps';
+import type { GLCaps, TextureFormat } from '../gl/caps';
 import { bucketSize, createMrtFramebuffer, createTexture, needsRealloc } from '../gl/target';
 
 export interface Target {
@@ -34,9 +35,12 @@ export class CellTargets {
 
   fieldA: WebGLTexture | null = null;
   fieldB: WebGLTexture | null = null;
+  /** fieldA, fieldB and the bloom source (bloom.tex) as one MRT framebuffer. */
   fieldFb: WebGLFramebuffer | null = null;
   bloom: Target | null = null;
   bloomTmp: Target | null = null;
+  /** Combined bloom + haze, the composite's only glow input (caps.glowFormat). */
+  glow: Target | null = null;
   haze: Target | null = null;
   hazeTmp: Target | null = null;
   /** Life ping-pong; `life[lifeCur]` holds the current state. */
@@ -50,11 +54,17 @@ export class CellTargets {
     private readonly caps: GLCaps,
   ) {}
 
-  private target(w: number, h: number, hdr: boolean, filter: GLenum): Target {
+  private target(
+    w: number,
+    h: number,
+    hdr: boolean,
+    filter: GLenum,
+    format?: TextureFormat,
+  ): Target {
     const gl = this.gl;
     const tex = createTexture(gl, w, h, {
       filter,
-      format: hdr ? this.caps.hdrFormat : this.caps.rgba8,
+      format: format ?? (hdr ? this.caps.hdrFormat : this.caps.rgba8),
     });
     const fb = createMrtFramebuffer(gl, [tex]);
     return { tex, fb };
@@ -94,9 +104,10 @@ export class CellTargets {
       this.freeCellTargets();
       this.fieldA = createTexture(gl, aw, ah, { format: this.caps.hdrFormat });
       this.fieldB = createTexture(gl, aw, ah, { format: this.caps.rgba8 });
-      this.fieldFb = createMrtFramebuffer(gl, [this.fieldA, this.fieldB]);
       this.bloom = this.target(aw, ah, true, gl.LINEAR);
+      this.fieldFb = createMrtFramebuffer(gl, [this.fieldA, this.fieldB, this.bloom.tex]);
       this.bloomTmp = this.target(aw, ah, true, gl.LINEAR);
+      this.glow = this.target(aw, ah, true, gl.LINEAR, this.caps.glowFormat);
       this.life = [this.target(aw, ah, false, gl.NEAREST), this.target(aw, ah, false, gl.NEAREST)];
       this.lifeCur = 0;
       this.aw = aw;
@@ -138,8 +149,10 @@ export class CellTargets {
     this.fieldB = null;
     this.free(this.bloom);
     this.free(this.bloomTmp);
+    this.free(this.glow);
     this.bloom = null;
     this.bloomTmp = null;
+    this.glow = null;
   }
 
   dispose(): void {

@@ -85,6 +85,30 @@ vec3 tonemapMax(vec3 c, float wp) {
   return c * ((TM_KNEE + (1.0 - TM_KNEE) * min(y, 1.0)) / m);
 }
 
+// ---- mediump variants for the per-pixel color math (GLSL ES cannot overload on precision, and a
+// helper without qualifiers takes and returns highp, which promotes the whole expression back to
+// FP32). Everything here is a color or a fraction: the ranges fit FP16 with room to spare.
+mediump float satM(mediump float x) { return clamp(x, 0.0, 1.0); }
+mediump vec3 sat3M(mediump vec3 x) { return clamp(x, 0.0, 1.0); }
+mediump vec3 sq3M(mediump vec3 x) { return x * x; }
+mediump float max3M(mediump vec3 c) { return max(c.r, max(c.g, c.b)); }
+mediump float lumaM(mediump vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+mediump vec3 saturateColorM(mediump vec3 c, mediump float s) {
+  return max(vec3(0.0), mix(vec3(lumaM(c)), c, s));
+}
+mediump vec3 lin2srgbM(mediump vec3 c) {
+  c = max(c, vec3(0.0));
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+mediump vec3 tonemapMaxM(mediump vec3 c, mediump float wp) {
+  mediump float m = max3M(c);
+  if (m <= TM_KNEE) return c;
+  mediump float x = (m - TM_KNEE) * (1.0 / (1.0 - TM_KNEE));
+  mediump float w = max((wp - TM_KNEE) * (1.0 / (1.0 - TM_KNEE)), 0.05);
+  mediump float y = x * (1.0 + x / (w * w)) / (1.0 + x);
+  return c * ((TM_KNEE + (1.0 - TM_KNEE) * min(y, 1.0)) / m);
+}
+
 // Triangular-PDF dither of +-1 LSB (8-bit) from one hash: kills banding in the deep navy.
 float ditherTPDF(vec2 fragCoord) {
   uint h = hash2(uvec2(ivec2(fragCoord)));
@@ -107,19 +131,20 @@ vec4 texBilinear(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
 }
 
 // Cubic B-spline in 4 bilinear taps: C2-smooth, so cell-resolution glow shows no diamonds or
-// Mach bands when stretched over tens of pixels.
-vec4 texBicubic(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
+// Mach bands when stretched over tens of pixels. Positions stay highp; the weights and the result
+// are mediump (they are colors and fractions).
+mediump vec4 texBicubic(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
   vec2 st = pos - 0.5;
   vec2 i = floor(st);
-  vec2 f = st - i;
-  vec2 f2 = f * f;
-  vec2 f3 = f2 * f;
-  vec2 w0 = (1.0 / 6.0) * (-f3 + 3.0 * f2 - 3.0 * f + 1.0);
-  vec2 w1 = (1.0 / 6.0) * (3.0 * f3 - 6.0 * f2 + 4.0);
-  vec2 w2 = (1.0 / 6.0) * (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0);
-  vec2 w3 = (1.0 / 6.0) * f3;
-  vec2 g0 = w0 + w1;
-  vec2 g1 = w2 + w3;
+  mediump vec2 f = st - i;
+  mediump vec2 f2 = f * f;
+  mediump vec2 f3 = f2 * f;
+  mediump vec2 w0 = (1.0 / 6.0) * (-f3 + 3.0 * f2 - 3.0 * f + 1.0);
+  mediump vec2 w1 = (1.0 / 6.0) * (3.0 * f3 - 6.0 * f2 + 4.0);
+  mediump vec2 w2 = (1.0 / 6.0) * (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0);
+  mediump vec2 w3 = (1.0 / 6.0) * f3;
+  mediump vec2 g0 = w0 + w1;
+  mediump vec2 g1 = w2 + w3;
   vec2 lo = vec2(0.5);
   vec2 hi = lim - 0.5;
   vec2 h0 = clamp(i - 0.5 + w1 / g0, lo, hi) * inv;
@@ -127,6 +152,55 @@ vec4 texBicubic(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
   return g0.y * (g0.x * texture(t, h0) + g1.x * texture(t, vec2(h1.x, h0.y)))
        + g1.y * (g0.x * texture(t, vec2(h0.x, h1.y)) + g1.x * texture(t, h1));
 }
+
+// Decoded (linear) cell-space sampling: texture filtering is only valid on linear data, so on the
+// RGBA8 path (sqrt-encoded texels) every texel is fetched and decoded first and the filter runs
+// in the shader. Same results as the hardware versions on float targets.
+#if HDR_RT
+vec4 texBilinearDec(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
+  return texBilinear(t, pos, lim, inv);
+}
+vec4 texBicubicDec(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
+  return texBicubic(t, pos, lim, inv);
+}
+#else
+vec4 texBilinearDec(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
+  vec2 st = clamp(pos, vec2(0.5), lim - 0.5) - 0.5;
+  vec2 i = floor(st);
+  vec2 f = st - i;
+  ivec2 a = ivec2(i);
+  ivec2 b = min(a + 1, ivec2(lim) - 1);
+  vec4 t00 = dec4(texelFetch(t, a, 0));
+  vec4 t10 = dec4(texelFetch(t, ivec2(b.x, a.y), 0));
+  vec4 t01 = dec4(texelFetch(t, ivec2(a.x, b.y), 0));
+  vec4 t11 = dec4(texelFetch(t, b, 0));
+  return mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y);
+}
+// Cubic B-spline over the 4x4 neighbourhood (16 fetches; the fallback path only).
+vec4 texBicubicDec(sampler2D t, vec2 pos, vec2 lim, vec2 inv) {
+  vec2 st = pos - 0.5;
+  vec2 i = floor(st);
+  vec2 f = st - i;
+  vec2 f2 = f * f;
+  vec2 f3 = f2 * f;
+  vec2 w[4];
+  w[0] = (1.0 / 6.0) * (-f3 + 3.0 * f2 - 3.0 * f + 1.0);
+  w[1] = (1.0 / 6.0) * (3.0 * f3 - 6.0 * f2 + 4.0);
+  w[2] = (1.0 / 6.0) * (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0);
+  w[3] = (1.0 / 6.0) * f3;
+  ivec2 base = ivec2(i) - 1;
+  ivec2 hi = ivec2(lim) - 1;
+  vec4 acc = vec4(0.0);
+  for (int y = 0; y < 4; y++) {
+    vec4 row = vec4(0.0);
+    for (int x = 0; x < 4; x++) {
+      row += w[x].x * dec4(texelFetch(t, clamp(base + ivec2(x, y), ivec2(0), hi), 0));
+    }
+    acc += w[y].y * row;
+  }
+  return acc;
+}
+#endif
 `;
 
 /** Minimal vertex shader for full-target passes: one oversized triangle, no attributes. */

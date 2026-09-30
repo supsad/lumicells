@@ -7,11 +7,12 @@
  * usable. Every entry point is a no-op on a lost context; recovery = dispose + new Engine.
  */
 
-import { type GLCaps, probeCaps, type TimerQueryExt } from '../gl/caps';
+import { type GLCaps, probeCaps } from '../gl/caps';
 import { ShaderError } from '../gl/program';
 import { createTexture } from '../gl/target';
-import { FRAME_BYTES, OFF_COUNTS, OFF_INF, OFF_PULSE, OFF_SOCKET } from './frame-block';
+import { FRAME_BYTES, frameUploadRanges, OFF_GRID } from './frame-block';
 import { missingParamMacros } from './glsl/params';
+import { GpuTimer } from './gpu-timer';
 import { BloomPass } from './passes/bloom';
 import { CompositePass } from './passes/composite';
 import { FieldPass } from './passes/field';
@@ -23,12 +24,14 @@ import {
   bindTexture,
   buildHeader,
   type PassContext,
-  UNIT_BLOOM,
   UNIT_FIELD_A,
   UNIT_FIELD_B,
+  UNIT_GLOW,
   UNIT_HAZE,
   UNIT_LUT,
+  UNIT_SRC,
 } from './passes/shared';
+import { StampPass } from './passes/stamp';
 import { CellTargets } from './resources';
 import { EngineError, type EngineOptions, type FrameInputs, type RenderQuality } from './types';
 
@@ -38,65 +41,13 @@ const LUT_BYTES = LUT_WIDTH * LUT_ROWS * 4;
 
 const QUALITY_INDEX: Record<RenderQuality, number> = { high: 0, medium: 1, low: 2 };
 
-/** Ring of GPU timer queries; results arrive a few frames late and are dropped on disjoint. */
-class GpuTimer {
-  private readonly queries: WebGLQuery[] = [];
-  private readonly pending: boolean[] = [];
-  private head = 0;
-  private active = false;
-  ms: number | null = null;
-
-  constructor(
-    private readonly gl: WebGL2RenderingContext,
-    private readonly ext: TimerQueryExt,
-  ) {
-    for (let i = 0; i < 4; i++) {
-      const q = gl.createQuery();
-      if (!q) break;
-      this.queries.push(q);
-      this.pending.push(false);
-    }
-  }
-
-  begin(): void {
-    const gl = this.gl;
-    // Collect finished results first (oldest to newest).
-    for (let k = 1; k <= this.queries.length; k++) {
-      const i = (this.head + k) % this.queries.length;
-      const q = this.queries[i];
-      if (!q || !this.pending[i]) continue;
-      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) continue;
-      const ns = gl.getQueryParameter(q, gl.QUERY_RESULT) as number;
-      this.pending[i] = false;
-      if (!gl.getParameter(this.ext.GPU_DISJOINT_EXT)) this.ms = ns / 1e6;
-    }
-    const q = this.queries[this.head];
-    if (!q || this.pending[this.head]) return;
-    gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q);
-    this.active = true;
-  }
-
-  end(): void {
-    if (!this.active) return;
-    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
-    this.active = false;
-    this.pending[this.head] = true;
-    this.head = (this.head + 1) % this.queries.length;
-  }
-
-  dispose(): void {
-    if (this.active) this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
-    for (const q of this.queries) this.gl.deleteQuery(q);
-    this.queries.length = 0;
-  }
-}
-
 interface Passes {
   life: LifePass;
   field: FieldPass;
   bloom: BloomPass;
   composite: CompositePass;
   lift: LiftPass;
+  stamp: StampPass;
 }
 
 export class Engine {
@@ -113,6 +64,8 @@ export class Engine {
   private lutTex: WebGLTexture | null = null;
   private timer: GpuTimer | null = null;
   private readonly paramsFloats: number;
+  /** FrameBlock upload ranges ([start, end) float pairs), reused every frame. */
+  private readonly ranges = new Int32Array(6);
   private linked = false;
   private failure: Error | null = null;
   private disposed = false;
@@ -182,6 +135,7 @@ export class Engine {
       bloom: new BloomPass(ctx),
       composite: new CompositePass(ctx),
       lift: new LiftPass(ctx),
+      stamp: new StampPass(ctx),
     };
     this.res = new CellTargets(gl, this.caps);
 
@@ -267,6 +221,7 @@ export class Engine {
       ok = p.bloom.poll() && ok;
       ok = p.composite.poll() && ok;
       ok = p.lift.poll() && ok;
+      ok = p.stamp.poll() && ok;
       if (ok) {
         this.linked = true;
         p.bloom.invalidate();
@@ -309,12 +264,14 @@ export class Engine {
 
     const W = Math.max(1, f.cols + 2 * f.pad);
     const H = Math.max(1, f.rows + 2 * f.pad);
+    // New textures bind to the active unit while they are created: make that the scratch unit.
+    gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
     const change = res.ensure(W, H);
     if (change !== 0) {
       p.bloom.setSizes(W, H, res.aw, res.ah, res.qw, res.qh, res.aqw, res.aqh);
       bindTexture(gl, UNIT_FIELD_A, res.fieldA);
       bindTexture(gl, UNIT_FIELD_B, res.fieldB);
-      bindTexture(gl, UNIT_BLOOM, res.bloom?.tex ?? null);
+      bindTexture(gl, UNIT_GLOW, res.glow?.tex ?? null);
       bindTexture(gl, UNIT_HAZE, res.haze?.tex ?? null);
     }
 
@@ -337,15 +294,28 @@ export class Engine {
       this.lifeRun(LIFE_MODE_REMAP, f, res);
     }
     if (f.lifeReset) this.lifeRun(LIFE_MODE_RESET, f, res);
-    else if (f.lifeStep) this.lifeRun(LIFE_MODE_STEP, f, res);
+    else {
+      // LifePass mixes its run counter into the seed, so each step gets fresh births.
+      const steps = Math.min(Math.max(f.lifeSteps | 0, 0), 2);
+      for (let i = 0; i < steps; i++) this.lifeRun(LIFE_MODE_STEP, f, res);
+    }
 
     const lifeCur = res.life[res.lifeCur];
-    if (!res.fieldFb || !lifeCur || !res.bloom || !res.bloomTmp || !res.haze || !res.hazeTmp) {
+    const { fieldFb, bloom, bloomTmp, haze, hazeTmp, glow } = res;
+    if (!fieldFb || !lifeCur || !bloom || !bloomTmp || !haze || !hazeTmp || !glow) {
       throw new Error('[pixel-life] cell targets missing');
     }
-    p.field.run(res.fieldFb, W, H, lifeCur.tex);
-    p.bloom.setSigmas(f.bloomSigma, f.hazeSigma);
-    p.bloom.run(W, H, res.qw, res.qh, res.bloom, res.bloomTmp, res.haze, res.hazeTmp);
+    p.field.run(fieldFb, W, H, lifeCur.tex);
+    // The glow passes run only when the composite shows their result: not with both strengths
+    // at 0, and not in the field / halo / cells debug views.
+    const dbg = f.debugView | 0;
+    const glowOn =
+      (dbg === 0 || dbg === 3 || dbg === 4) && (f.bloomStrength !== 0 || f.hazeStrength !== 0);
+    if (glowOn) {
+      p.bloom.setSigmas(f.bloomSigma, f.hazeSigma);
+      p.bloom.run(W, H, res.qw, res.qh, bloom, bloomTmp, haze, hazeTmp, glow, dbg);
+    }
+    p.stamp.update(f.frame[OFF_GRID + 2] ?? f.pitchPx);
     p.composite.run(
       vw,
       vh,
@@ -353,16 +323,13 @@ export class Engine {
       H,
       res.aw,
       res.ah,
-      res.qw,
-      res.qh,
-      res.aqw,
-      res.aqh,
       QUALITY_INDEX[f.quality] ?? 0,
-      f.debugView | 0,
+      dbg,
       f.opaque,
+      glowOn,
     );
-    if (f.liftCount > 0 && (f.debugView | 0) === 0) {
-      p.lift.run(f.lifts, f.liftCount, vw, vh, W, H, res.aw, res.ah);
+    if (f.liftCount > 0 && dbg === 0) {
+      p.lift.run(f.lifts, f.liftCount, vw, vh, W, H, res.aw, res.ah, f.opaque);
     }
     this.timer?.end();
   }
@@ -396,21 +363,20 @@ export class Engine {
         Math.min(f.params.length, this.paramsFloats),
       );
       this.paramsUploaded = true;
+      // The cell stamp bakes grid / glow params: re-bake it with the new values.
+      if (this.passes) this.passes.stamp.dirty = true;
     }
     if (this.frameUbo) {
-      // Upload only up to the last record the shaders will read this frame.
+      // Only the header and the records the shaders read this frame (up to three ranges).
       const fr = f.frame;
-      const nSock = fr[OFF_COUNTS + 2] ?? 0;
-      const nPulse = fr[OFF_COUNTS + 1] ?? 0;
-      const nInf = fr[OFF_COUNTS] ?? 0;
-      const end =
-        nSock > 0
-          ? OFF_SOCKET + nSock * 4
-          : nPulse > 0
-            ? OFF_PULSE + nPulse * 12
-            : OFF_INF + nInf * 12;
+      const r = this.ranges;
+      const n = frameUploadRanges(fr, r);
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.frameUbo);
-      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fr, 0, Math.min(fr.length, Math.ceil(end)));
+      for (let i = 0; i < n; i++) {
+        const start = r[i * 2] as number;
+        const end = Math.min(fr.length, r[i * 2 + 1] as number);
+        if (end > start) gl.bufferSubData(gl.UNIFORM_BUFFER, start * 4, fr, start, end - start);
+      }
     }
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
     if ((f.lutDirty || !this.lutUploaded) && this.lutTex && f.lut.length >= LUT_BYTES) {
@@ -482,6 +448,7 @@ export class Engine {
         this.passes.bloom.dispose();
         this.passes.composite.dispose();
         this.passes.lift.dispose();
+        this.passes.stamp.dispose();
       }
       this.res?.dispose();
       gl.deleteBuffer(this.paramsUbo);

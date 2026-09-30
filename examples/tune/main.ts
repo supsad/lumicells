@@ -13,11 +13,14 @@
  *   preset=orb     start from a preset
  *   cfg={...}      JSON patch over the config (URL-encoded)
  *   ref=0          hide the reference image
+ *   ldr=1          force the RGBA8 fallback render targets (see dev-flags.ts)
+ *   prewrap=2      start the clock 2 scaled seconds before every phase wrap (see dev-flags.ts)
  *
  * Exposed for automation: window.tune = { pl, done, time, setConfig(patch) }.
  */
 
 import './virtual-time';
+import './dev-flags';
 import {
   type DebugView,
   type PixelLifeConfigInput,

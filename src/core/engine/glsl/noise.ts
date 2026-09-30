@@ -57,18 +57,26 @@ float gnoise2(vec2 p) {
   return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
 }
 
+// Band limit for gradient noise sampled once per cell; fw = its footprint in lattice units per
+// cell. The noise spectrum peaks near 0.5 cycles per lattice unit, so the octave fades to its
+// mean (0) as that peak approaches the cell Nyquist limit (fw 0.5..0.9) instead of aliasing
+// into per-cell speckle.
+float noiseBand(float fw) { return bandLimit(0.5 * fw); }
+
 // fbm with domain rotation per octave. z (time) doubles per octave, which keeps periodicity.
-float fbm3(vec3 p, int octaves) {
+// fw = footprint of octave 0 (lattice units per cell): finer octaves fade out by noiseBand().
+float fbm3(vec3 p, int octaves, float fw) {
   float sum = 0.0;
   float amp = 0.5;
   float norm = 0.0;
   for (int i = 0; i < 5; i++) {
     if (i >= octaves) break;
-    sum += amp * gnoise3(p);
+    sum += amp * noiseBand(fw) * gnoise3(p);
     norm += amp;
     p.xy = NOISE_ROT * p.xy * 2.0 + vec2(17.0, 31.0);
     p.z *= 2.0;
     amp *= 0.5;
+    fw *= 2.0;
   }
   return sum / norm;
 }

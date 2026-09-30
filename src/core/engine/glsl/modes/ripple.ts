@@ -1,6 +1,7 @@
 /**
  * Ripple: stateless raindrops. `rate * life` staggered slots each spawn one drop per epoch at a
  * hashed position inside the host; the ring radius grows with age and fades out over `life`.
+ * Drop epochs come from the ripple epoch phase (1/life) via epochAt() (frame-block.ts).
  */
 export const RIPPLE_GLSL = /* glsl */ `
 vec3 mode_ripple(ModeIn m) {
@@ -14,10 +15,9 @@ vec3 mode_ripple(ModeIn m) {
   for (int i = 0; i < 16; i++) {
     float fi = float(i);
     if (fi >= slots) break;
-    float tt = f_clock.x / life + fi / slots;
-    float e = floor(tt);
-    float age = tt - e;
-    uint hh = hash3(uvec3(uint(i), uint(e), 0x51f1u));
+    uint e;
+    float age = epochAt(f_epochB.zw, fi / slots, e);
+    uint hh = hash3(uvec3(uint(i), e, 0x51f1u));
     // The last slot is only partially occupied so the drop rate is continuous in rate * life.
     if (fi + 1.0 > slots && u01(hh) > slots - fi) continue;
     vec2 c = (vec2(u01(pcg(hh)), u01(pcg(hh + 1u))) * 2.0 - 1.0) * ext * 0.9;

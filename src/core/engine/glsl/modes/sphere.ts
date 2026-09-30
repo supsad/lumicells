@@ -69,11 +69,13 @@ vec3 mode_sphere(ModeIn m) {
     sn = vec3(sn.x * cos(th) + sn.z * sin(th), sn.y, -sn.x * sin(th) + sn.z * cos(th));
     float ss = P_modes_sphere_surfaceScale;
     float fw = ss * m.cs / R;
-    float nIn = 0.7 * gnoise3(sn * ss + 11.0)
+    // Every noise fades to its mean once it gets finer than a cell (noiseBand), so large
+    // surface scales or a small orb do not alias into crawling per-cell speckle.
+    float nIn = 0.7 * noiseBand(fw) * gnoise3(sn * ss + 11.0)
               + 0.3 * bandLimit(2.1 * fw) * gnoise3(sn * ss * 2.1 + vec3(5.0, 1.0, 9.0));
-    float nOut = gnoise3(vec3(sp * ss + 3.0, f_clock.x * 0.125));
+    float nOut = noiseBand(ss * m.cs) * gnoise3(vec3(sp * ss + 3.0, f_clock.x * 0.125));
     ns = sat(0.5 + 1.1 * mix(nIn, nOut, smoothstep(0.9, 1.15, r)));
-    patchN = gnoise3(sn * 3.4 + vec3(29.0, 3.0, 17.0));
+    patchN = noiseBand(3.4 * m.cs / R) * gnoise3(sn * 3.4 + vec3(29.0, 3.0, 17.0));
   }
   float tex = mix(1.0, 0.35 + 1.3 * ns, surf);
   // Density follows the texture outside the rim too: the outskirts thin out in patches.

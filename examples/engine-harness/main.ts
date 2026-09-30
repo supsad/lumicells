@@ -6,6 +6,8 @@
  * URL: ?cols=31 &dpr=1 &t=12.5 (freeze the clock) &preset=0 &quality=high &hud=0
  *      &fx=0 (only the title shadow: no wandering light, pulses or lifts; for reference comparisons)
  *      &ldr=1 (force the RGBA8 fallback targets) &overflow=40 (CSS px glow margin, transparent canvas)
+ *      &bench=8 (draw every frame 8 times per rAF: keeps a fast GPU clocked up so the per-frame
+ *      GPU timer reads a stable value; see harness.gpuSamples())
  */
 
 import {
@@ -17,10 +19,13 @@ import {
 } from '../../src/core/color';
 import { Engine } from '../../src/core/engine/engine';
 import {
+  EPOCH_WRAP,
   FRAME_FLOATS,
   MAX_LIFTS,
   OFF_CLOCK,
   OFF_COUNTS,
+  OFF_EPOCH_A,
+  OFF_EPOCH_B,
   OFF_GRID,
   OFF_HOST,
   OFF_INF,
@@ -31,6 +36,7 @@ import {
   OFF_PULSE,
   OFF_SOCKET,
   OFF_SPACE,
+  writeEpochPhase,
 } from '../../src/core/engine/frame-block';
 import { ENGINE_MODE_IDS } from '../../src/core/engine/glsl/modes/index';
 import { constantParamsPrelude } from '../../src/core/engine/glsl/params';
@@ -60,6 +66,10 @@ const FROZEN_T = url.searchParams.has('t') ? Number(url.searchParams.get('t')) :
 const FX = url.searchParams.get('fx') !== '0';
 const LDR = url.searchParams.get('ldr') === '1';
 const OVERFLOW = Math.max(0, Number(url.searchParams.get('overflow') ?? 0));
+const BENCH = Math.max(
+  1,
+  Math.min(64, Math.floor(Number(url.searchParams.get('bench') ?? 1)) || 1),
+);
 
 const DEFAULT_PALETTE = [
   '#7a1d5a',
@@ -183,7 +193,7 @@ const inputs: FrameInputs = {
   frame,
   lut,
   lutDirty: true,
-  lifeStep: false,
+  lifeSteps: 0,
   lifeReset: true,
   lifeSeed: 1,
   lifeRule: 0,
@@ -376,8 +386,8 @@ function fillFrame(t: number, dt: number): void {
     steps++;
   }
   if (lifeAcc >= 1) lifeAcc %= 1;
-  inputs.lifeStep = steps > 0;
-  if (inputs.lifeStep) inputs.lifeSeed = (inputs.lifeSeed + 1) >>> 0;
+  inputs.lifeSteps = steps;
+  inputs.lifeSeed = (inputs.lifeSeed + steps) >>> 0;
 
   f[OFF_PHASE_A] = phases.flow;
   f[OFF_PHASE_A + 1] = phases.rot;
@@ -411,6 +421,12 @@ function fillFrame(t: number, dt: number): void {
   f[OFF_MISC + 1] = 1;
   f[OFF_MISC + 2] = engine?.softwareFallback ? 1 : 0;
   f[OFF_MISC + 3] = 0;
+  // Epoch phases at the default rates (sparsity period 3 s, sparkle 0.5 s, flicker 0.3 Hz, ripple
+  // life 2.5 s); derived from t here, so a frozen ?t= shows a fixed frame.
+  writeEpochPhase(f, OFF_EPOCH_A, (t / 3) % EPOCH_WRAP);
+  writeEpochPhase(f, OFF_EPOCH_A + 2, (t / 0.5) % EPOCH_WRAP);
+  writeEpochPhase(f, OFF_EPOCH_B, (t * 0.3) % EPOCH_WRAP);
+  writeEpochPhase(f, OFF_EPOCH_B + 2, (t / 2.5) % EPOCH_WRAP);
 
   // Influences: a shadow under the "title" in the center and a wandering light.
   const hm = geo.halfMin;
@@ -541,6 +557,9 @@ let last = performance.now();
 let acc = 0;
 let accFrames = 0;
 let accCpu = 0;
+/** Distinct GPU timer readings since the last harness.gpuSamples() call. */
+let gpuSamples: number[] = [];
+let lastGpu: number | null = null;
 
 function tick(now: number): void {
   requestAnimationFrame(tick);
@@ -551,8 +570,16 @@ function tick(now: number): void {
   const step = FROZEN_T !== null ? 0 : paused ? 0 : dt;
   fillFrame(t, step);
   const c0 = performance.now();
-  const drawn = engine?.render(inputs) ?? false;
-  const cpu = performance.now() - c0;
+  let drawn = engine?.render(inputs) ?? false;
+  // Bench mode: the same frame again (only the last one is presented).
+  for (let i = 1; i < BENCH && drawn; i++) drawn = engine?.render(inputs) ?? false;
+  const cpu = (performance.now() - c0) / BENCH;
+  const g = engine?.gpuTimeMs ?? null;
+  if (g !== null && g !== lastGpu) {
+    gpuSamples.push(g);
+    if (gpuSamples.length > 4096) gpuSamples.shift();
+  }
+  lastGpu = g;
   if (drawn) {
     inputs.paramsDirty = false;
     inputs.lutDirty = false;
@@ -635,6 +662,12 @@ Object.assign(window, {
     },
     setQuality(q: RenderQuality) {
       inputs.quality = q;
+    },
+    /** Returns (and clears) the distinct GPU frame times collected since the last call, ms. */
+    gpuSamples() {
+      const out = gpuSamples;
+      gpuSamples = [];
+      return out;
     },
     loseContext,
   },

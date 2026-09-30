@@ -23,7 +23,8 @@ export interface FrameInputs {
   /** 256 x 2 RGBA8 sRGB: row 0 base palette, row 1 hot tint. */
   lut: Uint8Array;
   lutDirty: boolean;
-  lifeStep: boolean;
+  /** Automaton steps due this frame (0..2); each runs with its own seed. */
+  lifeSteps: number;
   lifeReset: boolean;
   lifeSeed: number;
   /** 0 conway, 1 highlife, 2 daynight, 3 seeds. */
@@ -37,6 +38,12 @@ export interface FrameInputs {
   /** Gaussian sigmas in cells; kernels are recomputed only when these change. */
   bloomSigma: number;
   hazeSigma: number;
+  /**
+   * glow.bloom.strength / glow.haze.strength (the same values the params block holds). When both
+   * are 0 the engine skips the glow passes and the composite's glow lookup. Omitted = nonzero.
+   */
+  bloomStrength?: number;
+  hazeStrength?: number;
   quality: RenderQuality;
   /** Overflow == 0: opaque output. */
   opaque: boolean;

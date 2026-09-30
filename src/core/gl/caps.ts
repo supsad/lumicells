@@ -22,6 +22,12 @@ export interface GLCaps {
   readonly hdr: boolean;
   /** Format for HDR-ish targets: RGBA16F when `hdr`, else RGBA8. */
   readonly hdrFormat: TextureFormat;
+  /**
+   * Format for the final (sampled, never re-filtered in a pass) glow target: R11F_G11F_B10F when
+   * `hdr` and it is renderable (32 bpp, full-rate filtering on mobile GPUs; the glow is >= 0 and
+   * needs no alpha), else `hdrFormat`.
+   */
+  readonly glowFormat: TextureFormat;
   readonly rgba8: TextureFormat;
   readonly parallelCompile: KHR_parallel_shader_compile | null;
   readonly timerQuery: TimerQueryExt | null;
@@ -41,10 +47,24 @@ export interface GLCaps {
   readonly renderer: string;
   /** Renderer string looks like a CPU rasterizer (SwiftShader, llvmpipe, WARP...). */
   readonly software: boolean;
+  /**
+   * Not a known immediate-mode (desktop) GPU, so probably a tiler (Mali, Adreno, PowerVR, Apple):
+   * render targets about to be fully overwritten are invalidated there, which lets a tiler skip
+   * loading their old contents. Desktop GPUs gain nothing, and ANGLE's D3D11 backend turns every
+   * invalidation into a clear of the whole texture (measured: ~10 us per frame for the cell passes).
+   */
+  readonly tiled: boolean;
 }
 
 const SOFTWARE_RE =
   /swiftshader|llvmpipe|softpipe|software|basic render|microsoft basic|mesa offscreen/i;
+/** Immediate-mode desktop GPU vendors (CPU rasterizers are no tilers either: SOFTWARE_RE). */
+const IMMEDIATE_RE = /nvidia|geforce|quadro|radeon|\bamd\b|\bati\b|intel/i;
+
+/** GLCaps.tiled from a renderer string: anything but a known desktop vendor or CPU rasterizer. */
+export function isTiledRenderer(renderer: string): boolean {
+  return !IMMEDIATE_RE.test(renderer) && !SOFTWARE_RE.test(renderer);
+}
 
 function readRenderer(gl: WebGL2RenderingContext): string {
   // Firefox deprecates the debug extension but reports the unmasked string in RENDERER already.
@@ -89,6 +109,12 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
   const floatExt =
     gl.getExtension('EXT_color_buffer_float') ?? gl.getExtension('EXT_color_buffer_half_float');
   const hdr = !forceRgba8 && !!floatExt && isRenderable(gl, half);
+  const packed: TextureFormat = {
+    internalFormat: gl.R11F_G11F_B10F,
+    format: gl.RGB,
+    type: gl.HALF_FLOAT,
+  };
+  const glowPacked = hdr && isRenderable(gl, packed);
   const renderer = readRenderer(gl);
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
   const maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
@@ -101,6 +127,7 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
   return {
     hdr,
     hdrFormat: hdr ? half : rgba8,
+    glowFormat: glowPacked ? packed : hdr ? half : rgba8,
     rgba8,
     parallelCompile: gl.getExtension('KHR_parallel_shader_compile'),
     timerQuery: gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null,
@@ -114,5 +141,6 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
     maxUniformBlockSize: gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE) as number,
     renderer,
     software: SOFTWARE_RE.test(renderer),
+    tiled: isTiledRenderer(renderer),
   };
 }
