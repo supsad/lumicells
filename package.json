@@ -52,7 +52,8 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "build:lib": "vite build --config vite.lib.config.ts && vite build --config vite.element.config.ts && tsc -p tsconfig.lib.json",
+    "build:lib": "vite build --config vite.lib.config.ts && vite build --config vite.element.config.ts && tsc -p tsconfig.lib.json && node scripts/fix-dts.mjs",
+    "check:types": "node scripts/check-types.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
@@ -61,7 +62,7 @@
     "lint:fix": "biome check --write ."
   },
   "peerDependencies": {
-    "react": ">=18"
+    "react": ">=19"
   },
   "peerDependenciesMeta": {
     "react": {

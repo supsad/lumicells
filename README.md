@@ -58,7 +58,7 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 
 | Хук | Зачем |
 | --- | --- |
-| `usePixelLife()` | Экземпляр `PixelLife` из ближайшего компонента (или `null`) |
+| `usePixelLife()` | Экземпляр `PixelLife` из ближайшего компонента. `null` только на сервере, до монтирования и после размонтирования. Без WebGL2 экземпляр всё равно отдаётся: проверяйте `instance.supported` или используйте проп `fallback` |
 | `useInfluence(ref, opts)` | Превращает элемент в источник света, тени или подъёма пикселей |
 | `useModulator(path, source, opts)` | Ведёт числовой параметр от значения или функции |
 | `usePulse()` | Стабильная функция для запуска волны |
@@ -66,6 +66,8 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 | `usePixelLifeEvent(type, handler)` | Подписка на событие экземпляра |
 
 Компонент рендерится на сервере (SSR) статичным постером, WebGL создаётся только в браузере.
+
+Требуется React 19: `ref` передаётся обычным пропом. Проп `fallback` показывается при `no-webgl2` и `compile`, а при временной потере контекста исчезает сразу после восстановления.
 
 ### Web Component
 
