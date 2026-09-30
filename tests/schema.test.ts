@@ -429,6 +429,17 @@ describe('export', () => {
     }
   });
 
+  it('full file with a preset base records extends and still round-trips', () => {
+    const c = setPath(getPresetConfig('rain'), 'modes.rain.speed', 0.1 + 0.58);
+    const file = toConfigFile(c, { base: 'rain' });
+    expect(file.extends).toBe('rain');
+    // Float noise from slider arithmetic is trimmed in files.
+    expect(file.modes?.rain?.speed).toBe(0.68);
+    expect(normalizeConfig(JSON.parse(JSON.stringify(file))).config.modes.rain.speed).toBe(0.68);
+    const clean = setPath(getPresetConfig('rain'), 'modes.rain.speed', 0.68);
+    expect(normalizeConfig(toConfigFile(clean, { base: 'rain' })).config).toEqual(clean);
+  });
+
   it('snippets have the documented shape', () => {
     const file = toConfigFile(custom(), { mode: 'diff' });
     expect(JSON.parse(toJsonSnippet(file))).toEqual(file);

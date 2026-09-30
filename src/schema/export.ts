@@ -20,7 +20,11 @@ export type PixelLifeConfigFile = {
 export interface ToConfigFileOptions {
   /** 'full' writes every parameter, 'diff' only those differing from `base`. Default 'full'. */
   mode?: 'full' | 'diff';
-  /** Base for 'diff'. A preset base adds `extends`. Default 'defaults'. */
+  /**
+   * Base for 'diff'. A preset base adds `extends` in both modes: in 'full' it changes nothing about
+   * the resulting config (every value is written) but records which preset the look started from.
+   * Default 'defaults'.
+   */
   base?: 'defaults' | PresetId;
   schemaUrl?: string;
 }
@@ -31,21 +35,27 @@ export function toConfigFile(
 ): PixelLifeConfigFile {
   const { mode = 'full', base = 'defaults', schemaUrl = DEFAULT_SCHEMA_URL } = opts;
   const head = { $schema: schemaUrl, version: CONFIG_VERSION };
+  const ext = base === 'defaults' ? {} : { extends: base };
   let body: Record<string, unknown> = {};
   if (mode === 'full') {
     // Rebuild in schema order (never trust the key order of the incoming object).
     for (const p of getLeafPaths()) body = setPath(body, p, structuredCopy(getPath(cfg, p)));
-    return { ...head, ...body } as PixelLifeConfigFile;
+    return { ...head, ...ext, ...body } as PixelLifeConfigFile;
   }
   const baseCfg = base === 'defaults' ? getDefaults() : getPresetConfig(base);
   for (const p of diffConfigs(baseCfg, cfg))
     body = setPath(body, p, structuredCopy(getPath(cfg, p)));
-  const ext = base === 'defaults' ? {} : { extends: base };
   return { ...head, ...ext, ...body } as PixelLifeConfigFile;
 }
 
 function structuredCopy(v: unknown): unknown {
-  return Array.isArray(v) ? v.slice() : v;
+  if (Array.isArray(v)) return v.map(structuredCopy);
+  // Slider arithmetic leaves float noise (0.6799999999999999); files should read like the UI.
+  return typeof v === 'number' ? trimFloat(v) : v;
+}
+
+function trimFloat(n: number): number {
+  return Number.isFinite(n) ? Number.parseFloat(n.toPrecision(12)) : 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -59,7 +69,7 @@ function jsString(s: string): string {
 
 function jsNumber(n: number): string {
   // Trim float noise (0.30000000000000004) without changing meaningful precision.
-  return String(Number.isFinite(n) ? Number.parseFloat(n.toPrecision(12)) : 0);
+  return String(trimFloat(n));
 }
 
 /** Formats plain data as a JS object literal: unquoted keys, single quotes, short arrays inline. */
