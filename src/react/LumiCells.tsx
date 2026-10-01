@@ -12,7 +12,8 @@ import {
   useState,
 } from 'react';
 import { LumiCells as LumiCellsCore } from '../core/lumi-cells';
-import type { InstancePriority, InstanceRenderer, Stats } from '../core/types';
+import { runtimeSettings } from '../core/runtime/scheduler';
+import type { InstancePriority, RendererMode, Stats } from '../core/types';
 import { resolveConfig } from '../element/resolve';
 import { type LumiCellsConfigInput, type PresetId, posterCss, stableStringify } from '../schema';
 import { LumiCellsContext } from './context';
@@ -37,11 +38,13 @@ export interface LumiCellsProps
    */
   priority?: InstancePriority;
   /**
-   * `'own'` (default): a WebGL context of its own. `'shared'`: one WebGL context for every shared
-   * background on the page, copied into a 2D canvas (for many small backgrounds: cards, list
-   * items). Changing it switches the running instance (see `LumiCells.setRenderer`).
+   * `'auto'` (the default, see `LumiCells.configure({ renderer })`): a large background gets a
+   * WebGL context of its own while the page budget has room, smaller ones share one. `'own'`:
+   * always a context of its own. `'shared'`: always the page's shared context, copied into a 2D
+   * canvas. Changing it switches the running instance (see `LumiCells.setRenderer`); removing it
+   * goes back to the page default.
    */
-  renderer?: InstanceRenderer;
+  renderer?: RendererMode;
   /**
    * Rendered over the static poster when there is no animation: WebGL2 unavailable, a shader
    * failure, or (until it is restored) a lost context. Not for a wait on the context budget
@@ -203,7 +206,7 @@ export function LumiCells({
   }, [instance, priority]);
 
   useEffect(() => {
-    instance?.setRenderer(renderer ?? 'own');
+    instance?.setRenderer(renderer ?? runtimeSettings().renderer);
   }, [instance, renderer]);
 
   // Exposes null while there is no instance (Ref<T> types the value as T | null anyway).

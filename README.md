@@ -306,11 +306,12 @@ off(); // unsubscribe
 | `quality` | `{ scale, quality, reason }` when adaptive quality steps |
 | `warn`, `error` | Non-fatal warnings and errors |
 | `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' \| 'budget' }` (see [Many instances on one page](#many-instances-on-one-page)) |
+| `renderer` | `{ renderer, previous, reason }` when the renderer changes: `'promote'`, `'demote'`, `'budget'` or `'explicit'` |
 | `contextlost`, `contextrestored`, `destroy` | Lifecycle |
 
 The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc-stats`,
-`lc-error`, `lc-fallback`, `lc-contextlost` and `lc-contextrestored` (the end of a
-`context-lost` fallback: the animation is back).
+`lc-error`, `lc-fallback`, `lc-contextlost`, `lc-contextrestored` (the end of a
+`context-lost` fallback: the animation is back) and `lc-renderer`.
 
 ## Performance
 
@@ -336,63 +337,109 @@ Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms C
 GPUs yet: the mobile path is budgeted by design (DPR cap 2, pixel budget), so check your target
 devices with the playground stats.
 
-By default each instance owns a WebGL context; see
-[Many instances on one page](#many-instances-on-one-page) for how LumiCells keeps their number in
-check, and for the shared renderer that draws any number of instances with one context.
+By default large backgrounds get a WebGL context of their own and the others share one; see
+[Many instances on one page](#many-instances-on-one-page) for how LumiCells picks the renderer and
+keeps the number of contexts in check.
 
 ## Many instances on one page
 
-Every live background owns a WebGL context, and browsers keep only about 16 per page (fewer on
-phones). Past that they silently kill the oldest one, which may be your hero background or the
-app's own WebGL (maps, three.js). LumiCells therefore manages its contexts page-wide:
+Browsers keep only about 16 WebGL contexts per page (fewer on phones). Past that they silently
+kill the oldest one, which may be your hero background or the app's own WebGL (maps, three.js).
+So LumiCells does not give every background a context of its own: it picks a renderer per
+instance and keeps the number of contexts small page-wide, whatever the number of backgrounds.
 
-- **Budget.** At most 4 contexts on desktop and 2 on touch devices by default. When the budget
-  is full, a background that scrolls into view takes the context of an offscreen one (the one seen
-  least recently first). Among visible backgrounds a higher `priority` wins, then the larger one.
-  The others show their CSS poster until a context frees up: `getStats().state` is `'waiting'`,
-  visible ones emit `fallback` with reason `'budget'`, and the page logs one warning.
-- **Lazy creation.** A context is created only when the container comes within about one
-  viewport of the screen, at most one per frame, so mounting a long list does not freeze the page.
-  Inside a scrolling element (a carousel, a chat pane) the zone reaches one element size beyond
-  its visible part in Chrome and Edge 120+ (IntersectionObserver `scrollMargin`). Other browsers
-  create the context there only once the background scrolls into the element's visible part,
-  and treat the rest of the element as far away; in a cross-origin iframe the zone is the
-  visible area.
-- **Parking.** A background that stays farther away for 10 seconds releases its context and GPU
-  memory and shows its poster. Scrolling back rebuilds it; the config, tweens and bound elements
-  are kept, only the Life automaton reseeds.
+### Renderers
+
+By default (`renderer: 'auto'`) each instance picks one of two renderers:
+
+- **Own context** for large backgrounds: a canvas of at least 0.5 megapixels (device pixels,
+  `render.overflow` margin included), or a quarter of the viewport. A hero or a full-screen
+  background draws straight into its own canvas: no copy per frame, and a context loss elsewhere
+  on the page does not touch it.
+- **Shared renderer** for everything else: one WebGL context for all of them. Each instance draws
+  into its own region of one offscreen canvas, then its frame is copied into a 2D canvas in its
+  host.
+
+A page with a full-screen hero and a hundred cards therefore runs on two contexts: the hero's
+own and the shared one.
+
+- **Budget.** Own contexts are limited to 4 on desktop and 2 on touch devices (`maxContexts`).
+  When the budget is full, a large `auto` instance uses the shared renderer instead of waiting,
+  and takes a context of its own as soon as one frees up. Among large instances competing for
+  contexts, a higher `priority` wins, then a clearly larger size. An `auto` instance, even with
+  `priority: 'high'`, never takes the context of a visible `renderer: 'own'` instance; it stays on
+  the shared renderer instead. Use `renderer: 'own'` with `priority: 'high'` to guarantee a
+  context.
+- **Resizes.** The choice is re-evaluated when the host, the viewport, the DPR or the render
+  config change. It uses hysteresis (a shared instance switches to its own context at 1x the
+  threshold, an own one goes shared below 0.7x) and waits until the size has held still for
+  about a second, so dragging a resize handle across the threshold switches nothing. While the
+  renderer switches, the last frame stays on screen until the new renderer draws.
+- **Stats and events.** `getStats().renderer` is the renderer in use (`'own'` or `'shared'`),
+  `getStats().rendererMode` the one asked for. The `renderer` event
+  `{ renderer, previous, reason }` reports every switch after the first choice, with the reason
+  `'promote'`, `'demote'`, `'budget'` or `'explicit'` (`lc-renderer` on the Web Component).
+
+Force a renderer when you know better than the size:
+
+- `renderer: 'own'` always takes a context of its own and never switches. Use it for a background
+  that must never depend on the shared context, or a medium-sized one you want without the copy.
+  When the budget is full it waits on its poster (`getStats().state` is `'waiting'`, a visible
+  one emits `fallback` with reason `'budget'`, and the page logs one warning).
+- `renderer: 'shared'` never takes a context of its own, even when large. Use it when the app
+  needs its WebGL contexts for itself (maps, three.js), or to keep several large backgrounds on
+  one context.
 
 ```ts
 import { LumiCells } from 'lumicells';
 
 // Page-wide settings: call before or after creating instances (safe on the server too).
-LumiCells.configure({ maxContexts: 8, parkAfterMs: 5000, createPerFrame: 1 });
+LumiCells.configure({ maxContexts: 2, promoteArea: 1 });
 
-const hero = new LumiCells(heroEl, { preset: 'reference', priority: 'high' });
+const hero = new LumiCells(heroEl, { preset: 'reference', priority: 'high' }); // 'auto'
+const card = new LumiCells(cardEl, { preset: 'orb' }); // small: the shared renderer
+const map = new LumiCells(mapEl, { renderer: 'shared' }); // never takes a context of its own
+
+hero.on('renderer', (e) => console.log(e.previous, '->', e.renderer, e.reason));
 hero.getStats().state; // 'pending' | 'waiting' | 'live' | 'parked' | 'lost' | 'failed' | 'destroyed'
+card.setRenderer('own'); // switch a running instance ('auto' hands it back to the policy)
 ```
 
-In React use `<LumiCells priority="high">`, in HTML `<lumi-cells priority="high">`. If more
-backgrounds must animate at the same time (a feed with ten cards on screen needs at least ten
-contexts), raise `maxContexts`, but stay well below 16. Instances with
-`render.pauseOffscreen: false` (for example an offscreen source copied into other canvases) are
-created right away, never parked, and rank as visible wherever they are: a visible background
-takes their context only with a higher `priority` or a clearly larger size.
+In React use `<LumiCells renderer="own" priority="high">`, in HTML
+`<lumi-cells renderer="own" priority="high">`. Without the prop or attribute the page default
+applies.
 
-### Shared renderer
+| `LumiCells.configure()` option | Default | Meaning |
+| --- | --- | --- |
+| `renderer` | `'auto'` | Renderer of instances created afterwards that do not ask for one |
+| `promoteArea` | `0.5` | Megapixels (device px) from which an `auto` instance prefers a context of its own; a quarter of the viewport always qualifies |
+| `maxContexts` | `'auto'` | Own contexts at once: 4, or 2 on touch devices. Lowering it moves the lowest ranked `auto` instances to the shared renderer at once (`own` ones park) |
+| `parkAfterMs` | `10000` | An instance farther than about one viewport for this long releases its GPU side and shows its poster; `Infinity` never parks |
+| `createPerFrame` | `1` | Contexts created per frame |
+| `sharedBudget` | `'auto'` | Megapixels of the shared canvas: 4, or 2 on touch devices. Past it, all shared instances render at a lower resolution |
 
-For many small backgrounds that should all animate at once (cards, list items), use
-`renderer: 'shared'`. Every shared instance draws into its own region of one offscreen WebGL
-canvas, which is then copied into a 2D canvas in each host. Any number of them cost one WebGL
-context, counted on top of `maxContexts`.
+### Lazy creation and parking
 
-```ts
-const card = new LumiCells(cardEl, { preset: 'orb', renderer: 'shared' });
-LumiCells.configure({ sharedBudget: 4 }); // megapixels of the shared canvas ('auto': 4, touch 2)
-```
+- **Lazy creation.** Nothing is created in the constructor. A context (or a slot on the shared
+  one) is requested only when the container comes within about one viewport of the screen, at
+  most one context per frame, so mounting a long list does not freeze the page: creating 100
+  instances in one task takes about 20-25 ms of main thread on a first load on the test desktop
+  (about 15 ms once the browser has cached the code). Inside a scrolling element (a carousel, a
+  chat pane) the zone reaches one element size beyond its visible part in Chrome and Edge 120+
+  (IntersectionObserver `scrollMargin`). Other browsers create the context there only once the
+  background scrolls into the element's visible part, and treat the rest of the element as far
+  away; in a cross-origin iframe the zone is the visible area.
+- **Parking.** A background that stays farther away for 10 seconds releases its context (or its
+  shared slot) and GPU memory and shows its poster. Scrolling back rebuilds it; the config,
+  tweens and bound elements are kept, only the Life automaton reseeds.
+- Instances with `render.pauseOffscreen: false` (for example an offscreen source copied into
+  other canvases) are created right away, never parked, and rank as visible wherever they are.
+
+### Shared renderer details
 
 - Config, pointer, influences, pulses, lifted pixels, events, debug views and quality tiers work
-  per instance as before. `canvas` is the 2D canvas, and `ready` fires after the first copy.
+  per instance as with an own context. `canvas` is the 2D canvas, and `ready` fires after the
+  first copy.
 - Only instances on screen get a region. When they need more pixels than `sharedBudget`, all of
   them render at a lower resolution: the grid and the cell size stay, only the sharpness drops,
   and no instance is dropped. The factor snaps down to a whole pixel cell size, never below 3
@@ -404,17 +451,10 @@ LumiCells.configure({ sharedBudget: 4 }); // megapixels of the shared canvas ('a
 - Each instance still costs its own GPU work plus one `drawImage` per frame, so the frame time
   grows with the number of animating instances. On the test desktop 100 cards animating at once
   took 2.9 ms of main thread per frame; at 165 Hz the GPU work capped them at about 47 fps.
-  `getStats()` reports `renderer`, `presentMs` (this instance's copy, with its share of the
-  frame's atlas snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part of the
-  copy cost, and a calibration of the copy cost per megapixel, measured again when the atlas size
-  or budget scale changes). For a shared instance `gpuMs` is the GPU time of the whole shared
-  device.
-- Keep large backgrounds (hero, full screen) on the default `'own'`: they need no copy, and
-  another instance's context loss does not affect them.
-
-In React use `<LumiCells renderer="shared">`, in HTML `<lumi-cells renderer="shared">`;
-`setRenderer()` switches a running instance. A mode that chooses the renderer automatically is
-planned.
+  `getStats()` reports `presentMs` (this instance's copy, with its share of the frame's atlas
+  snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part of the copy cost, and
+  a calibration of the copy cost per megapixel, measured again when the atlas size or budget
+  scale changes). For a shared instance `gpuMs` is the GPU time of the whole shared device.
 
 ## Browser support
 

@@ -9,13 +9,14 @@
  */
 
 import { LumiCells } from '../core/lumi-cells';
+import { isRendererMode, runtimeSettings } from '../core/runtime/scheduler';
 import type {
   ConfigSource,
   InfluenceHandle,
   InfluenceOptions,
   InstancePriority,
-  InstanceRenderer,
   LumiCellsEvents,
+  RendererMode,
   Stats,
 } from '../core/types';
 import {
@@ -49,6 +50,8 @@ export interface LumiCellsElementEventMap {
   'lc-contextlost': CustomEvent<null>;
   /** The animation is back after a context loss: ends a `context-lost` fallback. */
   'lc-contextrestored': CustomEvent<null>;
+  /** The renderer changed (`auto` promotion, demotion or budget move, or an explicit switch). */
+  'lc-renderer': CustomEvent<LumiCellsEvents['renderer']>;
 }
 
 declare global {
@@ -173,9 +176,10 @@ function parsePriority(value: unknown): InstancePriority {
   return v === 'high' || v === 'low' ? v : 'normal';
 }
 
-function parseRenderer(value: unknown): InstanceRenderer {
+/** A renderer mode, or null (the page default) for anything else. */
+function parseRenderer(value: unknown): RendererMode | null {
   const v = typeof value === 'string' ? value.trim().toLowerCase() : value;
-  return v === 'shared' ? 'shared' : 'own';
+  return isRendererMode(v) ? v : null;
 }
 
 function parseTransitionAttr(value: string | null): number | null {
@@ -209,7 +213,8 @@ export class LumiCellsElement extends Base {
   #paused = false;
   #transition: number | null = null;
   #priority: InstancePriority = 'normal';
-  #renderer: InstanceRenderer = 'own';
+  /** Null: the page default (`LumiCells.configure({ renderer })`). */
+  #renderer: RendererMode | null = null;
 
   #instance: LumiCells | null = null;
   #unsubs: Array<() => void> = [];
@@ -330,16 +335,19 @@ export class LumiCellsElement extends Base {
   }
 
   /**
-   * `own` (default): a WebGL context of its own; `shared`: one WebGL context for every shared
-   * background on the page, copied into a 2D canvas (anything else is `own`). Switches the
-   * running instance (see `LumiCells.setRenderer`).
+   * The renderer asked for: `auto` (the page default unless `LumiCells.configure({ renderer })`
+   * says otherwise; a large background gets a WebGL context of its own while the budget has
+   * room, smaller ones share one), `own` (always a context of its own) or `shared` (always the
+   * page's shared context, copied into a 2D canvas). Anything else, or removing the attribute,
+   * means the page default. Switches the running instance (see `LumiCells.setRenderer`); the
+   * renderer it actually uses is `instance.renderer` (event `lc-renderer`).
    */
-  get renderer(): InstanceRenderer {
-    return this.#renderer;
+  get renderer(): RendererMode {
+    return this.#renderer ?? this.#instance?.rendererMode ?? runtimeSettings().renderer;
   }
-  set renderer(value: InstanceRenderer | string | null) {
+  set renderer(value: RendererMode | string | null) {
     this.#renderer = parseRenderer(value);
-    this.#instance?.setRenderer(this.#renderer);
+    this.#instance?.setRenderer(this.#renderer ?? runtimeSettings().renderer);
   }
 
   /** The live LumiCells instance while the element is connected. */
@@ -487,7 +495,7 @@ export class LumiCellsElement extends Base {
       config,
       autoStart: false,
       priority: this.#priority,
-      renderer: this.#renderer,
+      renderer: this.#renderer ?? undefined,
     });
     this.#instance = instance;
     this.#fallbackNotified = false;
@@ -506,6 +514,7 @@ export class LumiCellsElement extends Base {
       }),
       instance.on('contextlost', () => this.#emit('lc-contextlost', null)),
       instance.on('contextrestored', () => this.#emit('lc-contextrestored', null)),
+      instance.on('renderer', (e) => this.#emit('lc-renderer', e)),
     ];
     // The facade may have decided on the poster-only path during construction.
     if (!instance.supported && !this.#fallbackNotified) {

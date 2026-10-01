@@ -2,13 +2,16 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: loosely typed recording doubles and config probes
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LumiCells } from '../src/core/lumi-cells';
+import { configureRuntime, resetRuntimeForTesting } from '../src/core/runtime/scheduler';
 import { parseLcAttrs } from '../src/element/data-attrs';
 import { defineLumiCellsElement, LumiCellsElement } from '../src/element/index';
 import { needsRebind } from '../src/element/rebind';
 
 // The facade needs WebGL2, which jsdom does not have. A recording double stands in for it, so
 // these tests cover the element's own logic (state, lifecycle, binding) independent of the runtime.
-vi.mock('../src/core/lumi-cells', () => {
+// Like the facade, it falls back to the page's default renderer (LumiCells.configure).
+vi.mock('../src/core/lumi-cells', async () => {
+  const { runtimeSettings } = await import('../src/core/runtime/scheduler');
   class Handle {
     disposed = false;
     updates: unknown[] = [];
@@ -52,7 +55,10 @@ vi.mock('../src/core/lumi-cells', () => {
     ) {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
-      this.renderer = options?.renderer ?? 'own';
+      this.renderer = options?.renderer ?? runtimeSettings().renderer;
+    }
+    get rendererMode() {
+      return this.renderer;
     }
     setPriority(p: string) {
       this.priorities.push(p);
@@ -153,6 +159,7 @@ beforeAll(() => {
 beforeEach(() => {
   FakeClass.instances.length = 0;
   FakeClass.supported = true;
+  resetRuntimeForTesting();
 });
 
 afterEach(async () => {
@@ -210,7 +217,7 @@ describe('attributes and properties', () => {
     expect(FakeClass.instances).toHaveLength(1);
   });
 
-  it('renderer: attribute and property switch the instance in place, invalid values mean own', async () => {
+  it('renderer: attribute and property switch the instance in place, invalid values mean the page default', async () => {
     const el = mount('<lumi-cells renderer="shared"></lumi-cells>');
     await flush();
     const inst = live()[0] as Fake;
@@ -222,12 +229,47 @@ describe('attributes and properties', () => {
     el.renderer = 'shared';
     expect(inst.renderer).toBe('shared');
     el.renderer = 'bogus';
-    expect(el.renderer).toBe('own');
+    expect(el.renderer).toBe('auto');
+    el.setAttribute('renderer', ' Auto ');
+    expect(el.renderer).toBe('auto');
     el.setAttribute('renderer', 'shared');
     el.removeAttribute('renderer');
-    expect(inst.renderers).toEqual(['own', 'shared', 'own', 'shared', 'own']);
+    expect(el.renderer).toBe('auto');
+    expect(inst.renderers).toEqual(['own', 'shared', 'auto', 'auto', 'shared', 'auto']);
     // Switching never rebuilds the element's instance (runtime layers and bindings stay).
     expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it("without the attribute the page default decides: 'auto', or LumiCells.configure()", async () => {
+    const el = mount('<lumi-cells></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    // Left to the facade, which reads the page default.
+    expect(inst.options.renderer).toBeUndefined();
+    expect(inst.renderer).toBe('auto');
+    expect(el.renderer).toBe('auto');
+    configureRuntime({ renderer: 'shared' });
+    // The existing instance keeps the default it was created with.
+    expect(el.renderer).toBe('auto');
+    const next = mount('<lumi-cells></lumi-cells>');
+    await flush();
+    expect(live()[1]?.renderer).toBe('shared');
+    expect(next.renderer).toBe('shared');
+    el.renderer = 'own';
+    el.renderer = null;
+    expect(inst.renderers).toEqual(['own', 'shared']);
+  });
+
+  it("re-dispatches the instance's 'renderer' event as lc-renderer", async () => {
+    const el = mount('<lumi-cells></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    const seen: unknown[] = [];
+    document.body.addEventListener('lc-renderer', (e) => seen.push((e as CustomEvent).detail));
+    const detail = { renderer: 'shared', previous: 'own', reason: 'demote' };
+    inst.emit('renderer', detail);
+    expect(seen).toEqual([detail]);
+    expect(el.instance).toBe(inst);
   });
 
   it('renderer set before the element is connected is used at creation', async () => {

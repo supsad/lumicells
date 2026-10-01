@@ -13,6 +13,7 @@ import {
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LumiCells as Core } from '../src/core/lumi-cells';
+import { configureRuntime, resetRuntimeForTesting } from '../src/core/runtime/scheduler';
 import {
   LumiCells,
   useInfluence,
@@ -23,8 +24,10 @@ import {
   usePulse,
 } from '../src/react/index';
 
-// Recording double for the facade (jsdom has no WebGL2); covers the wrapper's own logic.
-vi.mock('../src/core/lumi-cells', () => {
+// Recording double for the facade (jsdom has no WebGL2); covers the wrapper's own logic. Like the
+// facade, it falls back to the page's default renderer (LumiCells.configure({ renderer })).
+vi.mock('../src/core/lumi-cells', async () => {
+  const { runtimeSettings } = await import('../src/core/runtime/scheduler');
   class Handle {
     disposed = false;
     updates: unknown[] = [];
@@ -63,7 +66,10 @@ vi.mock('../src/core/lumi-cells', () => {
     ) {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
-      this.renderer = options?.renderer ?? 'own';
+      this.renderer = options?.renderer ?? runtimeSettings().renderer;
+    }
+    get rendererMode() {
+      return this.renderer;
     }
     setPriority(p: string) {
       this.priorities.push(p);
@@ -150,6 +156,7 @@ let root: Root;
 beforeEach(() => {
   FakeClass.instances.length = 0;
   FakeClass.supported = true;
+  resetRuntimeForTesting();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -348,10 +355,44 @@ describe('<LumiCells>', () => {
     expect(inst.renderers).toEqual([]);
     render(createElement(LumiCells, { renderer: 'own' }));
     expect(inst.renderer).toBe('own');
+    render(createElement(LumiCells, { renderer: 'auto' }));
+    expect(inst.renderer).toBe('auto');
     render(createElement(LumiCells, { renderer: 'shared' }));
+    // Removing the prop goes back to the page default ('auto').
     render(createElement(LumiCells, {}));
-    expect(inst.renderers).toEqual(['own', 'shared', 'own']);
+    expect(inst.renderers).toEqual(['own', 'auto', 'shared', 'auto']);
     expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it("without the renderer prop the page default decides: 'auto', or LumiCells.configure()", () => {
+    render(createElement(LumiCells, {}));
+    const first = live()[0] as Fake;
+    // Left to the facade (which reads the page default), and not switched after mount.
+    expect(first.options.renderer).toBeUndefined();
+    expect(first.renderer).toBe('auto');
+    expect(first.renderers).toEqual([]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    configureRuntime({ renderer: 'shared' });
+    render(createElement(LumiCells, { renderer: 'own' }));
+    const second = live()[0] as Fake;
+    expect(second.renderer).toBe('own');
+    // Dropping the prop follows the page default of the moment.
+    render(createElement(LumiCells, {}));
+    expect(second.renderers).toEqual(['shared']);
+  });
+
+  it("forwards the 'renderer' event to useLumiCellsEvent listeners", () => {
+    const seen: unknown[] = [];
+    function Probe() {
+      useLumiCellsEvent('renderer', (e) => seen.push(e));
+      return null;
+    }
+    render(createElement(LumiCells, {}, createElement(Probe)));
+    const inst = live()[0] as Fake;
+    const e = { renderer: 'own', previous: 'shared', reason: 'promote' };
+    act(() => inst.emit('renderer', e));
+    expect(seen).toEqual([e]);
   });
 
   it('routes onReady/onError/onStats to the latest callbacks', () => {

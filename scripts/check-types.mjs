@@ -39,6 +39,8 @@ const CONSUMER = `import {
   LumiCells,
   type LumiCellsConfig,
   type LumiCellsConfigInput,
+  type RendererChangeReason,
+  type RendererMode,
   type Stats,
 } from 'lumicells';
 import { LumiCellsElement } from 'lumicells/element';
@@ -56,9 +58,16 @@ const config: LumiCellsConfig = getDefaults();
 const input: LumiCellsConfigInput = { animation: { speed: 2 } };
 const preset: PresetId = 'reference';
 export const readFps = (stats: Stats | null): number | undefined => stats?.fps;
+export const readMode = (stats: Stats | null): RendererMode | undefined => stats?.rendererMode;
 
 export function makeInstance(host: HTMLElement): LumiCells {
-  return new LumiCells(host, { config: { ...config, ...input } });
+  LumiCells.configure({ renderer: 'auto', promoteArea: 0.5 });
+  const cells = new LumiCells(host, { config: { ...config, ...input }, renderer: 'auto' });
+  cells.on('renderer', (e) => {
+    const reason: RendererChangeReason = e.reason;
+    void reason;
+  });
+  return cells;
 }
 
 export function Hero(props: LumiCellsProps) {
