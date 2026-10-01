@@ -324,13 +324,24 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
   app animations, DOM reads, GPU work.
 - Resolution is capped by `render.maxDpr` and the pixel budget `render.maxPixels` (at most
   2.4 MP on touch devices).
-- Adaptive quality detects the display rate (60, 120, 144 Hz and up) and, when frames run late,
-  steps quality and resolution down with hysteresis. It does not mistake main-thread stalls for
-  a slow GPU. Tiers: `high` full picture, `medium` cheaper glow sampling, `low` no halo and bevel.
+- Adaptive quality learns the display rate (60, 120, 144 Hz and up) from frames that carry no GL
+  work: while the first backgrounds of a page compile (their first draws wait a few frames more
+  when needed, about 25 ms at 165 Hz, under the poster), and again when the tab comes back or the
+  device pixel ratio changes (zoom, a move to a display with another DPR). So a GPU that is too
+  slow from the very first frame is not mistaken for a slower display. A display that gets slower
+  without a recalibration (a monitor with the same DPR, an OS power profile) is picked up from the
+  frame cadence once the GPU time or the steps already taken show that the pace is not ours.
+  When frames run late, it steps quality and resolution down with hysteresis. It does not mistake main-thread stalls or an OS frame-rate cap for a slow GPU, and
+  a step that cuts neither the late frames nor the GPU time is undone (the cost does not depend
+  on pixels there). Tiers: `high` full picture, `medium` cheaper glow sampling, `low` no halo and
+  bevel, plus the lite glow pipeline (see [Cost reducers](#cost-reducers)).
 - Rendering stops while the tab is hidden or the container is off screen. With
   `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
   `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
 - No objects or arrays are allocated per frame; uniform buffers upload only on change.
+- Bundle: an app that imports only `LumiCells` ships about 68 KB gzip (60 KB brotli) after
+  minification, the plain `<script>` bundle about 73 KB gzip. Shaders are minified at build
+  time and UI texts of the schema are not part of the runtime. `npm run size` checks the budget.
 
 Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
 1920×1080, about 0.08 ms GPU at 3840×2160 on `high`. There are no measurements on real mobile
@@ -417,6 +428,8 @@ applies.
 | `parkAfterMs` | `10000` | An instance farther than about one viewport for this long releases its GPU side and shows its poster; `Infinity` never parks |
 | `createPerFrame` | `1` | Contexts created per frame |
 | `sharedBudget` | `'auto'` | Megapixels of the shared canvas: 4, or 2 on touch devices. Past it, all shared instances render at a lower resolution |
+| `secondaryMaxFps` | `'auto'` | Frame-rate cap of the inactive shared instances: fps, `0` off, `'auto'` only when needed (see [Cost reducers](#cost-reducers)) |
+| `lite` | `'auto'` | Lite glow pipeline of the shared instances: `'auto'` small or crowded inactive ones, `true` every inactive one, `false` never |
 
 ### Lazy creation and parking
 
@@ -448,13 +461,58 @@ applies.
   the canvas memory of a page.
 - A lost shared context affects every shared instance. Each keeps its last frame (no poster) and
   gets `contextlost`, then `contextrestored` once the context is rebuilt.
-- Each instance still costs its own GPU work plus one `drawImage` per frame, so the frame time
-  grows with the number of animating instances. On the test desktop 100 cards animating at once
-  took 2.9 ms of main thread per frame; at 165 Hz the GPU work capped them at about 47 fps.
-  `getStats()` reports `presentMs` (this instance's copy, with its share of the frame's atlas
-  snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part of the copy cost, and
-  a calibration of the copy cost per megapixel, measured again when the atlas size or budget
-  scale changes). For a shared instance `gpuMs` is the GPU time of the whole shared device.
+- Each instance that presents a frame costs its own GPU work plus one `drawImage`, so the frame
+  time grows with the number of animating instances; [Cost reducers](#cost-reducers) keep a
+  hundred of them smooth. `getStats()` reports `presentMs` (this instance's copy, with its share
+  of the frame's atlas snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part
+  of the copy cost, and a calibration of the copy cost per megapixel, measured again when the
+  atlas size or budget scale changes). For a shared instance `gpuMs` is the GPU time of the
+  whole shared device.
+
+### Cost reducers
+
+A hundred animated cards cost a hundred instances' draws and copies every frame. The shared
+renderer cuts that where nobody looks closely, decided anew every frame:
+
+- **Secondary frame rate.** An instance is active while the pointer is over it, for about a
+  second after a pulse, a lift, an influence that moved or changed, a config transition or a
+  modulated value. Active instances run at the full rate, and so does the largest one drawing,
+  whatever its state. The others present every n-th display frame, spread evenly over the frames (at n = 2 half of
+  them on even frames, half on odd ones), so every frame carries about the same load. Their
+  animation time runs on: they show fewer frames, never a slower animation, and nothing jumps
+  when an instance changes rate. With `secondaryMaxFps: 'auto'` (default) this starts only when
+  needed: more than 8 shared instances drawing (at most 60 fps, and at most half the refresh
+  rate), or the page missing its frame budget on the main thread or the GPU (about 30, then
+  15 fps; at 60 Hz 30 fps is already the crowd rate, so a budget step goes to 15 fps, and on a
+  30 Hz display the last step is 10 fps), and it eases back once the budget allows. A number caps
+  them at that rate (snapped to a whole divisor of the refresh rate), `0` turns it off.
+- **Lite pipeline.** Inactive shared instances smaller than about 0.15 megapixels, or every
+  inactive one while more than 12 draw, blur bloom and haze inside one glow pass at cell
+  resolution: 2 glow passes instead of 5. This goes by activity only, so the largest instance
+  draws lite too when it is inactive and small enough (it still runs at the full rate). On the
+  test desktop the picture differs from the full pipeline by at most 3 levels of 255 (0.1 to 0.2
+  on average). Instances with a context of their own use it only at the adaptive `low` tier.
+- **Copy cost.** Once the copy cost per megapixel is measured, the copies of a frame may take a
+  quarter of it. Where copying is slow (a software 2D canvas, a weak device), the secondary rate
+  drops further and, past 15 fps, the shared pixel budget comes down (to no less than a quarter
+  of what the instances need).
+
+`getStats().reducers` tells what acts on an instance (`{ lite, frameDivisor }`), and
+`getStats().shared.reducers` the page-wide state: the secondary `frameDivisor` and `level`, the
+`reason` (`'off'`, `'fixed'`, `'crowd'`, `'budget'` or `'copy'`), how many instances are secondary
+and lite, the refresh interval it plans with and the lowered `copyBudget`, if any.
+
+Stress bench, 100 cards of 130×80 px on one screen (Chrome, RTX 5090, 165 Hz; main thread and
+GPU per frame):
+
+| | Before | After |
+| --- | --- | --- |
+| CPU ×1 | 114 fps, p95 12.2 ms, 1.4 ms, GPU 4.2 ms | 165 fps, p95 6.2 ms, 0.6 ms, GPU 1.2 ms |
+| CPU ×4 | 81 fps, p95 18.2 ms, 6.6 ms, GPU 3.6 ms | 163 fps, p95 6.2 ms, 2.1 ms, GPU 0.7 ms |
+| DPR 2, CPU ×4 | 70 fps, p95 18.3 ms, 8.0 ms, GPU 4.3 ms | 164 fps, p95 6.2 ms, 2.3 ms, GPU 0.6 ms |
+
+One or four cards run as before (165 fps), and the card under the pointer stays at 165 fps on
+the full pipeline.
 
 ## Browser support
 
@@ -484,12 +542,16 @@ playground panel are all derived from it.
 
 ### Adding a parameter
 
-1. Add a field to `src/schema/schema.ts`, for example
-   `num({ min, max, default, label, gpu: true })`.
-2. Use it in a shader as `P_<path_with_underscores>`, for example `P_glow_halo_strength`.
+1. Add the runtime field to `src/schema/schema.ts`, for example
+   `strength: num({ min: 0, max: 2, step: 0.01, default: 0.5, gpu: true })`.
+2. Add its English label and description to `src/schema/meta.ts` under the same dotted path, for
+   example `'glow.halo.strength': { label: 'Strength', description: '...' }`.
+3. Add the Russian text to `src/schema/locales/ru.ts` under the same path.
+4. Use it in a shader as `P_<path_with_underscores>`, for example `P_glow_halo_strength`.
 
-Types, validation, the playground and export pick it up automatically. Add the Russian label to
-`src/schema/locales/ru.ts` (a test checks that every path has one).
+Types, validation, the playground, the JSON Schema and export pick it up automatically. Tests fail
+if a path has no English or Russian text. UI texts live outside the runtime schema, so an app that
+only renders a background does not ship them.
 
 ### Adding an animation mode
 
