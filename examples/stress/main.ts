@@ -17,6 +17,10 @@
  * - `mirror`: the same copy technique, but the source is ONE real LumiCells instance: the full
  *   look for N cards at the cost of one context (all cards show the same animation).
  *
+ * With `look=shared` every card asks for the shared look: cards that draw the same picture share
+ * one (rendered once per frame, a crop copied into each card); `interactive=1` makes the cards
+ * leave their group while hovered (see `hover()`, `record()` and `lookParity()` in look.ts).
+ *
  * URL parameters are documented in stress.html. `window.bench` is the automation surface (see
  * also the reducer helpers below: configure, setConfigAll, capture / diff / image for comparing
  * a card's pixels across settings, hover and record for frame sequences around a switch):
@@ -34,6 +38,7 @@
 
 import {
   type ConfigureOptions,
+  type LookMode,
   LumiCells,
   type LumiCellsConfigInput,
   type LumiCellsEvents,
@@ -44,6 +49,7 @@ import {
   type SharedRendererStats,
   type Stats,
 } from 'lumicells';
+import { lookParity } from './look';
 import { installContextProbe } from './probe';
 import { drawCover, type SharedCard, SharedRenderer } from './shared';
 import { installSlowGpu } from './slow-gpu';
@@ -98,6 +104,16 @@ const params = {
   card: /^(\d+)x(\d+)$/.exec(qs.get('card') ?? ''),
   /** Delay before the instances are created, ms (lets a profiler attach first). */
   mountDelay: clampInt(qs.get('mountDelay'), 0, 60_000, 0),
+  /** The cards' look (lumicells); null: the library default ('own'). */
+  look: (['own', 'shared'] as const).find((l) => l === qs.get('look')) ?? null,
+  /** lookOffset of the cards (look=shared). */
+  lookOffset: Number(qs.get('lookOffset') ?? 0) || 0,
+  /** Pointer light, hover lifts and click ripples on every card. */
+  interactive: qs.get('interactive') === '1',
+  /** grid.sizing 'pitch' at this many CSS px (0: the preset's sizing). */
+  pitch: clampInt(qs.get('pitch'), 0, 96, 0),
+  /** No animation and no random lifts (pixel comparisons). */
+  freeze: qs.get('freeze') === '1',
 };
 
 function clampInt(v: string | null, min: number, max: number, fallback: number): number {
@@ -323,7 +339,17 @@ function makeCardCanvas(card: Card): SharedCard & { card: Card } {
   };
 }
 
-const renderConfig = { render: { pauseOffscreen: params.pauseOffscreen } };
+const renderConfig: LumiCellsConfigInput = {
+  render: { pauseOffscreen: params.pauseOffscreen },
+  ...(params.pitch > 0 ? { grid: { sizing: 'pitch', pitch: params.pitch } } : {}),
+  ...(params.freeze ? { animation: { speed: 0 }, lift: { enabled: false } } : {}),
+};
+/** look / lookOffset / interactive options of the cards (only those given in the URL). */
+const lookOptions: { look?: LookMode; lookOffset?: number; interactive?: boolean } = {
+  ...(params.look ? { look: params.look } : {}),
+  ...(params.lookOffset > 0 ? { lookOffset: params.lookOffset } : {}),
+  ...(params.interactive ? { interactive: true } : {}),
+};
 
 /** LumiCells.configure() from the URL (only the given keys; absent means the library default). */
 function applyRuntimeParams(): ConfigureOptions {
@@ -364,9 +390,15 @@ type RendererEvent = LumiCellsEvents['renderer'] & {
 const rendererEvents: RendererEvent[] = [];
 let heroEntry: Entry | null = null;
 
+/** Look changes of the cards (the 'look' event), in order: [index, look, reason, ms]. */
+const lookEvents: [number, string, string, number][] = [];
+
 function watchRenderer(e: Entry, index: number): void {
   e.cells.on('renderer', (ev) =>
     rendererEvents.push({ ...ev, index, t: Math.round(performance.now() - t0) }),
+  );
+  e.cells.on('look', (ev) =>
+    lookEvents.push([index, ev.look, ev.reason, Math.round(performance.now() - t0)]),
   );
 }
 
@@ -388,6 +420,7 @@ function mountAll(): void {
         preset: params.preset,
         config: renderConfig,
         ...(renderer ? { renderer } : {}),
+        ...lookOptions,
       });
       const e = watch(cells, card);
       watchRenderer(e, i);
@@ -562,6 +595,9 @@ function snapshot() {
   const quality: Record<string, number> = {};
   /** Cost reducers of the live instances: "d<frameDivisor>" plus "+lite" -> count. */
   const reducers: Record<string, number> = {};
+  /** What the instances show: 'own' / 'group' -> count, and the group sizes seen. */
+  const looks: Record<string, number> = {};
+  const groupSizes = new Set<number>();
   let readyAllMs: number | null = null;
 
   if (params.mode === 'lumicells') {
@@ -584,6 +620,11 @@ function snapshot() {
       const st = e.cells.getStats();
       const state = st.state;
       if (state) states[state] = (states[state] ?? 0) + 1;
+      // Optional: the bench also runs against builds without the shared look.
+      if (st.look) {
+        looks[st.look] = (looks[st.look] ?? 0) + 1;
+        if (st.look === 'group') groupSizes.add(st.groupSize);
+      }
       renderers[st.renderer] = (renderers[st.renderer] ?? 0) + 1;
       if (look === 'frozen') frozen++;
       if (state === 'live') {
@@ -653,6 +694,8 @@ function snapshot() {
       renderers,
       quality,
       reducers,
+      looks,
+      groupSizes: [...groupSizes].sort((a, b) => a - b),
     },
     hero: heroEntry
       ? {
@@ -765,6 +808,8 @@ async function measure(ms = 5000) {
   const gpu: number[] = [];
   const copy: number[] = [];
   const draw: number[] = [];
+  /** Regions the shared renderer drew in the last frame, per sample (look groups count once). */
+  const draws: number[] = [];
   let gpuReporting = 0;
   const timeline: { t: number; liveContexts: number; lost: number; created: number }[] = [];
   const start = performance.now();
@@ -777,6 +822,7 @@ async function measure(ms = 5000) {
     if (sh) {
       copy.push(sh.copyMs);
       draw.push(sh.drawMs);
+      if (sh.draws !== undefined) draws.push(sh.draws);
     }
     gpuReporting = Math.max(gpuReporting, s.gpuReporting);
     timeline.push({
@@ -805,6 +851,8 @@ async function measure(ms = 5000) {
     /** Shared renderer: main-thread ms of the draw series and of the copy series per frame. */
     sharedDrawMs: draw.length ? round(mean(draw), 3) : null,
     sharedCopyMs: copy.length ? round(mean(copy), 3) : null,
+    /** Shared regions drawn per frame (sampled): min and max over the window. */
+    sharedDraws: draws.length ? [Math.min(...draws), Math.max(...draws)] : null,
     gpuReporting,
     longTasks: { count: lt.length, totalMs: Math.round(lt.reduce((a, t) => a + t.duration, 0)) },
     contextChurnInWindow: {
@@ -1234,10 +1282,21 @@ function image(key: string, scale = 4): string | null {
   return out.toDataURL('image/png');
 }
 
-/** Pointer over card `index` (true) or gone (false), as the browser reports it to the host. */
+/**
+ * Pointer over card `index` (true) or gone (false), as the browser reports it to the host: an
+ * enter and a move at the card's center (an interactive card lights up under it), or a leave.
+ */
 function hover(index: number, on: boolean): void {
   const host = (index < 0 ? heroEntry : entries[index])?.card.host;
-  host?.dispatchEvent(new PointerEvent(on ? 'pointerenter' : 'pointerleave', { bubbles: false }));
+  if (!host) return;
+  if (!on) {
+    host.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }));
+    return;
+  }
+  const r = host.getBoundingClientRect();
+  const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+  host.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false, ...at }));
+  host.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, ...at }));
 }
 
 /**
@@ -1262,6 +1321,7 @@ async function record(opts: {
     since: number;
     divisor: number;
     lite: boolean;
+    look: string;
   }[] = [];
   let prev: Uint8ClampedArray | null = null;
   let since = 0;
@@ -1297,6 +1357,7 @@ async function record(opts: {
       since,
       divisor: st.reducers.frameDivisor,
       lite: st.reducers.lite,
+      look: st.look ?? 'own',
     });
     if (changed) {
       prev = new Uint8ClampedArray(c.px);
@@ -1325,7 +1386,10 @@ async function record(opts: {
     medianMotion: median,
     worst: pops,
     timeline: rows
-      .map((r) => `${r.f}:${r.presented ? 'P' : '.'}${r.divisor}${r.lite ? 'L' : ''}`)
+      .map(
+        (r) =>
+          `${r.f}:${r.presented ? 'P' : '.'}${r.divisor}${r.lite ? 'L' : ''}${r.look === 'group' ? 'G' : ''}`,
+      )
       .join(' '),
     rows,
   };
@@ -1354,6 +1418,15 @@ const bench = {
   image,
   hover,
   record,
+  /** Shared look parity: crops against solo renders (see look.ts); PASS / FAIL with details. */
+  lookParity,
+  /** The LumiCells instance of card `index` (-1: the hero), for scripted runtime layers. */
+  instance: (index: number): LumiCells | null =>
+    (index < 0 ? heroEntry : entries[index])?.cells ?? null,
+  /** 'look' events of every card so far: [index, look, reason]. */
+  get lookEvents() {
+    return lookEvents.slice();
+  },
   /** The simulated slow GPU (slowGpu=K): its target and measured ms. */
   get slowGpu() {
     return slowGpu.state ? { ...slowGpu.state, mpx: slowGpu.state.mpx() } : null;
@@ -1427,6 +1500,13 @@ if (params.hud) {
         .map(([k, v]) => `${k} ${v}`)
         .join(
           '  ',
-        )}${s.hero ? `  hero ${s.hero.renderer} ${s.hero.state}` : ''}  switches ${s.rendererEvents}`;
+        )}${s.hero ? `  hero ${s.hero.renderer} ${s.hero.state}` : ''}  switches ${s.rendererEvents}` +
+      (params.look === 'shared'
+        ? `\nlooks ${Object.entries(s.instances.looks)
+            .map(([k, v]) => `${k} ${v}`)
+            .join(
+              '  ',
+            )}  groups ${s.shared?.groups ?? 0} (sizes ${s.instances.groupSizes.join(',')})  draws ${s.shared?.draws ?? 0}`
+        : '');
   }, 500);
 }

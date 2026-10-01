@@ -43,11 +43,18 @@
         parkAfterMs=N                LumiCells.configure() parking delay
         createPerFrame=N             LumiCells.configure() engine creations per frame
         mountDelay=0                 ms before the instances are created (to attach a profiler)
+        look=own|shared              (lumicells) the cards' look: shared = cards that draw the
+                                     same picture share one (rendered once, a crop per card)
+        lookOffset=F                 (look=shared) seeded window shift, share of the card size
+        interactive=1                pointer light, hover lifts and click ripples on every card
+                                     (a hovered look=shared card leaves its group)
+        pitch=N                      grid.sizing 'pitch' at N CSS px (crops keep the cell size)
+        freeze=1                     no animation, no random lifts (pixel comparisons)
         hud=0                        hide the status line
       The instances are created in a task of their own after the first paint.
       window.bench exposes measure(ms), snapshot(), scrollThrough(), mount(), lossTest(),
       resizeHero(), rendererEvents, configure(), setConfigAll(), capture(), diff(), image(),
-      hover() and record() for automated runs.
+      hover(), record() and lookParity() for automated runs.
     -->
     <style>
       :root {

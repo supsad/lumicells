@@ -46,6 +46,14 @@ const PER_RAF = Math.max(1, Number(qs.get('perRaf') ?? 4) || 4);
 const STEP_S = 1 / 60;
 /** lifts=0: no lifted pixels anywhere (isolates the lift pass when a region differs). */
 const LIFTS = qs.get('lifts') !== '0';
+/**
+ * waive=<scenario>/<slot letter> (repeatable, e.g. waive=rgba8%2Bdebug%2FD2): a known library
+ * bug. That slot's region-vs-own mismatches in that scenario are listed under `waived` instead
+ * of failing the verdict; every other check of the slot still counts, and a waiver that matches
+ * no slot fails the verdict (a stale waiver must not linger). Used by the end-to-end suite only
+ * on the renderer where the bug shows (tests/e2e/support/known-issues.ts); none by default.
+ */
+const WAIVE = new Set(qs.getAll('waive').filter((w) => w !== ''));
 
 /**
  * Region vs own tolerance. A region at the origin runs the own path's arithmetic; under an
@@ -553,17 +561,27 @@ async function parity(opts: { frames?: number } = {}) {
     drawn: Object.fromEntries(scenarios.map((s) => [s.name, s.drawn])),
     lost: scenarios.flatMap((s) => s.lost.map((l) => `${s.name}: ${l}`)),
     preludeGuard,
+    waivers: [...WAIVE],
   };
 
-  // Verdict: every condition below must hold.
+  // Verdict: every condition below must hold (waived region-vs-own mismatches aside).
   const failures: string[] = [];
+  const waived: string[] = [];
+  const waiverKey = (s: ScenarioResult, i: number) =>
+    `${s.name}/${slotLetter(s.specs[i] as SlotSpec)}`;
+  for (const w of WAIVE) {
+    if (!scenarios.some((s) => s.specs.some((_, i) => waiverKey(s, i) === w))) {
+      failures.push(`waiver ${w} matches no slot`);
+    }
+  }
   for (const l of summary.lost) failures.push(`context lost (${l})`);
   for (const s of scenarios) {
     if (s.checkpoints.length === 0) failures.push(`${s.name}: no checkpoint reached`);
     for (const c of s.checkpoints) {
       c.vsOwn.forEach((d, i) => {
         if (!withinTolerance(d)) {
-          failures.push(`${s.name} f${c.frame} ${s.specs[i]?.name}: region vs own ${fmt(d)}`);
+          const text = `${s.name} f${c.frame} ${s.specs[i]?.name}: region vs own ${fmt(d)}`;
+          (WAIVE.has(waiverKey(s, i)) ? waived : failures).push(text);
         }
       });
       if (c.outside !== 0) failures.push(`${s.name} f${c.frame}: ${c.outside} outside the regions`);
@@ -590,6 +608,12 @@ async function parity(opts: { frames?: number } = {}) {
   const lines = [
     `${verdict}${failures.length ? `: ${failures.length} problem(s)` : ''}`,
     ...failures.slice(0, 20).map((f) => `  - ${f}`),
+    ...(WAIVE.size > 0
+      ? [
+          `waived (known issues, outside the verdict): ${[...WAIVE].join(', ')}; ${waived.length} mismatch(es)`,
+          ...waived.slice(0, 10).map((f) => `  ~ ${f}`),
+        ]
+      : []),
     `\nparity: ${frames} frames per scenario, virtual 1/60 s, seeded controllers, draw order reversed on odd frames`,
     `tolerance: region vs own max <= ${TOLERANCE.maxLsb} LSB on <= max(${TOLERANCE.minPixels}, ${TOLERANCE.share * 100}%) of a region's pixels; outside the regions 0; A/C base vs changed: same as region vs own`,
     `programs: while creating slots ${summary.programsForSlots.join(' + ')}; per own-context engine: ${summary.programsPerOwnEngine.join(', ')}`,
@@ -614,6 +638,7 @@ async function parity(opts: { frames?: number } = {}) {
   const result = {
     verdict,
     failures,
+    waived,
     summary,
     base: base.checkpoints,
     changed: changed.checkpoints,

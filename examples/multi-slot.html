@@ -21,6 +21,8 @@
         perRaf=4       frames rendered per animation frame
         lifts=0        no lifted pixels (isolates the lift pass)
         auto=0         do not run the parity check on load
+        waive=S/X      known bug: slot X's region-vs-own mismatches in scenario S are listed
+                       apart from the verdict (repeatable; e.g. waive=rgba8%2Bdebug%2FD2)
       window.multi exposes parity(opts), startup(opts) and last (the latest results) for
       automated runs; see main.ts.
     -->
