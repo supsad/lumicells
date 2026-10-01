@@ -180,6 +180,8 @@ beforeEach(() => {
   FakeIO.autoEnter = true;
   canvasSize = { w: 400, h: 300 };
   resetRuntimeForTesting();
+  // These tests cover the own path: the page default is 'auto' (see runtime-auto.test.ts).
+  LumiCells.configure({ renderer: 'own' });
 });
 
 afterEach(() => {

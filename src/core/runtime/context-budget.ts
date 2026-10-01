@@ -9,15 +9,21 @@
  * evict anything and the app keeps room for its own contexts.
  *
  * Pure logic, no DOM: members describe themselves (visibility, creation zone, priority, area,
- * when they were last visible) and the budget grants slots and picks eviction victims. Rank,
- * lowest first (evicted first):
+ * when they were last visible, whether they have another renderer to go to) and the budget grants
+ * slots and picks eviction victims. Rank, lowest first (evicted first):
  *   1. offscreen members outside the creation zone, least recently visible first;
  *   2. offscreen members inside the zone, least recently visible first;
  *   3. visible members (and members that never pause offscreen), lower priority first, then
- *      smaller area.
+ *      flexible before inflexible, then smaller area.
  * A requester may take the slot of the lowest ranked holder only when it ranks strictly higher,
  * so two members can never keep taking a slot from each other. When only the area decides, it
  * must also be clearly larger (see AREA_EVICT_RATIO).
+ *
+ * Flexible members (`renderer: 'auto'`) lose little without a context of their own: they draw on
+ * the shared renderer instead (a copy per frame), while an inflexible one (`renderer: 'own'`)
+ * shows its poster until a context frees up. Hence, at equal priority, an inflexible member ranks
+ * above a flexible one, and a flexible requester never takes the slot of a visible inflexible
+ * holder, whatever its priority or size: that would trade an animation for a poster.
  */
 
 import type { InstancePriority } from '../types';
@@ -38,6 +44,12 @@ export interface BudgetMember {
   readonly area: number;
   /** When the member was last visible (any monotonic ms clock), -Infinity if never. */
   readonly lastVisible: number;
+  /**
+   * Has another renderer to go to without a slot (`renderer: 'auto'`): it is refused rather than
+   * kept waiting, and it gives its slot up before inflexible members of the same priority.
+   * Absent means false.
+   */
+  readonly flexible?: boolean;
 }
 
 /** Default budget on desktop (fine pointer). */
@@ -104,13 +116,28 @@ export function compareRank(a: BudgetMember, b: BudgetMember): number {
   }
   const p = PRIORITY_WEIGHT[a.priority] - PRIORITY_WEIGHT[b.priority];
   if (p !== 0) return p;
+  const f = (a.flexible ? 0 : 1) - (b.flexible ? 0 : 1);
+  if (f !== 0) return f;
   return cmp(areaBucket(a.area), areaBucket(b.area));
+}
+
+/**
+ * Whether `holder` could give its slot to `m` at all: a flexible requester never takes the slot
+ * of a visible inflexible holder (see the header).
+ */
+export function mayEvict(m: BudgetMember, holder: BudgetMember): boolean {
+  return !m.flexible || !!holder.flexible || tier(holder) !== TIER_VISIBLE;
 }
 
 /** Whether `m` may take the slot of `holder`: it ranks strictly higher, by a clear margin. */
 export function outranks(m: BudgetMember, holder: BudgetMember): boolean {
-  if (compareRank(holder, m) >= 0) return false;
-  if (tier(m) === TIER_VISIBLE && tier(holder) === TIER_VISIBLE && m.priority === holder.priority)
+  if (!mayEvict(m, holder) || compareRank(holder, m) >= 0) return false;
+  if (
+    tier(m) === TIER_VISIBLE &&
+    tier(holder) === TIER_VISIBLE &&
+    m.priority === holder.priority &&
+    !m.flexible === !holder.flexible
+  )
     return m.area >= holder.area * AREA_EVICT_RATIO;
   return true;
 }
@@ -154,7 +181,7 @@ export class ContextBudget<M extends BudgetMember> {
     this.#max = sanitizeMaxContexts(max) ?? this.#max;
     const out: M[] = [];
     while (this.#holders.size > this.#max) {
-      const v = this.#lowest(null);
+      const v = this.#lowest(null, false);
       if (!v) break;
       this.#holders.delete(v);
       out.push(v);
@@ -164,7 +191,7 @@ export class ContextBudget<M extends BudgetMember> {
 
   /** The holder `m` would take the slot of, or null when none ranks clearly below it. */
   victimFor(m: M): M | null {
-    const v = this.#lowest(m);
+    const v = this.#lowest(m, m.flexible === true);
     return v !== null && outranks(m, v) ? v : null;
   }
 
@@ -190,11 +217,15 @@ export class ContextBudget<M extends BudgetMember> {
     return this.#holders.delete(m);
   }
 
-  /** The lowest ranked holder other than `except` (the oldest one among equals). */
-  #lowest(except: M | null): M | null {
+  /**
+   * The lowest ranked holder other than `except` (the oldest one among equals); `forFlexible`
+   * skips the holders a flexible requester may not take a slot from (see mayEvict).
+   */
+  #lowest(except: M | null, forFlexible: boolean): M | null {
     let low: M | null = null;
     for (const h of this.#holders) {
       if (h === except) continue;
+      if (forFlexible && except !== null && !mayEvict(except, h)) continue;
       if (low === null || compareRank(h, low) < 0) low = h;
     }
     return low;

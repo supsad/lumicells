@@ -25,6 +25,18 @@
  * WebGL canvas ('ready' after the first copy). Parking gives the seat back and shrinks the 2D
  * canvas to 0x0 (browsers cap the canvas memory of a page); a loss of the shared context keeps
  * every 2D canvas on its last frame until the device is rebuilt.
+ *
+ * 'auto' (the default) chooses between the two by size (runtime/auto-renderer): the choice is
+ * made when the instance first asks for a GPU side, from the host size its observers reported,
+ * with no dwell. Afterwards a ResizeObserver on the host, viewport and DPR changes and config
+ * changes re-evaluate it; a switch waits until the size held still for the dwell. An 'auto'
+ * instance is a flexible client of the context budget: a refused request for its own context
+ * falls back to the shared renderer, an evicted one moves there, and a large instance on the
+ * shared renderer stays queued in the scheduler as a candidate (standby) until a slot frees up.
+ * Switches reuse the explicit switch (release one side, ask the other) but keep the last frame on
+ * screen until the new renderer draws: the 2D canvas itself (shared to own), or a 2D copy of the
+ * WebGL canvas taken right after it drew (own to shared, so a size demotion runs in the render
+ * phase).
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -36,7 +48,6 @@ import {
   type ParamPath,
   type ParamValue,
   type PresetId,
-  posterCss,
   setPath,
   toConfigFile,
 } from '../schema';
@@ -46,17 +57,21 @@ import {
   type ControllerModulator,
 } from './controller/controller';
 import type { InfluenceInit } from './controller/influences';
+import { reducedMotionQuery, watchReducedMotion, watchVisibility } from './dom/environment';
 import { HostView } from './dom/host';
 import { PointerInteraction } from './dom/pointer';
 import { ElementTracker } from './dom/tracking';
+import { viewportSize, watchViewport } from './dom/viewport';
 import { Engine } from './engine/engine';
 import { DEBUG_VIEW, EngineError } from './engine/types';
+import { AutoDwell, type AutoSize, autoScore, autoWants } from './runtime/auto-renderer';
 import { areaBucket } from './runtime/context-budget';
 import {
   cancelRequest,
   claimBudgetWarning,
   configureRuntime,
   type GpuClient,
+  isRendererMode,
   maxContexts,
   noteFirstDraw,
   rankChanged,
@@ -71,7 +86,7 @@ import {
   type SharedClient,
   type SharedSeat,
 } from './runtime/shared-renderer';
-import { subscribeTicker } from './ticker';
+import { frameNow, subscribeTicker } from './ticker';
 import type {
   BindElementOptions,
   ConfigSource,
@@ -92,6 +107,8 @@ import type {
   ModulationSource,
   ModulatorHandle,
   PulseOptions,
+  RendererChangeReason,
+  RendererMode,
   SharedRendererStats,
   Stats,
 } from './types';
@@ -120,25 +137,12 @@ const IO_MARGIN = 64;
  */
 const ZONE_MARGIN = '100%';
 
-/** One `prefers-reduced-motion` query per window, shared by its instances (each listens itself). */
-const reducedMotionQueries = new WeakMap<Window, MediaQueryList>();
-
-function reducedMotionQuery(win: Window): MediaQueryList {
-  let mql = reducedMotionQueries.get(win);
-  if (!mql) {
-    mql = win.matchMedia('(prefers-reduced-motion: reduce)');
-    reducedMotionQueries.set(win, mql);
-  }
-  return mql;
-}
-
 function isPriority(v: unknown): v is InstancePriority {
   return v === 'high' || v === 'normal' || v === 'low';
 }
 
-function isRenderer(v: unknown): v is InstanceRenderer {
-  return v === 'own' || v === 'shared';
-}
+/** Instances in 'auto' mode: they re-evaluate when LumiCells.configure() changes promoteArea. */
+const autoInstances = new Set<LumiCells>();
 
 /** Config changes of one source, coalesced until the next flush (frame or microtask). */
 interface ConfigBatch {
@@ -149,11 +153,17 @@ interface ConfigBatch {
 export class LumiCells {
   /**
    * Page-wide settings shared by every instance: the WebGL context budget, parking of offscreen
-   * instances and the engine creation rate (see ConfigureOptions). Applies to existing instances
-   * too; safe to call before any instance exists and on the server.
+   * instances, the engine creation rate, the shared atlas budget, the default renderer and the
+   * `auto` promotion threshold (see ConfigureOptions). Applies to existing instances too, except
+   * `renderer` (the default of instances created afterwards); safe to call before any instance
+   * exists and on the server.
    */
   static configure(options: ConfigureOptions): void {
+    const area = runtimeSettings().promoteArea;
     configureRuntime(options);
+    if (runtimeSettings().promoteArea !== area) {
+      for (const inst of Array.from(autoInstances)) inst.#autoCheck();
+    }
   }
 
   /** Whether WebGL2 is available. Memoized; always false on the server. */
@@ -180,7 +190,44 @@ export class LumiCells {
   #engine: Engine | null = null;
   /** Context alpha attribute of the current canvas (null before the first engine). */
   #engineOpaque: boolean | null = null;
+  /** The renderer asked for ('auto' picks #renderer, see the header). */
+  #mode: RendererMode;
+  /** The renderer used, or asked for (the actual one, `Stats.renderer`). */
   #renderer: InstanceRenderer;
+  /** 'auto' made its first choice (the first one emits no 'renderer' event). */
+  #decided = false;
+  /**
+   * The renderer listeners last heard of (`renderer` event; the first choice counts as heard).
+   * An 'auto' re-choice made while the instance holds nothing is announced only once the new
+   * renderer serves it, so a request the budget turns down is never reported.
+   */
+  #announced: InstanceRenderer;
+  /** 'auto' on the shared renderer: queued in the scheduler for a context of its own. */
+  #standby = false;
+  /** 'auto': a size demotion waits for the next drawn frame (see #render). */
+  #demoteDue = false;
+  readonly #dwell = new AutoDwell();
+  #autoTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  #unwatchViewport: (() => void) | null = null;
+  readonly #autoSize: AutoSize = {
+    cssW: 0,
+    cssH: 0,
+    overflow: 0,
+    dpr: 1,
+    maxPixels: 0,
+    viewportW: 0,
+    viewportH: 0,
+  };
+  /** Host border box, CSS px, as the observers last reported it (see #noteHostSize). */
+  #hostW = 0;
+  #hostH = 0;
+  #hostSized = false;
+  /** The host size comes from the ResizeObserver (preferred over intersection rects). */
+  #hostFromRo = false;
+  /** Timestamp of the frame the own engine last drew (a stand-in copy is valid only then). */
+  #drawnAt = Number.NaN;
+  /** Pixel cap of the device (coarse pointer, software GL), megapixels. */
+  #pixelCap = Number.POSITIVE_INFINITY;
   readonly #sharedClient: SharedClient;
   /** Seat on the shared renderer ('shared' only); its slot is null while the context is lost. */
   #seat: SharedSeat | null = null;
@@ -274,6 +321,8 @@ export class LumiCells {
   #restoreTimer: ReturnType<typeof setTimeout> | 0 = 0;
   #energy: ControllerModulator | null = null;
   #reducedMql: MediaQueryList | null = null;
+  /** Page-wide visibility and reduced-motion subscriptions (see dom/environment). */
+  #unwatchEnv: (() => void)[] = [];
   readonly #origin = [Number.NaN, Number.NaN];
   readonly #frameEvent = { time: 0, dt: 0 };
   readonly #tick = {
@@ -298,6 +347,7 @@ export class LumiCells {
     softwareFallback: false,
     state: 'pending',
     renderer: 'own',
+    rendererMode: 'auto',
     presentMs: null,
     shared: null,
   };
@@ -305,8 +355,12 @@ export class LumiCells {
   constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
     this.host = host;
     this.#priority = isPriority(options.priority) ? options.priority : 'normal';
-    this.#renderer = options.renderer === 'shared' ? 'shared' : 'own';
+    const mode = isRendererMode(options.renderer) ? options.renderer : runtimeSettings().renderer;
+    this.#mode = mode;
+    this.#renderer = mode === 'own' ? 'own' : 'shared';
+    this.#announced = this.#renderer;
     this.#stats.renderer = this.#renderer;
+    this.#stats.rendererMode = mode;
     const self = this;
     this.#client = {
       order: ++instanceSeq,
@@ -327,8 +381,11 @@ export class LumiCells {
       get lastVisible() {
         return self.#lastVisible;
       },
+      get flexible() {
+        return self.#mode === 'auto';
+      },
       granted: () => this.#onGranted(),
-      evicted: () => this.#park(true),
+      evicted: () => this.#onEvicted(),
       refused: () => this.#onRefused(),
       refreshArea: () => this.#refreshArea(),
       settingsChanged: () => this.#onSettingsChanged(),
@@ -390,15 +447,19 @@ export class LumiCells {
     const signal = this.#ctl.signal;
     this.#view = new HostView(host, signal);
     this.#view.onChange = () => this.#tracker.markAllDirty();
-    // Another display may have another refresh rate: re-learn it.
-    this.#view.onDprChange = () => this.#controller.perf.resetVsync();
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    // Another display may have another refresh rate (and another DPR: another canvas size).
+    this.#view.onDprChange = () => {
+      this.#controller.perf.resetVsync();
+      this.#autoCheck();
+    };
+    this.#view.showPoster(this.#controller.poster);
     this.#tracker = new ElementTracker(this.#controller.influences, signal);
     this.#pointer = new PointerInteraction(host, this.#controller, signal);
     this.#pointer.configure(this.#controller.getConfig().interaction);
     this.#coarse = this.#view.coarsePointer;
     this.#applyPixelCap();
     this.#watchEnvironment();
+    this.#trackAuto();
     if (options.autoStart !== false) this.start();
   }
 
@@ -411,34 +472,66 @@ export class LumiCells {
   }
 
   /**
-   * The canvas of this instance. With `renderer: 'own'` the WebGL canvas (a new element per
+   * The canvas of this instance. On the own renderer the WebGL canvas (a new element per
    * engine), null until the instance owns a WebGL context (see `getStats().state`) and while it
-   * is parked. With `renderer: 'shared'` the 2D canvas the shared renderer copies into, null
-   * until the instance first gets its slot; while parked it stays in the host at 0x0. Null after
-   * destroy.
+   * is parked. On the shared renderer the 2D canvas the shared renderer copies into, null until
+   * the instance first gets its slot; while parked it stays in the host at 0x0. A renderer switch
+   * gives it a new canvas. Null after destroy.
    */
   get canvas(): HTMLCanvasElement | null {
     return this.#view.canvas;
   }
 
-  /** The renderer this instance uses (see `LumiCellsOptions.renderer`). */
+  /**
+   * The renderer this instance uses, or is about to use (`Stats.renderer`). With
+   * `renderer: 'auto'` it changes over time (see the `renderer` event).
+   */
   get renderer(): InstanceRenderer {
     return this.#renderer;
   }
 
+  /** The renderer this instance asks for (`LumiCellsOptions.renderer`, `setRenderer()`). */
+  get rendererMode(): RendererMode {
+    return this.#mode;
+  }
+
   /**
-   * Switches between a WebGL context of its own and the page's shared renderer. The current GPU
-   * side is released and the instance asks the other renderer (the poster shows in between,
-   * usually for a frame or two); config, time and runtime layers are kept, the Life automaton
-   * reseeds.
+   * Changes the renderer the instance asks for. `'own'` or `'shared'` other than the current one
+   * switches now: the current GPU side is released and the instance asks the other renderer (the
+   * poster shows in between, usually for a frame or two); config, time and runtime layers are
+   * kept, the Life automaton reseeds. `'auto'` keeps the current renderer and lets the policy
+   * take over from there (a switch waits the usual dwell). Emits `renderer` when the renderer
+   * changes.
    */
-  setRenderer(renderer: InstanceRenderer): void {
-    if (this.#destroyed || !isRenderer(renderer) || renderer === this.#renderer) return;
-    this.#dropGpu();
-    this.#renderer = renderer;
+  setRenderer(mode: RendererMode): void {
+    if (this.#destroyed || !isRendererMode(mode) || mode === this.#mode) return;
+    this.#mode = mode;
+    this.#trackAuto();
+    if (mode === 'auto') {
+      // A flexible budget member from now on (a waiting request draws shared at the next pass).
+      this.#decided = true;
+      this.#dwell.switched(performance.now());
+      rankChanged();
+      this.#publishState();
+      this.#autoCheck();
+      return;
+    }
+    this.#clearAutoTimer();
+    this.#setStandby(false);
+    if (mode === this.#renderer) {
+      // Same renderer, no longer flexible: a refused request now waits instead.
+      rankChanged();
+      this.#publishState();
+      // An 'auto' re-choice not announced yet (see #announced) is now an explicit one.
+      this.#announce('explicit');
+      return;
+    }
+    this.#dropGpu(false);
+    this.#renderer = mode;
     this.#parked = false;
     this.#updateSubscription();
     this.#syncGpu();
+    this.#noteSwitch('explicit');
   }
 
   /** Priority for the page's WebGL context budget. */
@@ -642,11 +735,20 @@ export class LumiCells {
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
     this.#clearParkTimer();
+    this.#clearAutoTimer();
     this.#cancelRequest();
+    this.#setStandby(false);
+    this.#trackAuto();
     this.#unwatchSettings?.();
     this.#unwatchSettings = null;
-    // Every listener and observer was registered with this signal (or a per-canvas one).
+    // Every listener and observer was registered with this signal (or a per-canvas one), or is
+    // one of the page-wide subscriptions and observers below.
     this.#ctl.abort();
+    for (const off of this.#unwatchEnv) off();
+    this.#unwatchEnv.length = 0;
+    this.#io?.disconnect();
+    this.#zoneIo?.disconnect();
+    this.#areaRo?.disconnect();
     this.#releaseCanvas();
     this.#io = null;
     this.#zoneIo = null;
@@ -692,7 +794,13 @@ export class LumiCells {
   #ensureEngine(): void {
     if (this.#engine || this.#failed || this.#lost || this.#destroyed) return;
     const cfg = this.#controller.getConfig();
-    const canvas = this.#view.canvas ?? this.#view.mount(cfg.render.overflow);
+    // A canvas the shared renderer copied into (#targetAlpha set) has a 2D context: it can never
+    // get a WebGL one, so the engine gets a new canvas.
+    let canvas = this.#targetAlpha === null ? this.#view.canvas : null;
+    if (!canvas) {
+      canvas = this.#view.mount(cfg.render.overflow);
+      this.#targetAlpha = null;
+    }
     const layout = this.#controller.layout;
     let engine: Engine;
     try {
@@ -772,9 +880,10 @@ export class LumiCells {
   #dropFailedCanvas(): void {
     this.#releaseCanvas();
     this.#view.unmount();
+    this.#view.dropStandIn();
     this.#targetAlpha = null;
     this.#drawnSinceMount = false;
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    this.#view.showPoster(this.#controller.poster);
   }
 
   #onEngineError(err: Error): void {
@@ -811,7 +920,7 @@ export class LumiCells {
     // A lost context's canvas paints a blank box over everything: hide it until the first frame
     // drawn on the restored context.
     this.#view.setCanvasVisible(false);
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    this.#view.showPoster(this.#controller.poster);
     this.#updateSubscription();
     this.#publishState();
     this.#emit('contextlost', undefined);
@@ -845,7 +954,8 @@ export class LumiCells {
     // wrapper) reachable from this instance.
     this.#releaseCanvas();
     this.#view.unmount();
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    this.#view.dropStandIn();
+    this.#view.showPoster(this.#controller.poster);
     if (this.#lost) this.#lostPending = true;
     this.#lost = false;
     this.#drawnSinceMount = false;
@@ -874,11 +984,23 @@ export class LumiCells {
     return this.#inZone || this.#inView;
   }
 
-  /** Asks the scheduler for a slot, or withdraws the request, as the wish changed. */
-  #syncGpu(): void {
+  /**
+   * Asks the scheduler (or the shared renderer) for a slot, or withdraws the request, as the wish
+   * changed. An 'auto' instance picks its renderer right before asking (see #chooseAuto), unless
+   * `choose` is false: the caller has just picked it (a budget fallback must not be undone).
+   * Its first choice waits for the observers' first size report (#awaitsSize): the request goes
+   * out from there, so the constructor never reads layout. Nothing is lost by waiting: both
+   * renderers serve requests at frame end, and the observers report right after the first frame.
+   */
+  #syncGpu(choose = true): void {
     if (!this.#holds && !this.#destroyed) {
       if (this.#wantsContext()) {
-        if (!this.#requested) {
+        if (!this.#requested && !(choose && this.#mode === 'auto' && this.#awaitsSize())) {
+          if (this.#mode === 'auto') {
+            // A fresh request replaces a standby one.
+            this.#setStandby(false);
+            if (choose) this.#chooseAuto();
+          }
           this.#requested = true;
           if (this.#renderer === 'shared') getSharedRenderer().request(this.#sharedClient);
           else requestContext(this.#client);
@@ -891,8 +1013,28 @@ export class LumiCells {
     this.#publishState();
   }
 
-  /** The scheduler granted a slot: build the engine (same path as a context restore). */
+  /**
+   * The scheduler granted a slot: build the engine (same path as a context restore). A standby
+   * 'auto' instance (on the shared renderer, waiting for a context of its own) is promoted.
+   */
   #onGranted(): void {
+    if (this.#standby) {
+      this.#standby = false;
+      const want =
+        !this.#destroyed &&
+        this.#mode === 'auto' &&
+        this.#renderer === 'shared' &&
+        this.#wantsContext() &&
+        autoWants(this.#dwell.score, 'own') === 'own';
+      if (!want) {
+        // Stale (it left the zone or shrank meanwhile): the slot goes straight back.
+        releaseContext(this.#client);
+        this.#publishState();
+        return;
+      }
+      this.#autoSwitch('own', 'promote', true);
+      return;
+    }
     this.#requested = false;
     this.#waiting = false;
     this.#budgetReported = false;
@@ -905,6 +1047,8 @@ export class LumiCells {
     this.#parked = false;
     this.#ensureEngine();
     if (!this.#engine) this.#releaseSlot();
+    // An 'auto' re-choice of 'own' (back from parking, larger) is reported now that it holds one.
+    else this.#announce('promote');
     this.#updateSubscription();
     this.#armParkTimer();
     this.#publishState();
@@ -918,6 +1062,14 @@ export class LumiCells {
    */
   #onRefused(): void {
     if (this.#destroyed) return;
+    if (this.#mode === 'auto') {
+      // Flexible: never waits. A standby candidate stays queued for the next free slot; a first
+      // request for a context of its own draws on the shared renderer instead.
+      if (!this.#standby && this.#requested && !this.#holds && this.#renderer === 'own') {
+        this.#autoSwitch('shared', 'budget');
+      }
+      return;
+    }
     if (!this.#waiting) {
       this.#waiting = true;
       this.#publishState();
@@ -963,6 +1115,7 @@ export class LumiCells {
     if (evicted) this.#holds = false;
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
+    this.#demoteDue = false;
     if (this.#seat) {
       // Shared: the seat (slot and region) goes back; the 2D canvas stays in the host, emptied.
       this.#releaseSlot();
@@ -973,7 +1126,8 @@ export class LumiCells {
       this.#disposeEngine();
       this.#view.unmount();
     }
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    this.#view.dropStandIn();
+    this.#view.showPoster(this.#controller.poster);
     // A lost context is dropped here, not restored: the rebuild on the next grant ends the loss.
     if (this.#lost) this.#lostPending = true;
     this.#lost = false;
@@ -1002,22 +1156,32 @@ export class LumiCells {
     if (!seat) releaseContext(this.#client);
   }
 
-  /** Withdraws a request that was not served yet (from whichever renderer it went to). */
+  /**
+   * Withdraws a request that was not served yet (from whichever renderer it went to). A standby
+   * request for a context of its own is not this request: see #setStandby.
+   */
   #cancelRequest(): void {
     if (!this.#requested) return;
     // The wait (if any) ends here: a later one is reported anew.
     this.#requested = false;
     this.#waiting = false;
     this.#budgetReported = false;
-    cancelRequest(this.#client);
+    if (!this.#standby) cancelRequest(this.#client);
     peekSharedRenderer()?.cancel(this.#sharedClient);
   }
 
-  /** Releases whatever GPU side the instance has or asks for (renderer switch). */
-  #dropGpu(): void {
+  /**
+   * Releases whatever GPU side the instance has or asks for (renderer switch). `holdFrame`: keep
+   * the current frame on screen until the next renderer draws (see HostView.holdCanvas/holdCopy).
+   */
+  #dropGpu(holdFrame: boolean): void {
     if (this.#restoreTimer) clearTimeout(this.#restoreTimer);
     this.#restoreTimer = 0;
     this.#cancelRequest();
+    this.#setStandby(false);
+    this.#demoteDue = false;
+    if (holdFrame) this.#holdFrame();
+    else this.#view.dropStandIn();
     this.#releaseCanvas();
     this.#disposeEngine();
     this.#releaseSlot();
@@ -1026,10 +1190,262 @@ export class LumiCells {
     this.#engineOpaque = null;
     // The shared budget's resolution factor belongs to the shared renderer (a new seat sets it).
     this.#controller.setShareScale(1);
-    this.#view.showPoster(posterCss(this.#controller.getConfig()));
+    this.#view.showPoster(this.#controller.poster);
     if (this.#lost) this.#lostPending = true;
     this.#lost = false;
     this.#drawnSinceMount = false;
+  }
+
+  /**
+   * Keeps the frame on screen through a switch: the shared 2D canvas itself, or a 2D copy of the
+   * WebGL canvas when its engine drew in the frame running now (its drawing buffer still holds
+   * that frame; later it may be cleared). Otherwise the poster covers the switch.
+   */
+  #holdFrame(): void {
+    if (!this.#drawnSinceMount || this.#lost || !this.#view.canvas) return;
+    if (this.#seat) this.#view.holdCanvas();
+    else if (this.#engine && this.#drawnAt === frameNow()) this.#view.holdCopy();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // renderer: 'auto'
+
+  /** Joins or leaves the page's 'auto' instances (configure() and viewport watchers). */
+  #trackAuto(): void {
+    const on = this.#mode === 'auto' && !this.#destroyed;
+    if (on === autoInstances.has(this)) return;
+    if (on) {
+      autoInstances.add(this);
+      const win = this.host.ownerDocument.defaultView;
+      if (win) this.#unwatchViewport = watchViewport(win, () => this.#autoCheck());
+    } else {
+      autoInstances.delete(this);
+      this.#unwatchViewport?.();
+      this.#unwatchViewport = null;
+      this.#clearAutoTimer();
+    }
+    this.#watchArea();
+  }
+
+  /** Host size from an observer: the ResizeObserver's border box wins over intersection rects. */
+  #noteHostSize(w: number, h: number, fromRo: boolean): void {
+    if (!fromRo && this.#hostFromRo) return;
+    this.#hostW = w > 0 ? w : 0;
+    this.#hostH = h > 0 ? h : 0;
+    this.#hostSized = true;
+  }
+
+  /**
+   * The host size is unknown yet, and an IntersectionObserver will report it (its first report
+   * comes right after the first frame, then #onPlacement asks and re-checks). Until then an
+   * 'auto' instance neither chooses nor asks: a synchronous size read here would force layout
+   * inside the mount task, once per instance.
+   */
+  #awaitsSize(): boolean {
+    return !this.#hostSized && (this.#io !== null || this.#zoneIo !== null);
+  }
+
+  /** How large the instance is for the 'auto' policy (1 = at the promotion threshold). */
+  #autoScore(): number {
+    const win = this.host.ownerDocument.defaultView;
+    if (!win) return 0;
+    if (!this.#hostSized) {
+      // No observer reports sizes (no IntersectionObserver): read the size once.
+      const r = this.host.getBoundingClientRect();
+      this.#noteHostSize(r.width, r.height, false);
+    }
+    const cfg = this.#controller.getConfig().render;
+    const vp = viewportSize(win);
+    const a = this.#autoSize;
+    a.cssW = this.#hostW;
+    a.cssH = this.#hostH;
+    a.overflow = cfg.overflow;
+    a.dpr = Math.min(win.devicePixelRatio || 1, cfg.maxDpr);
+    a.maxPixels = Math.min(cfg.maxPixels, this.#pixelCap) * 1e6;
+    a.viewportW = vp.w;
+    a.viewportH = vp.h;
+    return autoScore(a, runtimeSettings().promoteArea * 1e6);
+  }
+
+  /**
+   * 'auto', about to ask for a GPU side: picks the renderer for the current size (with hysteresis
+   * around the current one, no dwell: nothing is drawn yet). The instance holds and asks for
+   * nothing here. The first choice emits no event; a later one (back from parking) is announced
+   * once the new renderer serves it (#onGranted, #onSeat), and not at all when the budget turns
+   * the request down and the instance falls back to the renderer it had (#onRefused).
+   */
+  #chooseAuto(): void {
+    const score = this.#autoScore();
+    this.#dwell.note(score, performance.now());
+    const next = autoWants(score, this.#renderer);
+    const first = !this.#decided;
+    this.#decided = true;
+    if (next === this.#renderer) return;
+    this.#dropLeftovers();
+    this.#renderer = next;
+    if (first) this.#announced = next;
+    this.#dwell.switched(performance.now());
+    this.#publishState();
+  }
+
+  /**
+   * What a renderer switch leaves behind while the instance holds nothing (see #dropGpu): a
+   * parked shared instance keeps its emptied 2D canvas in the host (and a canvas with a 2D
+   * context never gets a WebGL one), and the shared budget's resolution factor belongs to the
+   * shared renderer.
+   */
+  #dropLeftovers(): void {
+    if (this.#view.canvas) {
+      this.#releaseCanvas();
+      this.#view.dropStandIn();
+      this.#view.unmount();
+    }
+    this.#targetAlpha = null;
+    this.#engineOpaque = null;
+    this.#controller.setShareScale(1);
+  }
+
+  /**
+   * 'auto': re-evaluates the renderer the size asks for (host, viewport, DPR or config changed,
+   * placement changed, or the dwell timer fired) and switches, or schedules the switch, when the
+   * size has held still long enough. Promotion goes through the scheduler (standby request).
+   */
+  #autoCheck(): void {
+    if (this.#mode !== 'auto' || this.#destroyed || this.#awaitsSize()) return;
+    const now = performance.now();
+    const score = this.#autoScore();
+    this.#dwell.note(score, now);
+    if (!this.#running || this.#failed || this.#noWebgl || !this.#wantsContext()) {
+      // Out of the zone or stopped: nothing to switch now, the next request chooses again.
+      this.#setStandby(false);
+      this.#clearAutoTimer();
+      return;
+    }
+    // A standby request leans own: it leaves only below the demotion ratio.
+    const leaning: InstanceRenderer = this.#standby ? 'own' : this.#renderer;
+    const want = autoWants(score, leaning);
+    if (want === leaning) {
+      this.#clearAutoTimer();
+      return;
+    }
+    if (this.#standby) {
+      // Shrank while waiting for a context of its own: nothing on screen changes.
+      this.#setStandby(false);
+      this.#clearAutoTimer();
+      return;
+    }
+    if (!this.#holds && this.#renderer === 'own') {
+      // Asked for a context of its own, not served yet, and now too small: nothing was drawn,
+      // ask the shared renderer right away.
+      if (this.#requested) {
+        this.#cancelRequest();
+        this.#syncGpu();
+      }
+      this.#clearAutoTimer();
+      return;
+    }
+    // Shared (drawing or about to) and now large enough: standby after the dwell. This also
+    // holds after a budget fallback, which must not turn into a request per frame.
+    const due = this.#dwell.dueAt();
+    if (now < due) {
+      this.#armAutoTimer(due - now);
+      return;
+    }
+    this.#clearAutoTimer();
+    if (this.#renderer === 'shared') {
+      // Promotion: queue for a context of its own; the grant switches (see #onGranted).
+      this.#setStandby(true);
+    } else if (this.#unsub && this.#engine && !this.#lost) {
+      // Demotion of a drawing instance: right after its next frame, so that frame can be held.
+      this.#demoteDue = true;
+    } else {
+      this.#autoSwitch('shared', 'demote');
+    }
+  }
+
+  /** Re-arms the dwell timer (bound once: a drag re-arms it on every resize report). */
+  #armAutoTimer(ms: number): void {
+    if (this.#autoTimer) clearTimeout(this.#autoTimer);
+    this.#autoTimer = setTimeout(this.#onAutoTimer, Math.max(0, Math.ceil(ms)));
+  }
+
+  readonly #onAutoTimer = (): void => {
+    this.#autoTimer = 0;
+    this.#autoCheck();
+  };
+
+  #clearAutoTimer(): void {
+    if (this.#autoTimer) clearTimeout(this.#autoTimer);
+    this.#autoTimer = 0;
+    this.#demoteDue = false;
+  }
+
+  /** Queues (or withdraws) a standby request for a context of its own (see #onGranted). */
+  #setStandby(on: boolean): void {
+    if (on === this.#standby) return;
+    this.#standby = on;
+    if (on) requestContext(this.#client);
+    else cancelRequest(this.#client);
+    this.#watchArea();
+  }
+
+  /**
+   * Switches an 'auto' instance to `next`, keeping the last frame on screen until the new
+   * renderer draws. `granted`: to own, on the slot the scheduler just granted.
+   */
+  #autoSwitch(next: InstanceRenderer, reason: RendererChangeReason, granted = false): void {
+    this.#dropGpu(true);
+    this.#renderer = next;
+    this.#parked = false;
+    if (granted) {
+      this.#holds = true;
+      this.#ensureEngine();
+      if (!this.#engine) this.#releaseSlot();
+    }
+    this.#updateSubscription();
+    this.#syncGpu(false);
+    this.#noteSwitch(reason);
+    this.#endPendingLoss();
+    // The next switch waits a dwell from now (a pending one re-arms its timer).
+    this.#autoCheck();
+  }
+
+  /** The renderer changed: the dwell restarts, stats follow, listeners hear it (deferred). */
+  #noteSwitch(reason: RendererChangeReason): void {
+    this.#decided = true;
+    this.#dwell.switched(performance.now());
+    this.#publishState();
+    this.#announce(reason);
+  }
+
+  /**
+   * Tells listeners about the current renderer when it differs from the one they last heard of
+   * (a fallback back to that one, e.g. shared to own refused to shared, reports nothing).
+   */
+  #announce(reason: RendererChangeReason): void {
+    const renderer = this.#renderer;
+    const previous = this.#announced;
+    if (renderer === previous) return;
+    this.#announced = renderer;
+    // Deferred: switches run inside scheduler passes and frame phases, listeners must not
+    // re-enter them.
+    queueMicrotask(() => {
+      if (!this.#destroyed) this.#emit('renderer', { renderer, previous, reason });
+    });
+  }
+
+  /**
+   * The scheduler gave this instance's slot to a higher ranked one (or lowered the budget). An
+   * 'auto' instance near the viewport moves to the shared renderer instead of waiting.
+   */
+  #onEvicted(): void {
+    if (this.#mode === 'auto' && this.#holds && !this.#seat && this.#wantsContext()) {
+      // The budget already took the slot back.
+      this.#holds = false;
+      this.#autoSwitch('shared', 'budget');
+      return;
+    }
+    this.#park(true);
   }
 
   /**
@@ -1076,6 +1492,8 @@ export class LumiCells {
     seat.setTarget(canvas, alpha);
     this.#applySharedCaps(seat);
     this.#controller.invalidateGpu();
+    // An 'auto' re-choice of 'shared' (back from parking, smaller) is reported now it has a seat.
+    this.#announce('demote');
     this.#updateSubscription();
     this.#syncIdle();
     this.#armParkTimer();
@@ -1095,8 +1513,9 @@ export class LumiCells {
     const idle = !this.#inZone && !this.#inView && !this.#alwaysOn();
     if (idle && !seat.idle) {
       this.#shrinkTarget();
+      this.#view.dropStandIn();
       this.#drawnSinceMount = false;
-      this.#view.showPoster(posterCss(this.#controller.getConfig()));
+      this.#view.showPoster(this.#controller.poster);
     }
     seat.setIdle(idle);
   }
@@ -1163,7 +1582,7 @@ export class LumiCells {
     this.#targetAlpha = alpha;
     this.#seat?.setTarget(canvas, alpha);
     this.#drawnSinceMount = false;
-    this.#view.showPoster(posterCss(cfg));
+    this.#view.showPoster(this.#controller.poster);
   }
 
   /** Parked while shared: the 2D canvas frees its memory (browsers cap it per page) and hides. */
@@ -1230,11 +1649,12 @@ export class LumiCells {
    * one (among visible instances the larger ranks higher), yet no intersection callback reports
    * a resize: a ResizeObserver on the host asks the scheduler to rank again when the area moves
    * to another bucket (a waiting card that grows, a holder that shrinks). The pass then reads
-   * every competitor's size afresh (#refreshArea); the observer is only the trigger.
+   * every competitor's size afresh (#refreshArea); the observer is only the trigger. An 'auto'
+   * instance with a GPU side (or asking for one) is watched too: its size picks its renderer.
    */
   #watchArea(): void {
-    // Only own contexts compete for budget slots by size.
-    const want = this.#renderer === 'own' && (this.#holds || this.#requested) && !this.#destroyed;
+    const active = this.#holds || this.#requested || this.#standby;
+    const want = active && !this.#destroyed && (this.#renderer === 'own' || this.#mode === 'auto');
     if (want === this.#areaWatched) return;
     const win = this.host.ownerDocument.defaultView;
     if (!win || typeof win.ResizeObserver !== 'function') return;
@@ -1245,6 +1665,8 @@ export class LumiCells {
       this.#areaRo.observe(this.host);
     } else {
       this.#areaRo?.unobserve(this.host);
+      // Unwatched sizes go stale: intersection rects report again until the next watch.
+      this.#hostFromRo = false;
     }
   }
 
@@ -1254,11 +1676,14 @@ export class LumiCells {
     const box = e.borderBoxSize?.[0];
     const w = box ? box.inlineSize : e.contentRect.width;
     const h = box ? box.blockSize : e.contentRect.height;
+    this.#hostFromRo = true;
+    this.#noteHostSize(w, h, true);
     const bucket = areaBucket(w > 0 && h > 0 ? w * h : 0);
     const was = this.#areaBucket;
     this.#areaBucket = bucket;
     // The first report only sets the baseline: the request was just ranked on fresh sizes.
     if (was >= 0 && bucket !== was) rankChanged();
+    if (this.#mode === 'auto') this.#autoCheck();
   }
 
   /** The host moved relative to the zones (observer callbacks). */
@@ -1266,6 +1691,7 @@ export class LumiCells {
     this.#syncGpu();
     this.#updateSubscription();
     this.#syncIdle();
+    if (this.#mode === 'auto') this.#autoCheck();
     // A visible waiter is reported only once the next pass (at frame end) still refuses it.
     rankChanged();
   }
@@ -1275,6 +1701,7 @@ export class LumiCells {
     const s = this.#stats;
     s.state = this.#computeState();
     s.renderer = this.#renderer;
+    s.rendererMode = this.#mode;
     if (this.#renderer === 'own') {
       s.presentMs = null;
       s.shared = null;
@@ -1355,6 +1782,10 @@ export class LumiCells {
       }
       this.#observeInView();
     }
+    if (render || overflow) {
+      // The canvas size (overflow, maxDpr, maxPixels) picks an 'auto' renderer.
+      if (this.#mode === 'auto') this.#autoCheck();
+    }
     if (render) {
       this.#applyReducedMotion();
       this.#syncGpu();
@@ -1364,7 +1795,7 @@ export class LumiCells {
       rankChanged();
     }
     if (interaction) this.#pointer.configure(cfg.interaction);
-    if (this.#view.posterVisible) this.#view.showPoster(posterCss(cfg));
+    if (this.#view.posterVisible) this.#view.showPoster(this.#controller.poster);
     if (!this.#unsub) this.#queueFlush();
   }
 
@@ -1471,12 +1902,18 @@ export class LumiCells {
     if (this.#engine !== engine) return;
     if (drawn) {
       c.commitFrame();
+      this.#drawnAt = now;
       if (!this.#drawnSinceMount) {
         noteFirstDraw(now);
         this.#showFirstFrame();
       }
     }
     this.#finishFrame(performance.now() - t0, dt, ideal, now, engine.gpuTimeMs);
+    // 'auto' demotion (see #autoCheck): right after a drawn frame, which stays on screen.
+    if (this.#demoteDue && drawn && this.#drawnSinceMount) {
+      this.#demoteDue = false;
+      this.#autoSwitch('shared', 'demote');
+    }
   }
 
   /** The shared renderer drew (and copied) the frame this instance submitted, or could not. */
@@ -1502,6 +1939,7 @@ export class LumiCells {
   #showFirstFrame(): void {
     this.#drawnSinceMount = true;
     this.#view.setCanvasVisible(true);
+    this.#view.dropStandIn();
     this.#view.hidePoster();
     if (!this.#readyEmitted) {
       this.#readyEmitted = true;
@@ -1590,6 +2028,7 @@ export class LumiCells {
     let cap = Number.POSITIVE_INFINITY;
     if (this.#coarse) cap = COARSE_MAX_PIXELS;
     if (this.#software) cap = Math.min(cap, SOFTWARE_MAX_PIXELS);
+    this.#pixelCap = cap;
     this.#controller.setPixelCap(cap);
   }
 
@@ -1599,37 +2038,25 @@ export class LumiCells {
   }
 
   #watchEnvironment(): void {
-    const signal = this.#ctl.signal;
     const doc = this.host.ownerDocument;
     const win = doc.defaultView;
     if (!win) return;
     this.#hidden = doc.visibilityState === 'hidden';
-    doc.addEventListener(
-      'visibilitychange',
-      () => {
+    this.#unwatchEnv.push(
+      watchVisibility(doc, () => {
         const wasHidden = this.#hidden;
         this.#hidden = doc.visibilityState === 'hidden';
         // OS power modes (low-power, energy saver) and displays may have changed meanwhile:
         // re-learn the refresh rate instead of trusting the sticky estimate.
         if (wasHidden && !this.#hidden) this.#controller.perf.resetVsync();
         this.#updateSubscription();
-      },
-      { signal },
+      }),
     );
     if (typeof win.matchMedia === 'function') {
       this.#reducedMql = reducedMotionQuery(win);
-      this.#reducedMql.addEventListener('change', () => this.#applyReducedMotion(), { signal });
+      this.#unwatchEnv.push(watchReducedMotion(win, () => this.#applyReducedMotion()));
       this.#applyReducedMotion();
     }
-    signal.addEventListener(
-      'abort',
-      () => {
-        this.#io?.disconnect();
-        this.#zoneIo?.disconnect();
-        this.#areaRo?.disconnect();
-      },
-      { once: true },
-    );
     if (typeof win.IntersectionObserver === 'function') {
       // Unknown until the observers report (right after the first frame): nothing is created
       // before that, so a page that mounts many instances off screen creates no context.
@@ -1651,6 +2078,8 @@ export class LumiCells {
         const e = entries[entries.length - 1];
         if (!e) return;
         this.#inZone = e.isIntersecting;
+        const r = e.boundingClientRect;
+        if (r) this.#noteHostSize(r.width, r.height, false);
         this.#onPlacement();
       },
       ZONE_MARGIN,
@@ -1678,6 +2107,8 @@ export class LumiCells {
         if (io !== this.#io || this.#destroyed) return;
         const e = entries[entries.length - 1];
         if (!e) return;
+        const r = e.boundingClientRect;
+        if (r) this.#noteHostSize(r.width, r.height, false);
         const was = this.#inView;
         this.#inView = e.isIntersecting;
         if (was && !this.#inView) this.#lastVisible = performance.now();

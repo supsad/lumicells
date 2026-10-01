@@ -29,6 +29,8 @@ const subscribers = new Set<TickSubscriber>();
 const befores = new Set<BeforeCallback>();
 const ends = new Set<BeforeCallback>();
 let rafId = 0;
+/** Timestamp of the frame being run, NaN outside of it. */
+let current = Number.NaN;
 
 function busy(): boolean {
   return subscribers.size > 0 || befores.size > 0 || ends.size > 0;
@@ -37,6 +39,7 @@ function busy(): boolean {
 // One broken subscriber must not stop the others: every call is guarded on its own.
 function frame(now: number): void {
   rafId = busy() ? requestAnimationFrame(frame) : 0;
+  current = now;
   for (const cb of befores) {
     try {
       cb(now);
@@ -72,6 +75,16 @@ function frame(now: number): void {
       console.error(err);
     }
   }
+  current = Number.NaN;
+}
+
+/**
+ * Internal: the timestamp of the frame running right now (in any of its phases or frame-end
+ * callbacks), NaN outside of a frame. A WebGL canvas drawn in this frame still holds that frame
+ * until the task ends (the browser presents it afterwards), so it can be copied.
+ */
+export function frameNow(): number {
+  return current;
 }
 
 function ensureRunning(): void {

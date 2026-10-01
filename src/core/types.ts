@@ -18,11 +18,13 @@ export type ConfigSource = 'api' | 'stand' | 'attribute' | 'import' | 'preset';
  * `LumiCells.configure`). Among visible instances a higher priority keeps (or takes) a context
  * first; offscreen instances give theirs up before any visible one, whatever their priority.
  * An instance with `render.pauseOffscreen: false` draws wherever it is and ranks as visible.
+ * At equal priority an `own` instance ranks above an `auto` one (which has the shared renderer
+ * to go to), and an `auto` instance never takes the context of a visible `own` one.
  */
 export type InstancePriority = 'high' | 'normal' | 'low';
 
 /**
- * How an instance gets its pixels to the screen (`LumiCellsOptions.renderer`, `Stats.renderer`):
+ * How an instance gets its pixels to the screen (`Stats.renderer`, the `renderer` event):
  * - `own`    a WebGL context of its own on a canvas in the host: no copies, isolated from other
  *            instances' context losses, but it takes one slot of the page's context budget
  *            (`LumiCells.configure({ maxContexts })`);
@@ -35,10 +37,39 @@ export type InstancePriority = 'high' | 'normal' | 'low';
 export type InstanceRenderer = 'own' | 'shared';
 
 /**
+ * The renderer an instance asks for (`LumiCellsOptions.renderer`, `Stats.rendererMode`):
+ * - `auto`   (default) the instance picks one and keeps re-evaluating it: an instance whose canvas
+ *            covers at least `promoteArea` megapixels (device px) or a quarter of the viewport
+ *            gets a context of its own while the budget has room (a hero, a full-screen
+ *            background), everything else uses the shared renderer. When the budget is full it
+ *            uses the shared renderer instead of waiting, and takes a context of its own once one
+ *            frees up. Resizes switch it with hysteresis (own below 0.7x the threshold goes
+ *            shared, shared from 1x goes own) and only after the size has held still for about a
+ *            second, so dragging a resize handle never flips it back and forth. Among instances
+ *            that compete for contexts, `priority: 'high'` wins first, except that an `auto`
+ *            instance never takes the context of a visible `own` one (see InstancePriority): it
+ *            stays on the shared renderer instead. Use `own` with `priority: 'high'` to
+ *            guarantee a context;
+ * - `own`    always a context of its own; waits (poster) while the budget is full;
+ * - `shared` always the shared renderer.
+ */
+export type RendererMode = 'auto' | InstanceRenderer;
+
+/**
+ * Why the renderer of an instance changed (`renderer` event):
+ * - `promote`  `auto`: the instance is large enough for a context of its own and got one;
+ * - `demote`   `auto`: the instance became too small for a context of its own;
+ * - `budget`   `auto`: the context budget is full (or a higher ranked instance took the slot),
+ *              so the instance uses the shared renderer instead of waiting;
+ * - `explicit` `setRenderer()` (or a wrapper prop or attribute) asked for the other renderer.
+ */
+export type RendererChangeReason = 'promote' | 'demote' | 'budget' | 'explicit';
+
+/**
  * Lifecycle of an instance's GPU side (`Stats.state`):
  * - `pending`  no context yet: not started, not near the viewport yet, or queued for creation;
- * - `waiting`  near the viewport, but the context budget is full of instances that rank higher:
- *              the poster is shown until a context frees up;
+ * - `waiting`  (`renderer: 'own'`) near the viewport, but the context budget is full of
+ *              instances that rank higher: the poster is shown until a context frees up;
  * - `live`     owns a WebGL context, or a slot on the shared one (drawing, paused offscreen or
  *              compiling its first frame);
  * - `parked`   gave its context (or shared slot) back (off screen for `parkAfterMs`, or evicted
@@ -64,11 +95,14 @@ export type InstanceState =
  */
 export interface ConfigureOptions {
   /**
-   * Most WebGL contexts LumiCells may own at once on the page. `'auto'` (default): 4, or 2 on
-   * touch devices (`(pointer: coarse)`). Browsers keep about 16 contexts per page (fewer on
-   * phones) and kill the oldest one past that; staying well below leaves room for the app's own
-   * WebGL. Instances beyond the budget show their poster; offscreen ones give their context to
-   * visible ones first. Lowering it evicts the lowest ranked instances at once.
+   * Most WebGL contexts of their own LumiCells instances may hold at once on the page (the
+   * shared renderer's one context comes on top). `'auto'` (default): 4, or 2 on touch devices
+   * (`(pointer: coarse)`). Browsers keep about 16 contexts per page (fewer on phones) and kill
+   * the oldest one past that; staying well below leaves room for the app's own WebGL. When the
+   * budget is full, `renderer: 'auto'` instances use the shared renderer and `renderer: 'own'`
+   * ones show their poster until a context frees up; offscreen instances give their context to
+   * visible ones first. Lowering it evicts the lowest ranked instances at once (`auto` ones move
+   * to the shared renderer, `own` ones park).
    */
   maxContexts?: number | 'auto';
   /**
@@ -99,6 +133,18 @@ export interface ConfigureOptions {
    * quality lowers the resolution further on top of it.
    */
   sharedBudget?: number | 'auto';
+  /**
+   * Renderer of the instances created afterwards that do not ask for one (`renderer` option,
+   * React prop, `<lumi-cells renderer>`). Default `'auto'`. Existing instances keep theirs.
+   */
+  renderer?: RendererMode;
+  /**
+   * `renderer: 'auto'`: canvas size, in megapixels of device pixels (overflow margin included),
+   * from which an instance prefers a context of its own. Default 0.5. An instance covering at
+   * least a quarter of the viewport prefers one too, whatever its size. Existing `auto`
+   * instances re-evaluate against the new value (with the usual dwell).
+   */
+  promoteArea?: number;
 }
 
 export interface LumiCellsOptions {
@@ -116,12 +162,12 @@ export interface LumiCellsOptions {
   /** Priority for the page's context budget (default `'normal'`). */
   priority?: InstancePriority;
   /**
-   * `'own'` (default): a WebGL context of its own. `'shared'`: one WebGL context for every
-   * shared instance on the page, copied into a 2D canvas in the host (see InstanceRenderer).
-   * Use it for many small backgrounds (cards, list items); keep large ones on `'own'`.
-   * `setRenderer()` switches later.
+   * `'auto'` (the default, see `LumiCells.configure({ renderer })`): large instances get a WebGL
+   * context of their own while the budget has room, the others share one (see RendererMode).
+   * `'own'`: always a context of its own. `'shared'`: always the page's shared renderer, copied
+   * into a 2D canvas in the host (see InstanceRenderer). `setRenderer()` switches later.
    */
-  renderer?: InstanceRenderer;
+  renderer?: RendererMode;
 }
 
 export interface ConfigUpdateOptions {
@@ -324,8 +370,13 @@ export interface Stats {
   softwareFallback: boolean;
   /** GPU lifecycle state (always current, unlike the frame figures sampled about 4 times a second). */
   state: InstanceState;
-  /** Which renderer the instance uses (always current). */
+  /**
+   * The renderer the instance uses, or is about to use (always current). An `auto` instance
+   * reports `'shared'` until it first asks for a GPU side (near the viewport), where it picks one.
+   */
   renderer: InstanceRenderer;
+  /** The renderer the instance asks for (`renderer` option or `setRenderer()`). */
+  rendererMode: RendererMode;
   /**
    * Main-thread time of this instance's copy into its 2D canvas, with its share (by pixels) of
    * the copy series' snapshot, ms (null for `own`: no copy).
@@ -354,20 +405,35 @@ export interface LumiCellsEvents {
   quality: { scale: number; quality: QualityTier; reason: 'slow' | 'recovered' | 'locked' };
   /**
    * Non-fatal warnings. Codes include `software-webgl` (CPU rasterizer), `influence-overflow`
-   * (more influences than GPU slots) and `context-budget` (once per page: a visible instance
-   * waits because the WebGL context budget is full, see `LumiCells.configure`).
+   * (more influences than GPU slots) and `context-budget` (once per page: a visible
+   * `renderer: 'own'` instance waits because the WebGL context budget is full, see
+   * `LumiCells.configure`).
    */
   warn: { code: string; message: string };
   error: Error;
   /**
    * The poster is shown instead of the animation. `no-webgl2` and `compile` are final;
-   * `context-lost` lasts until `contextrestored`; `budget` means a visible instance waits for a
-   * WebGL context because the page budget (`LumiCells.configure({ maxContexts })`) is full of
-   * instances that rank higher (an instance with `render.pauseOffscreen: false` counts as
-   * visible): it starts drawing (with 'ready' if it never drew before) as soon as a context frees
-   * up.
+   * `context-lost` lasts until `contextrestored`; `budget` means a visible `renderer: 'own'`
+   * instance waits for a WebGL context because the page budget
+   * (`LumiCells.configure({ maxContexts })`) is full of instances that rank higher (an instance
+   * with `render.pauseOffscreen: false` counts as visible): it starts drawing (with 'ready' if it
+   * never drew before) as soon as a context frees up. `auto` instances never wait: they use the
+   * shared renderer instead (see the `renderer` event).
    */
   fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' | 'budget' };
+  /**
+   * The renderer changed (`Stats.renderer`): an `auto` instance was promoted, demoted or moved
+   * by the context budget, or `setRenderer()` asked for the other one. Not emitted for the first
+   * choice of an `auto` instance (nothing was drawn before it). An `auto` instance that picks
+   * again when it comes back from parking reports the switch once the new renderer serves it,
+   * and not at all when the budget refuses it a context and it stays on the renderer it had.
+   * The poster (or, for `auto`, the last frame) covers the switch until the new renderer draws.
+   */
+  renderer: {
+    renderer: InstanceRenderer;
+    previous: InstanceRenderer;
+    reason: RendererChangeReason;
+  };
   contextlost: undefined;
   contextrestored: undefined;
   destroy: undefined;

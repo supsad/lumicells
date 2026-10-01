@@ -15,10 +15,29 @@
  * - The canvas is hidden (visibility, so its size is still observed) until the owner has drawn a
  *   frame on it, and again while its context is lost: a canvas without a drawn frame shows
  *   nothing useful, and a lost context's canvas paints a blank box over the poster.
+ * - While the owner switches renderers it may keep the last frame on screen: the old canvas (a
+ *   2D canvas keeps its pixels) or a 2D copy of it (a WebGL canvas, copied in the task that drew
+ *   it) stays as a stand-in above the poster until dropStandIn().
+ * - The canvas is absolutely positioned against the host, so a static host is made `relative`.
+ *   The computed style is read for every host created in one task together, in a microtask
+ *   (reads first, then writes): reading it in each constructor would recalculate styles once per
+ *   instance when a list mounts.
  */
 
 /** `(pointer: coarse)` per window: read once, not once per instance. */
 const coarseByWindow = new WeakMap<Window, boolean>();
+
+/** Views created in this task whose host position is still to be checked (see the header). */
+let positionQueue: HostView[] = [];
+
+function flushPositions(): void {
+  const list = positionQueue;
+  positionQueue = [];
+  const statics: boolean[] = [];
+  // All reads first: one style recalculation for the whole batch.
+  for (const v of list) statics.push(v.readsStatic());
+  for (let i = 0; i < list.length; i++) if (statics[i]) (list[i] as HostView).makeRelative();
+}
 
 const BG_PROPS = [
   'background-image',
@@ -30,6 +49,9 @@ const BG_PROPS = [
   'background-clip',
   'background-color',
 ] as const;
+
+/** Saved background of a host that had no inline background (shared, read-only). */
+const NO_BG: readonly { v: string; p: string }[] = BG_PROPS.map(() => ({ v: '', p: '' }));
 
 export interface HostSize {
   /** Host padding box, CSS px. */
@@ -47,7 +69,7 @@ export class HostView {
   private ro: ResizeObserver | null = null;
   private mountCtl: AbortController | null = null;
   private savedPosition: string | null = null;
-  private savedBg: { v: string; p: string }[] | null = null;
+  private savedBg: readonly { v: string; p: string }[] | null = null;
   private posterCss = '';
   private pending = false;
   /** Mounted, but neither the observer nor a measure-phase read has reported a size yet. */
@@ -55,6 +77,10 @@ export class HostView {
   private everApplied = false;
   private lastApply = Number.NEGATIVE_INFINITY;
   private dprArmed = false;
+  /** The last frame kept on screen during a renderer switch (see the header). */
+  private standIn: HTMLCanvasElement | null = null;
+  /** The position check is queued (see flushPositions). */
+  private positionPending = false;
   private readonly size: HostSize = { hostCssW: 0, hostCssH: 0, deviceW: 0, deviceH: 0, dpr: 1 };
   /** Called when a new size is pending (so a paused owner can react). */
   onChange: (() => void) | null = null;
@@ -65,16 +91,37 @@ export class HostView {
     readonly host: HTMLElement,
     private readonly signal: AbortSignal,
   ) {
-    const win = host.ownerDocument.defaultView;
     // The canvas is absolutely positioned against the host. An inline non-static position needs
-    // no computed-style read (that read forces a style recalc when several instances mount in
-    // one task; the size read, which forces layout, is deferred to the measure phase).
+    // no computed-style read; otherwise it is read in a batch (see the header). The size read,
+    // which forces layout, is deferred to the measure phase.
     const inline = host.style.position;
-    const pos = inline && inline !== 'static' ? inline : win?.getComputedStyle(host).position;
-    if (win && (!pos || pos === 'static')) {
-      this.savedPosition = host.style.position;
-      host.style.position = 'relative';
+    if (host.ownerDocument.defaultView && !(inline && inline !== 'static')) {
+      this.positionPending = true;
+      if (positionQueue.length === 0) queueMicrotask(flushPositions);
+      positionQueue.push(this);
     }
+  }
+
+  /** The host is statically positioned (reads the computed style; see flushPositions). */
+  readsStatic(): boolean {
+    if (!this.positionPending || this.signal.aborted) return false;
+    const win = this.host.ownerDocument.defaultView;
+    const pos = win?.getComputedStyle(this.host).position;
+    return !pos || pos === 'static';
+  }
+
+  makeRelative(): void {
+    if (!this.positionPending || this.signal.aborted) return;
+    this.positionPending = false;
+    this.savedPosition = this.host.style.position;
+    this.host.style.position = 'relative';
+  }
+
+  /** A canvas is about to be inserted: the host must be positioned now, not in the batch. */
+  private ensurePositioned(): void {
+    if (!this.positionPending) return;
+    if (this.readsStatic()) this.makeRelative();
+    this.positionPending = false;
   }
 
   get dpr(): number {
@@ -96,6 +143,7 @@ export class HostView {
   /** Creates a fresh canvas with the given overflow margin (CSS px). */
   mount(overflow: number): HTMLCanvasElement {
     this.unmount();
+    this.ensurePositioned();
     const doc = this.host.ownerDocument;
     const canvas = doc.createElement('canvas');
     canvas.setAttribute('aria-hidden', 'true');
@@ -126,6 +174,61 @@ export class HostView {
     this.ro = null;
     this.canvas?.remove();
     this.canvas = null;
+  }
+
+  /**
+   * Keeps the current canvas on screen as it is (a 2D canvas keeps its pixels) as the stand-in
+   * until dropStandIn(), and forgets it: the next mount() creates a new canvas.
+   */
+  holdCanvas(): void {
+    const c = this.canvas;
+    if (!c) return;
+    this.dropStandIn();
+    this.needsInitialRead = false;
+    this.mountCtl?.abort();
+    this.mountCtl = null;
+    this.ro?.disconnect();
+    this.ro = null;
+    this.canvas = null;
+    this.standIn = c;
+  }
+
+  /**
+   * Keeps a 2D copy of the current canvas on screen as the stand-in until dropStandIn(). For a
+   * WebGL canvas, call it in the task that drew the frame (later its drawing buffer may be
+   * cleared). The canvas itself stays until unmount().
+   */
+  holdCopy(): void {
+    const c = this.canvas;
+    if (!c || c.width === 0 || c.height === 0) return;
+    this.dropStandIn();
+    const copy = this.host.ownerDocument.createElement('canvas');
+    copy.width = c.width;
+    copy.height = c.height;
+    let ctx: CanvasRenderingContext2D | null = null;
+    try {
+      ctx = copy.getContext('2d');
+      ctx?.drawImage(c, 0, 0);
+    } catch {
+      ctx = null;
+    }
+    if (!ctx) return;
+    copy.setAttribute('aria-hidden', 'true');
+    copy.dataset.lumicells = '';
+    copy.style.cssText = c.style.cssText;
+    this.host.insertBefore(copy, c);
+    this.standIn = copy;
+  }
+
+  /** Removes the stand-in (the new canvas shows its first frame, or the poster takes over). */
+  dropStandIn(): void {
+    const s = this.standIn;
+    if (!s) return;
+    this.standIn = null;
+    s.remove();
+    // Browsers cap the canvas memory of a page: free it now rather than at GC.
+    s.width = 0;
+    s.height = 0;
   }
 
   /** Shows the canvas once a frame is drawn on it; hides it while its context is lost. */
@@ -170,10 +273,15 @@ export class HostView {
   showPoster(css: string): void {
     const st = this.host.style;
     if (!this.savedBg) {
-      this.savedBg = BG_PROPS.map((p) => ({
-        v: st.getPropertyValue(p),
-        p: st.getPropertyPriority(p),
-      }));
+      // Nothing to read on a host without inline styles (the common case, and cheaper when a
+      // list of backgrounds mounts).
+      this.savedBg =
+        st.length === 0
+          ? NO_BG
+          : BG_PROPS.map((p) => ({
+              v: st.getPropertyValue(p),
+              p: st.getPropertyPriority(p),
+            }));
     }
     if (css === this.posterCss) return;
     this.posterCss = css;
@@ -200,6 +308,8 @@ export class HostView {
   /** Undo every host style change (destroy). */
   restore(): void {
     this.unmount();
+    this.dropStandIn();
+    this.positionPending = false;
     this.hidePoster();
     if (this.savedPosition !== null) {
       this.host.style.position = this.savedPosition;

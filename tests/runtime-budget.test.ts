@@ -10,6 +10,7 @@ import {
   ContextBudget,
   compareRank,
   DESKTOP_MAX_CONTEXTS,
+  mayEvict,
   outranks,
   resolveMaxContexts,
   sanitizeMaxContexts,
@@ -33,6 +34,7 @@ interface M extends BudgetMember {
   priority: BudgetMember['priority'];
   area: number;
   lastVisible: number;
+  flexible?: boolean;
 }
 
 function member(name: string, p: Partial<M> = {}): M {
@@ -189,6 +191,59 @@ describe('ContextBudget', () => {
     expect(outranks(member('vis', { area: 1 }), near('off', 5, { area: 1e6 }))).toBe(true);
   });
 
+  it('flexible members (auto) rank below inflexible ones of the same priority, above lower ones', () => {
+    const flex = member('flex', { flexible: true, area: 1e6 });
+    const own = member('own', { area: 10 });
+    // Flexibility decides before the area.
+    expect(compareRank(flex, own)).toBeLessThan(0);
+    expect(outranks(own, flex)).toBe(true);
+    // Priority decides before flexibility.
+    expect(
+      compareRank(member('flexHi', { flexible: true, priority: 'high' }), own),
+    ).toBeGreaterThan(0);
+    // Visibility still comes first.
+    expect(compareRank(near('ownNear', 5), flex)).toBeLessThan(0);
+  });
+
+  it('a flexible requester never takes the slot of a visible inflexible holder', () => {
+    const b = new ContextBudget<M>(1);
+    const own = member('own', { priority: 'low', area: 10 });
+    b.acquire(own);
+    const hero = member('hero', { flexible: true, priority: 'high', area: 1e6 });
+    expect(mayEvict(hero, own)).toBe(false);
+    expect(outranks(hero, own)).toBe(false);
+    expect(b.acquire(hero)).toBeNull();
+    // An offscreen inflexible holder gives its slot (it would park anyway).
+    const b2 = new ContextBudget<M>(1);
+    const off = near('off', 5);
+    b2.acquire(off);
+    expect(b2.acquire(hero)?.evicted).toBe(off);
+    // The victim search skips the holders it may not take: a flexible one is found behind them.
+    const b3 = new ContextBudget<M>(2);
+    const ownLow = member('ownLow', { priority: 'low', area: 10 });
+    const flexNormal = member('flexNormal', { flexible: true });
+    b3.acquire(ownLow);
+    b3.acquire(flexNormal);
+    expect(b3.victimFor(hero)).toBe(flexNormal);
+  });
+
+  it('flexible members of the same priority need a clearly larger area; higher priority wins', () => {
+    const b = new ContextBudget<M>(1);
+    const a = member('a', { flexible: true, area: 1e6 });
+    b.acquire(a);
+    expect(b.acquire(member('b', { flexible: true, area: 1.2e6 }))).toBeNull();
+    expect(b.acquire(member('hi', { flexible: true, priority: 'high', area: 1 }))?.evicted).toBe(a);
+  });
+
+  it('lowering the limit evicts flexible holders before inflexible ones of the same rank', () => {
+    const b = new ContextBudget<M>(2);
+    const own = member('own');
+    const flex = member('flex', { flexible: true });
+    b.acquire(own);
+    b.acquire(flex);
+    expect(b.setMax(1).map((m) => m.name)).toEqual(['flex']);
+  });
+
   it('setMax: lowering returns the lowest ranked holders, raising returns nothing', () => {
     const b = new ContextBudget<M>(3);
     const v = member('v');
@@ -306,6 +361,59 @@ describe('scheduler', () => {
     releaseContext(w1);
     frame();
     expect(w2.granted).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flexible refusal does not end the pass: an inflexible client ranked lower is served', () => {
+    configureRuntime({ maxContexts: 1, createPerFrame: 4 });
+    const holder = client('holder', { priority: 'low' });
+    requestContext(holder);
+    frame();
+    // The flexible one ranks first (high) but may not take a visible inflexible slot.
+    const flex = client('flex', { flexible: true, priority: 'high', area: 1e6 });
+    const own = client('own');
+    requestContext(flex);
+    requestContext(own);
+    frame();
+    expect(flex.refused).toHaveBeenCalledTimes(1);
+    expect(holder.evicted).toHaveBeenCalledTimes(1);
+    expect(own.granted).toHaveBeenCalledTimes(1);
+    // An inflexible refusal still refuses everyone ranked below it, flexible ones included.
+    const own2 = client('own2');
+    const flexLow = client('flexLow', { flexible: true, priority: 'low' });
+    requestContext(own2);
+    requestContext(flexLow);
+    frame();
+    expect(own2.refused).toHaveBeenCalledTimes(1);
+    expect(flexLow.refused).toHaveBeenCalledTimes(1);
+    expect(contextsInUse()).toBe(1);
+  });
+
+  it('a queued flexible client (standby) takes a slot as soon as one frees up', () => {
+    configureRuntime({ maxContexts: 1 });
+    const holder = client('holder');
+    requestContext(holder);
+    frame();
+    const standby = client('standby', { flexible: true });
+    requestContext(standby);
+    frame();
+    expect(standby.refused).toHaveBeenCalledTimes(1);
+    frame();
+    expect(rafQueue.length).toBe(0); // nothing to do until something changes
+    releaseContext(holder);
+    frame();
+    expect(standby.granted).toHaveBeenCalledTimes(1);
+  });
+
+  it('configure: renderer and promoteArea are validated', () => {
+    expect(runtimeSettings()).toMatchObject({ renderer: 'auto', promoteArea: 0.5 });
+    configureRuntime({ renderer: 'shared', promoteArea: 1.5 });
+    expect(runtimeSettings()).toMatchObject({ renderer: 'shared', promoteArea: 1.5 });
+    configureRuntime({ renderer: 'bogus' as never, promoteArea: -1 });
+    configureRuntime({ promoteArea: Number.NaN });
+    configureRuntime({ promoteArea: Number.POSITIVE_INFINITY });
+    expect(runtimeSettings()).toMatchObject({ renderer: 'shared', promoteArea: 1.5 });
+    configureRuntime({ renderer: 'own' });
+    expect(runtimeSettings().renderer).toBe('own');
   });
 
   it('equal ranks are served in creation order, whatever the request order', () => {

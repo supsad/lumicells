@@ -42,7 +42,6 @@ describe('LumiCells without WebGL2', () => {
     pl.on('fallback', (e) => seen.push(e));
     expect(pl.supported).toBe(false);
     expect(pl.canvas).toBeNull();
-    expect(el.style.position).toBe('relative');
     expect(String(spy.mock.calls[0]?.[0])).toContain('radial-gradient');
     // The poster follows config changes while it is visible.
     pl.set('background.color', '#ff0000');
@@ -50,7 +49,47 @@ describe('LumiCells without WebGL2', () => {
     spy.mockRestore();
     await tick();
     expect(seen).toEqual([{ reason: 'no-webgl2' }]);
+    // A static host is made relative in the microtask that checks every host created in the task.
+    expect(el.style.position).toBe('relative');
     pl.destroy();
+    expect(el.style.position).toBe('');
+  });
+
+  it('checks host positions in one batch: all reads before any write', async () => {
+    const cs = vi.spyOn(window, 'getComputedStyle');
+    const inline = host();
+    inline.style.position = 'absolute';
+    const list = [host(), host(), inline, host()].map((el) => new LumiCells(el));
+    // Nothing is read while the instances are created (each read would recalculate styles).
+    expect(cs).not.toHaveBeenCalled();
+    const order: string[] = [];
+    cs.mockImplementation(((el: Element) => {
+      // A write before a read would make the browser recalculate styles again.
+      const written = list.some((pl) => pl.host.style.position === 'relative');
+      order.push(written ? 'read after a write' : 'read');
+      return { position: (el as HTMLElement).style.position || 'static' } as CSSStyleDeclaration;
+    }) as typeof window.getComputedStyle);
+    await tick();
+    // Three static hosts read once each (the inline absolute one needs no read), then written.
+    expect(order).toEqual(['read', 'read', 'read']);
+    expect(list.map((pl) => pl.host.style.position)).toEqual([
+      'relative',
+      'relative',
+      'absolute',
+      'relative',
+    ]);
+    cs.mockRestore();
+    for (const pl of list) pl.destroy();
+    expect(inline.style.position).toBe('absolute');
+    expect(list[0]?.host.style.position).toBe('');
+  });
+
+  it('a host destroyed before the batch runs is left alone', async () => {
+    const el = host();
+    const pl = new LumiCells(el);
+    pl.destroy();
+    await tick();
+    expect(el.style.position).toBe('');
   });
 
   it('merges defaults < preset < config < interactive', () => {

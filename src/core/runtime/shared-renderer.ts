@@ -71,6 +71,7 @@ import {
   releaseSharedContext,
   reserveSharedContext,
   sharedBudgetPx,
+  withdrawContextClaim,
 } from './scheduler';
 
 /** Seats granted per frame (a slot is a few small GL objects; its targets come with its first draw). */
@@ -443,6 +444,8 @@ export class SharedRenderer {
   private unkick(): void {
     this.unhookServe?.();
     this.unhookServe = null;
+    // Nobody waits for the device any more: own engines get the creation allowance back.
+    withdrawContextClaim();
   }
 
   private serve(now: number): void {

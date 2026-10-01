@@ -14,13 +14,20 @@
  *
  * The shared renderer (runtime/shared-renderer) creates its one context through the same
  * per-frame allowance (claimContextCreation) and reserves it on top of the budget: own contexts
- * keep all `maxContexts` slots, the shared one is the +1 (reserveSharedContext).
+ * keep all `maxContexts` slots, the shared one is the +1 (reserveSharedContext). Once refused,
+ * it gets the next allowance before own engines: its one context serves every shared instance.
+ *
+ * `renderer: 'auto'` instances are flexible clients (see context-budget.ts): a refusal does not
+ * make them wait (they draw on the shared renderer and may stay queued as candidates for a slot
+ * that frees up later), so a pass goes on past a flexible refusal instead of refusing everyone
+ * ranked below it.
  *
  * Nothing runs at import: the budget is created on first use (SSR-safe).
  */
 
 import { onFrameEnd } from '../ticker';
-import type { ConfigureOptions } from '../types';
+import type { ConfigureOptions, RendererMode } from '../types';
+import { DEFAULT_PROMOTE_AREA } from './auto-renderer';
 import {
   type BudgetMember,
   ContextBudget,
@@ -38,9 +45,15 @@ export interface GpuClient extends BudgetMember {
   readonly order: number;
   /** A slot is granted: create the engine now (on failure, give the slot back at once). */
   granted(): void;
-  /** The slot was taken for a better ranked instance: release the GPU now (park). */
+  /**
+   * The slot was taken for a better ranked instance (or the limit was lowered): release the GPU
+   * now (park, or, flexible, move to the shared renderer).
+   */
   evicted(): void;
-  /** The budget refused the request: wait (poster) until served. Called again on retries. */
+  /**
+   * The budget refused the request: wait (poster) until served, or, flexible, draw on the shared
+   * renderer (staying queued or not). Called again on retries while queued.
+   */
   refused(): void;
   /**
    * Re-read `area` now: called right before members are ranked against each other (once per
@@ -58,6 +71,10 @@ export interface RuntimeSettings {
   createPerFrame: number;
   /** Pixel budget of the shared renderer's atlas, megapixels, or 'auto'. */
   sharedBudget: number | 'auto';
+  /** Renderer of new instances that do not ask for one. */
+  renderer: RendererMode;
+  /** `auto`: canvas megapixels from which an instance prefers a context of its own. */
+  promoteArea: number;
 }
 
 /**
@@ -71,6 +88,8 @@ const DEFAULTS: Readonly<RuntimeSettings> = {
   parkAfterMs: 10_000,
   createPerFrame: 1,
   sharedBudget: 'auto',
+  renderer: 'auto',
+  promoteArea: DEFAULT_PROMOTE_AREA,
 };
 
 /** Default shared atlas budget on desktop (fine pointer), megapixels. */
@@ -93,6 +112,11 @@ let ledgerAt = Number.NaN;
 let ledgerCount = 0;
 /** The shared renderer's device holds a context (counted on top of the budget). */
 let sharedReserved = false;
+/**
+ * The shared renderer was refused a context creation and still waits for its device: the next
+ * creation allowance goes to it (one device serves every shared instance) before own engines.
+ */
+let sharedClaim = false;
 /** `(pointer: coarse)`, read once for the shared budget. */
 let coarseMemo: boolean | undefined;
 /** Shared instances holding a seat: they follow `parkAfterMs` changes like budget holders. */
@@ -139,8 +163,11 @@ function refreshAreas(b: ContextBudget<GpuClient>): void {
 
 /**
  * One pass over the queue, best ranked first: grant free slots, evict lower ranked holders for
- * better ranked requesters, stop at `createPerFrame` creations. The first refusal ends the
- * pass: nobody ranked lower could be served either.
+ * better ranked requesters, stop creating at `createPerFrame` creations (flexible requests past
+ * that point that could never be served are refused right away). The first refusal of an
+ * inflexible client ends the pass: nobody ranked lower could be served either. A flexible client
+ * may take fewer slots than an inflexible one of lower rank (see mayEvict): its refusal ends
+ * nothing.
  */
 function serve(now: number): void {
   if (queue.size === 0) {
@@ -156,18 +183,31 @@ function serve(now: number): void {
   if (b.size + queue.size > b.max) refreshAreas(b);
   const list = Array.from(queue).sort((x, y) => compareRank(y, x) || x.order - y.order);
   const cap = settings.createPerFrame;
-  // The shared renderer may have created its context in this frame already.
-  let created = createdIn(now);
+  // The shared renderer may have created its context in this frame already, and one that is
+  // waiting for its device creates it before any own engine (see claimContextCreation).
+  let created = sharedClaim ? cap : createdIn(now);
   let capped = false;
+  /** Past the cap: better ranked requests still queued (free slots go to them first). */
+  let ahead = 0;
   for (let i = 0; i < list.length; i++) {
     const c = list[i] as GpuClient;
     if (!queue.has(c)) continue; // withdrawn by a callback earlier in this pass
     if (created >= cap) {
       capped = true;
-      break;
+      // Nothing more is created this frame, but a flexible request that could never get a slot
+      // (the free ones go to better ranked requests and no holder ranks clearly below it) is
+      // refused now: it draws on the shared renderer from the next frames instead of showing
+      // its poster until every better ranked request has been served. Inflexible ones wait.
+      if (c.flexible && b.size + ahead >= b.max && b.victimFor(c) === null) c.refused();
+      if (queue.has(c)) ahead++;
+      continue;
     }
     const r = b.acquire(c);
     if (!r) {
+      if (c.flexible) {
+        c.refused();
+        continue;
+      }
       for (let j = i; j < list.length; j++) {
         const w = list[j] as GpuClient;
         if (queue.has(w)) w.refused();
@@ -204,6 +244,11 @@ export function configureRuntime(opts: ConfigureOptions): void {
     const v = opts.sharedBudget === 'auto' ? 'auto' : Number(opts.sharedBudget);
     if (v === 'auto' || (Number.isFinite(v) && v > 0)) settings.sharedBudget = v;
   }
+  if (isRendererMode(opts.renderer)) settings.renderer = opts.renderer;
+  if (opts.promoteArea !== undefined) {
+    const v = Number(opts.promoteArea);
+    if (Number.isFinite(v) && v > 0) settings.promoteArea = v;
+  }
   if (opts.maxContexts !== undefined) {
     const v = opts.maxContexts === 'auto' ? 'auto' : sanitizeMaxContexts(opts.maxContexts);
     if (v !== null) {
@@ -225,6 +270,10 @@ export function configureRuntime(opts: ConfigureOptions): void {
 
 export function runtimeSettings(): Readonly<RuntimeSettings> {
   return settings;
+}
+
+export function isRendererMode(v: unknown): v is RendererMode {
+  return v === 'auto' || v === 'own' || v === 'shared';
 }
 
 /** The effective context limit of the page. */
@@ -257,9 +306,21 @@ export function sharedBudgetPx(): number {
  * which an engine drew its first frame. Recorded when allowed.
  */
 export function claimContextCreation(now: number): boolean {
-  if (now === firstDrawAt || createdIn(now) >= settings.createPerFrame) return false;
+  if (now === firstDrawAt || createdIn(now) >= settings.createPerFrame) {
+    // Refused: own engines leave the next allowance to the shared device (see serve()).
+    sharedClaim = true;
+    return false;
+  }
+  sharedClaim = false;
   noteCreated(now);
   return true;
+}
+
+/** The shared renderer no longer waits for a context creation (nobody left to seat, or lost). */
+export function withdrawContextClaim(): void {
+  if (!sharedClaim) return;
+  sharedClaim = false;
+  if (queue.size > 0) kick();
 }
 
 /** The shared renderer's device holds a context (one on top of the own-context budget). */
@@ -334,5 +395,6 @@ export function resetRuntimeForTesting(): void {
   ledgerAt = Number.NaN;
   ledgerCount = 0;
   sharedReserved = false;
+  sharedClaim = false;
   coarseMemo = undefined;
 }
