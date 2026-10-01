@@ -1,6 +1,7 @@
 /**
- * Panel model: a plain tree derived from the config schema (walk order + field metadata).
- * The panel never lists parameters by hand; adding a field to the schema adds a control.
+ * Panel model: a plain tree derived from the config schema (walk order) and its UI metadata
+ * (labels, order, advanced, visibleWhen by dotted path). The panel never lists parameters by
+ * hand; adding a field to the schema and its metadata adds a control.
  */
 
 import {
@@ -8,19 +9,25 @@ import {
   type GroupDef,
   getPath,
   isGroup,
-  LOCALES,
   type LumiCellsConfig,
-  localizedText,
   schema,
-  type VisibleWhen,
   valueEquals,
 } from 'lumicells';
+import {
+  type FieldMeta,
+  type GroupMeta,
+  getMeta,
+  LOCALES,
+  localizedText,
+  type VisibleWhen,
+} from 'lumicells/schema';
 
 export interface LeafNode {
   type: 'leaf';
   path: string;
   key: string;
   field: FieldDef;
+  meta: FieldMeta;
   /** visibleWhen of the field and all its ancestor groups. */
   chain: readonly VisibleWhen[];
   advanced: boolean;
@@ -33,6 +40,7 @@ export interface GroupNode {
   path: string;
   key: string;
   def: GroupDef;
+  meta: GroupMeta;
   children: PanelNode[];
   /** Animation mode: its `weight` leaf is rendered in the section header. */
   isMode: boolean;
@@ -60,11 +68,20 @@ function textOf(path: string): string {
   return parts.join(' ').toLowerCase();
 }
 
-function byOrder<T extends { order?: number }>(entries: Array<[string, T]>): Array<[string, T]> {
+/** UI metadata of a schema path (tests/schema-meta.test.ts guarantees every path has it). */
+function metaAt(path: string): FieldMeta {
+  const meta = getMeta(path);
+  if (!meta) throw new Error(`[stand] no UI metadata for "${path}"`);
+  return meta;
+}
+
+const childPath = (prefix: string, key: string) => (prefix ? `${prefix}.${key}` : key);
+
+function byOrder<T>(prefix: string, entries: Array<[string, T]>): Array<[string, T]> {
   // Array.prototype.sort is stable: fields without `order` keep their declaration order.
   return entries
-    .map((e, i) => ({ e, i }))
-    .sort((a, b) => (a.e[1].order ?? a.i) - (b.e[1].order ?? b.i) || a.i - b.i)
+    .map((e, i) => ({ e, i, order: getMeta(childPath(prefix, e[0]))?.order }))
+    .sort((a, b) => (a.order ?? a.i) - (b.order ?? b.i) || a.i - b.i)
     .map((x) => x.e);
 }
 
@@ -75,13 +92,15 @@ function buildGroup(
   parentChain: readonly VisibleWhen[],
   parentAdvanced: boolean,
 ): GroupNode {
-  const chain = def.visibleWhen ? [...parentChain, def.visibleWhen] : parentChain;
-  const advanced = parentAdvanced || !!def.advanced;
+  const meta = metaAt(path);
+  const chain = meta.visibleWhen ? [...parentChain, meta.visibleWhen] : parentChain;
+  const advanced = parentAdvanced || !!meta.advanced;
   const node: GroupNode = {
     type: 'group',
     path,
     key,
     def,
+    meta,
     children: [],
     isMode: def.role === 'mode',
     weight: null,
@@ -89,7 +108,7 @@ function buildGroup(
     advanced,
     text: textOf(path),
   };
-  for (const [k, child] of byOrder(Object.entries(def.fields))) {
+  for (const [k, child] of byOrder(path, Object.entries(def.fields))) {
     const p = `${path}.${k}`;
     if (isGroup(child)) {
       node.children.push(buildGroup(k, p, child, chain, advanced));
@@ -109,13 +128,15 @@ function buildLeaf(
   parentChain: readonly VisibleWhen[],
   parentAdvanced: boolean,
 ): LeafNode {
+  const meta = metaAt(path);
   return {
     type: 'leaf',
     path,
     key,
     field,
-    chain: field.visibleWhen ? [...parentChain, field.visibleWhen] : parentChain,
-    advanced: parentAdvanced || !!field.advanced,
+    meta,
+    chain: meta.visibleWhen ? [...parentChain, meta.visibleWhen] : parentChain,
+    advanced: parentAdvanced || !!meta.advanced,
     text: textOf(path),
   };
 }
@@ -126,7 +147,7 @@ export function getPanelModel(): PanelModel {
   if (cached) return cached;
   const topLeaves: LeafNode[] = [];
   const sections: GroupNode[] = [];
-  for (const [key, node] of byOrder(Object.entries(schema.fields))) {
+  for (const [key, node] of byOrder('', Object.entries(schema.fields))) {
     if (isGroup(node)) sections.push(buildGroup(key, key, node, [], false));
     else topLeaves.push(buildLeaf(key, key, node, [], false));
   }

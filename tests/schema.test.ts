@@ -9,6 +9,7 @@ import {
   getDefaults,
   getField,
   getLeafPaths,
+  getMeta,
   getNode,
   getPath,
   getPresetConfig,
@@ -19,6 +20,7 @@ import {
   PRESET_IDS,
   PRESETS,
   posterCss,
+  SCHEMA_META,
   schema,
   setPath,
   stableStringify,
@@ -63,11 +65,9 @@ describe('schema tree', () => {
     }
   });
 
-  it('defaults are inside their ranges and labels are present', () => {
+  it('defaults are inside their ranges', () => {
     walkSchema((node, path) => {
-      expect(node.label, path).toBeTruthy();
       if (isGroup(node)) return;
-      expect(node.description, path).toBeTruthy();
       const d = node.default;
       if (node.kind === 'number' || node.kind === 'int' || node.kind === 'angle') {
         expect(d as number, path).toBeGreaterThanOrEqual(node.min);
@@ -76,8 +76,6 @@ describe('schema tree', () => {
       }
       if (node.kind === 'enum') {
         expect(node.values, path).toContain(d);
-        if (node.labels)
-          expect(Object.keys(node.labels).sort(), path).toEqual([...node.values].sort());
       }
       if (node.kind === 'vec2') {
         for (const v of d as number[]) {
@@ -92,8 +90,9 @@ describe('schema tree', () => {
   });
 
   it('visibleWhen points at existing fields', () => {
-    walkSchema((node, path) => {
-      if (node.visibleWhen) expect(getField(node.visibleWhen.path), path).toBeDefined();
+    walkSchema((_node, path) => {
+      const when = getMeta(path)?.visibleWhen;
+      if (when) expect(getField(when.path), path).toBeDefined();
     });
   });
 
@@ -353,8 +352,8 @@ describe('presets', () => {
     expect(Object.keys(PRESETS)).toEqual([...PRESET_IDS]);
     for (const id of PRESET_IDS) {
       const p = PRESETS[id];
-      expect(p.label, id).toBeTruthy();
-      expect(p.description, id).toBeTruthy();
+      expect(SCHEMA_META.presets[id]?.label, id).toBeTruthy();
+      expect(SCHEMA_META.presets[id]?.description, id).toBeTruthy();
       const r = normalizeConfig(p.config);
       expect(r.issues, id).toEqual([]);
       expect(getPresetConfig(id), id).toEqual(r.config);
@@ -485,7 +484,7 @@ describe('toJsonSchema', () => {
         expect(node, p).toBeDefined();
       }
       const f = getField(p) as FieldDef;
-      expect(node.title, p).toBe(f.label);
+      expect(node.title, p).toBe(getMeta(p)?.label);
       expect(node.default, p).toEqual(f.default);
     }
     expect(js.properties.extends).toMatchObject({ enum: [...PRESET_IDS] });

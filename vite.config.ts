@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+import { glslMinify } from './scripts/glsl-minify.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +12,8 @@ const root = dirname(fileURLToPath(import.meta.url));
 // sub-path; asset URLs and the public/ files then resolve under it.
 export default defineConfig({
   base: process.env.BASE_PATH ?? '/',
-  plugins: [react()],
+  // Shaders are minified for the published demo too (dev serves them as written).
+  plugins: [react(), glslMinify()],
   resolve: {
     // The demo imports the library by its package name, exactly like a consumer would.
     alias: [

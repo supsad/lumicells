@@ -1,6 +1,7 @@
 /**
  * The tuning panel, generated from the config schema: sections follow the schema groups and
- * their `order`, control kinds follow `field.kind`. Nothing here names a concrete parameter.
+ * the `order` of their UI metadata, control kinds follow `field.kind`. Nothing here names a
+ * concrete parameter.
  */
 
 import {
@@ -160,7 +161,7 @@ interface ControlProps {
 
 function Control({ field, path, value, def, effective, onChange }: ControlProps): ReactNode {
   const st = useSchemaText();
-  const common = { label: st.label(path, field), hint: st.description(path, field), path };
+  const common = { label: st.label(path), hint: st.description(path), path };
   switch (field.kind) {
     case 'number':
     case 'int':
@@ -173,7 +174,7 @@ function Control({ field, path, value, def, effective, onChange }: ControlProps)
           max={field.max}
           step={field.step ?? (field.kind === 'int' ? 1 : undefined)}
           scale={field.scale}
-          unit={st.unit(path, field)}
+          unit={st.unit(path)}
           default={def as number}
           effective={effective}
         />
@@ -311,9 +312,9 @@ const GroupSection = memo(function GroupSection({
   if (!shown || !visible.has(node.path)) return null;
   return (
     <Section
-      title={st.label(node.path, node.def)}
+      title={st.label(node.path)}
       level={level}
-      advanced={node.def.advanced}
+      advanced={node.meta.advanced}
       open={sections.forceOpen || sections.isOpen(node.path)}
       onOpenChange={(v) => sections.setOpen(node.path, v)}
       dimmed={dimmed}
@@ -325,8 +326,8 @@ const GroupSection = memo(function GroupSection({
         ) : undefined
       }
     >
-      {node.def.description && level === 1 && (
-        <p className="stand-section-note">{st.description(node.path, node.def)}</p>
+      {node.meta.description && level === 1 && (
+        <p className="stand-section-note">{st.description(node.path)}</p>
       )}
       {node.children.map((c) =>
         c.type === 'leaf' ? (

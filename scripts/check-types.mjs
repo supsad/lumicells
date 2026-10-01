@@ -51,7 +51,14 @@ import {
   useLumiCellsStats,
   type LumiCellsProps,
 } from 'lumicells/react';
-import { schema, type PresetId } from 'lumicells/schema';
+import {
+  type FieldMeta,
+  getMeta,
+  localizedText,
+  SCHEMA_META,
+  schema,
+  type PresetId,
+} from 'lumicells/schema';
 import { createElement, useRef } from 'react';
 
 const config: LumiCellsConfig = getDefaults();
@@ -79,6 +86,9 @@ export function Hero(props: LumiCellsProps) {
 
 export const el: LumiCellsElement | null = null;
 export { schema };
+const meta: FieldMeta | undefined = getMeta('grid.pitch');
+export const pitchUnit: string | undefined = meta?.unit ?? localizedText('grid.pitch', 'ru')?.unit;
+export const presetName: string = SCHEMA_META.presets[preset].label;
 `;
 
 function run(cwd, project) {

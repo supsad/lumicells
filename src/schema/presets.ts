@@ -18,23 +18,17 @@ export const PRESET_IDS = [
 ] as const;
 export type PresetId = (typeof PRESET_IDS)[number];
 
+/** A preset's config patch. Its name and description are UI metadata (meta.ts). */
 export interface PresetDef {
-  label: string;
-  description: string;
   config: LumiCellsConfigInput;
 }
 
 export const PRESETS: Record<PresetId, PresetDef> = {
   reference: {
-    label: 'Reference',
-    description: 'Hollow neon sphere: crimson top left, blue bottom right, fading into navy.',
     config: {},
   },
 
   orb: {
-    label: 'Orb',
-    description:
-      'Solid rotating planet: a lit sky-blue rim, a deep indigo shadow and a thin atmosphere.',
     config: {
       grid: { count: 34 },
       modes: {
@@ -79,8 +73,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   pulse: {
-    label: 'Pulse',
-    description: 'Crisp rings spread from the center and gently breathe: crimson, pink, violet.',
     config: {
       grid: { count: 33 },
       modes: {
@@ -114,9 +106,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   life: {
-    label: 'Life',
-    description:
-      "Conway's cellular automaton: cells flash quickly and fade out smoothly, in teal and mint.",
     config: {
       grid: { count: 40, gap: 0.22, roundness: 0.2 },
       modes: {
@@ -150,8 +139,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   vortex: {
-    label: 'Vortex',
-    description: 'Three-armed galaxy: a golden core, fiery arms and violet outskirts.',
     config: {
       modes: {
         sphere: { weight: 0 },
@@ -178,8 +165,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   waves: {
-    label: 'Waves',
-    description: 'Interference plasma: bending crests from indigo through violet to sky blue.',
     config: {
       grid: { count: 34 },
       modes: {
@@ -213,8 +198,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   ripples: {
-    label: 'Ripples',
-    description: 'Dark water under the moon: silvery blue rings spread from random drops.',
     config: {
       modes: {
         sphere: { weight: 0 },
@@ -253,8 +236,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   rain: {
-    label: 'Rain',
-    description: 'Green "digital rain" on a near-black background, with a fine grid.',
     config: {
       grid: { count: 56, gap: 0.2, roundness: 0.15 },
       modes: {
@@ -284,9 +265,6 @@ export const PRESETS: Record<PresetId, PresetDef> = {
   },
 
   minimal: {
-    label: 'Minimal',
-    description:
-      'Monochrome white islands drift slowly over a charcoal background, with a restrained glow.',
     config: {
       grid: { count: 36, gap: 0.3, roundness: 0.25 },
       modes: {

@@ -1,9 +1,11 @@
 /**
  * JSON Schema (draft 2020-12) generated from the schema tree, for editor autocompletion and
- * validation of exported config files. `x-*` keywords carry stand metadata.
+ * validation of exported config files. Titles, descriptions and units come from the UI metadata
+ * (meta.ts); `x-*` keywords carry stand metadata.
  */
 
 import { type FieldDef, type GroupDef, isGroup } from './fields';
+import { type FieldMeta, getMeta, SCHEMA_META } from './meta';
 import { PRESET_IDS } from './presets';
 import { CONFIG_VERSION, schema } from './schema';
 
@@ -11,16 +13,23 @@ type Json = Record<string, unknown>;
 
 const HEX_PATTERN = '^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$';
 
-function meta(node: FieldDef | GroupDef, out: Json): Json {
-  out.title = node.label;
-  if (node.description) out.description = node.description;
-  if (node.order !== undefined) out['x-order'] = node.order;
-  if (node.advanced) out['x-advanced'] = true;
-  if (node.visibleWhen) out['x-visibleWhen'] = { ...node.visibleWhen };
+function metaOf(path: string): FieldMeta {
+  const m = getMeta(path);
+  if (!m) throw new Error(`[lumicells] no UI metadata for "${path}"`);
+  return m;
+}
+
+function annotate(m: FieldMeta, out: Json): Json {
+  out.title = m.label;
+  if (m.description) out.description = m.description;
+  if (m.order !== undefined) out['x-order'] = m.order;
+  if (m.advanced) out['x-advanced'] = true;
+  if (m.visibleWhen) out['x-visibleWhen'] = { ...m.visibleWhen };
   return out;
 }
 
-function leaf(f: FieldDef): Json {
+function leaf(f: FieldDef, path: string): Json {
+  const m = metaOf(path);
   const out: Json = {};
   switch (f.kind) {
     case 'number':
@@ -31,7 +40,7 @@ function leaf(f: FieldDef): Json {
       out.maximum = f.max;
       if (f.step !== undefined) out['x-step'] = f.step;
       if (f.kind !== 'angle' && f.scale) out['x-scale'] = f.scale;
-      if (f.unit) out['x-unit'] = f.unit;
+      if (m.unit) out['x-unit'] = m.unit;
       break;
     case 'boolean':
       out.type = 'boolean';
@@ -47,13 +56,15 @@ function leaf(f: FieldDef): Json {
       out.items = false;
       out.minItems = 2;
       out.maxItems = 2;
-      if (f.unit) out['x-unit'] = f.unit;
+      if (m.unit) out['x-unit'] = m.unit;
       break;
-    case 'enum':
+    case 'enum': {
       out.type = 'string';
       out.enum = [...f.values];
-      if (f.labels) out['x-enumLabels'] = { ...f.labels };
+      const labels = Object.hasOwn(SCHEMA_META.enums, path) ? SCHEMA_META.enums[path] : undefined;
+      if (labels) out['x-enumLabels'] = { ...labels };
       break;
+    }
     case 'palette':
       out.type = 'array';
       out.items = { type: 'string', pattern: HEX_PATTERN };
@@ -64,24 +75,25 @@ function leaf(f: FieldDef): Json {
   out.default = Array.isArray(f.default) ? [...f.default] : f.default;
   out['x-live'] = f.live;
   if (f.gpu) out['x-gpu'] = true;
-  return meta(f, out);
+  return annotate(m, out);
 }
 
-function groupSchema(g: GroupDef): Json {
+function groupSchema(g: GroupDef, path: string): Json {
   const properties: Json = {};
   for (const key of Object.keys(g.fields)) {
     const node = g.fields[key];
     if (!node) continue;
-    properties[key] = isGroup(node) ? groupSchema(node) : leaf(node);
+    const p = path ? `${path}.${key}` : key;
+    properties[key] = isGroup(node) ? groupSchema(node, p) : leaf(node, p);
   }
   const out: Json = { type: 'object', additionalProperties: false, properties };
   if (g.role) out['x-kind'] = g.role;
-  return meta(g, out);
+  return path ? annotate(metaOf(path), out) : out;
 }
 
 /** Builds the JSON Schema for config files (every property optional; unknown keys rejected). */
 export function toJsonSchema(): Json {
-  const root = groupSchema(schema);
+  const root = groupSchema(schema, '');
   const properties = {
     $schema: { type: 'string', title: 'JSON Schema URL' },
     version: { const: CONFIG_VERSION, title: 'Format version' },

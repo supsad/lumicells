@@ -8,7 +8,7 @@ import {
   localizedPreset,
   localizedText,
   PRESET_IDS,
-  PRESETS,
+  SCHEMA_META,
   toJsonSchema,
   walkSchema,
 } from '../src/schema';
@@ -22,17 +22,19 @@ interface Expected {
   enums: Map<string, readonly string[]>;
 }
 
+/** What a translation must cover, derived from the schema and its English UI metadata. */
 function expected(): Expected {
   const out: Expected = { groups: new Map(), fields: new Map(), enums: new Map() };
   walkSchema((node, path) => {
     if (isGroup(node)) {
-      out.groups.set(path, { description: !!node.description });
+      out.groups.set(path, { description: !!SCHEMA_META.groups[path]?.description });
       return;
     }
     const f = node as FieldDef;
+    const meta = SCHEMA_META.fields[path];
     // Angles always read in degrees; every other unit is a word that needs translating.
-    const unit = f.kind !== 'angle' && 'unit' in f && !!f.unit;
-    out.fields.set(path, { description: !!f.description, unit });
+    const unit = f.kind !== 'angle' && !!meta?.unit;
+    out.fields.set(path, { description: !!meta?.description, unit });
     if (f.kind === 'enum') out.enums.set(path, f.values);
   });
   return out;
@@ -41,18 +43,15 @@ function expected(): Expected {
 describe('schema locales', () => {
   const exp = expected();
 
-  it('English is the source: the schema, presets and JSON Schema carry no Cyrillic', () => {
-    walkSchema((node, path) => {
-      const texts = [node.label, node.description ?? ''];
-      if (!isGroup(node)) {
-        if ('unit' in node && node.unit) texts.push(node.unit);
-        if (node.kind === 'enum' && node.labels) texts.push(...Object.values(node.labels));
-      }
-      for (const t of texts) expect(CYRILLIC.test(t), `${path}: ${t}`).toBe(false);
-    });
-    for (const id of PRESET_IDS) {
-      expect(CYRILLIC.test(PRESETS[id].label + PRESETS[id].description), id).toBe(false);
+  it('English is the source: the UI metadata and JSON Schema carry no Cyrillic', () => {
+    const texts: string[] = [];
+    for (const e of Object.values(SCHEMA_META.groups)) texts.push(e.label, e.description ?? '');
+    for (const e of Object.values(SCHEMA_META.fields)) {
+      texts.push(e.label, e.description ?? '', e.unit ?? '');
     }
+    for (const labels of Object.values(SCHEMA_META.enums)) texts.push(...Object.values(labels));
+    for (const p of Object.values(SCHEMA_META.presets)) texts.push(p.label, p.description);
+    for (const t of texts) expect(CYRILLIC.test(t), t).toBe(false);
     expect(CYRILLIC.test(JSON.stringify(toJsonSchema()))).toBe(false);
   });
 
@@ -103,26 +102,45 @@ describe('schema locales', () => {
     expect(stale).toEqual([]);
   });
 
-  it('helpers return English from the schema and Russian from the table', () => {
+  it('helpers return English from the UI metadata and Russian from the table', () => {
     expect(LOCALES).toEqual(['en', 'ru']);
-    expect(getSchemaLocaleTexts('en')).toBeUndefined();
-    expect(localizedText('grid', 'en')?.label).toBe('Grid');
+    // English has a table too now: the UI metadata itself (it used to be undefined).
+    expect(getSchemaLocaleTexts('en')).toBe(SCHEMA_META);
+    expect(getSchemaLocaleTexts('ru')).toBe(ru);
+    expect(localizedText('grid', 'en')).toEqual({
+      label: 'Grid',
+      description: 'Size and shape of the pixel-grid cells.',
+    });
     expect(localizedText('grid', 'ru')?.label).toBe(ru.groups.grid?.label);
     expect(localizedText('animation.flicker.rate', 'en')?.unit).toBe('Hz');
     expect(localizedText('animation.flicker.rate', 'ru')?.unit).toBe('Гц');
-    // Angle units are language-neutral and come from the schema in every locale.
+    // Angle units are language-neutral and come from the English metadata in every locale.
+    expect(localizedText('color.angle', 'en')?.unit).toBe('°');
     expect(localizedText('color.angle', 'ru')?.unit).toBe('°');
     expect(localizedText('no.such.path', 'ru')).toBeUndefined();
+    // The root (path '') is named in every locale, as before the UI metadata moved to meta.ts.
+    expect(localizedText('', 'en')).toEqual({ label: 'LumiCells' });
+    expect(localizedText('', 'ru')).toEqual({ label: 'LumiCells' });
+    // Paths are user input: inherited object keys are not entries.
+    expect(localizedText('constructor', 'en')).toBeUndefined();
+    expect(localizedText('toString', 'ru')).toBeUndefined();
     expect(localizedEnumLabel('render.quality', 'auto', 'en')).toBe('Auto');
     expect(localizedEnumLabel('render.quality', 'auto', 'ru')).toBe(
       ru.enums['render.quality']?.auto,
     );
     expect(localizedEnumLabel('render.quality', 'bogus', 'ru')).toBe('bogus');
-    expect(localizedPreset('orb', 'en')).toEqual({
-      label: PRESETS.orb.label,
-      description: PRESETS.orb.description,
-    });
+    expect(localizedEnumLabel('render.quality', 'constructor', 'en')).toBe('constructor');
+    expect(localizedEnumLabel('grid.gap', 'x', 'en')).toBe('x');
+    expect(localizedPreset('orb', 'en')).toEqual(SCHEMA_META.presets.orb);
     expect(localizedPreset('orb', 'ru')).toEqual(ru.presets.orb);
+  });
+
+  it('an unknown locale (untyped callers) falls back to English', () => {
+    const bogus = 'xx' as 'ru';
+    expect(getSchemaLocaleTexts(bogus)).toBeUndefined();
+    expect(localizedText('grid', bogus)?.label).toBe('Grid');
+    expect(localizedEnumLabel('render.quality', 'auto', bogus)).toBe('Auto');
+    expect(localizedPreset('orb', bogus)).toEqual(SCHEMA_META.presets.orb);
   });
 
   it('Russian texts are Russian', () => {

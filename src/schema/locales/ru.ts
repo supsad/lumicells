@@ -1,7 +1,7 @@
 /**
- * Russian texts of the config schema. English is the primary language and lives in the schema
- * itself (schema.ts, presets.ts); this table mirrors it by dotted path and is kept complete and
- * free of stale keys by tests/schema-locale.test.ts.
+ * Russian texts of the config schema. English is the primary language and lives in the UI
+ * metadata table (meta.ts); this table mirrors it by dotted path and is kept complete and free of
+ * stale keys by tests/schema-locale.test.ts.
  */
 
 import type { SchemaLocaleTexts } from '../locale';

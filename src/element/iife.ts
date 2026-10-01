@@ -6,5 +6,6 @@
 import './define';
 
 export { LumiCells } from '../core/lumi-cells';
-export { PRESET_IDS, PRESETS } from '../schema';
+// PRESETS holds config patches only; PRESET_TEXTS names them (English) for a preset picker.
+export { PRESET_IDS, PRESET_TEXTS, PRESETS } from '../schema';
 export * from './index';

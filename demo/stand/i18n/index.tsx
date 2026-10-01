@@ -6,20 +6,18 @@
  */
 
 import {
-  type FieldDef,
-  type GroupDef,
   isLocale,
   type Locale,
   localizedEnumLabel,
   localizedPreset,
   localizedText,
   type PresetId,
-} from 'lumicells';
+} from 'lumicells/schema';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { en, type Messages } from './en';
 import { ru } from './ru';
 
-export type { Locale } from 'lumicells';
+export type { Locale } from 'lumicells/schema';
 export type { Messages } from './en';
 
 export const MESSAGES: Record<Locale, Messages> = { en, ru };
@@ -86,9 +84,9 @@ export function syncUrlLocale(locale: Locale): void {
 /** Localized schema texts for the current locale. */
 export interface SchemaText {
   locale: Locale;
-  label(path: string, node: FieldDef | GroupDef): string;
-  description(path: string, node: FieldDef | GroupDef): string | undefined;
-  unit(path: string, node: FieldDef): string | undefined;
+  label(path: string): string;
+  description(path: string): string | undefined;
+  unit(path: string): string | undefined;
   enumLabel(path: string, value: string): string;
   preset(id: PresetId): { label: string; description: string };
 }
@@ -96,10 +94,9 @@ export interface SchemaText {
 function schemaText(locale: Locale): SchemaText {
   return {
     locale,
-    label: (path, node) => localizedText(path, locale)?.label ?? node.label,
-    description: (path, node) => localizedText(path, locale)?.description ?? node.description,
-    unit: (path, node) =>
-      localizedText(path, locale)?.unit ?? ('unit' in node ? node.unit : undefined),
+    label: (path) => localizedText(path, locale)?.label ?? path,
+    description: (path) => localizedText(path, locale)?.description,
+    unit: (path) => localizedText(path, locale)?.unit,
     enumLabel: (path, value) => localizedEnumLabel(path, value, locale),
     preset: (id) => localizedPreset(id, locale),
   };

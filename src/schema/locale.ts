@@ -1,14 +1,13 @@
 /**
- * Localized schema texts. English is the primary language and comes from the schema itself
- * (labels, descriptions, units, enum labels, preset names), so the generated JSON Schema is
- * English. Other locales are plain tables keyed by dotted path (see locales/*.ts); the helpers
- * below fall back to English for anything a table does not cover.
+ * Localized schema texts. English is the primary language: the UI metadata table (meta.ts) holds
+ * the English labels, descriptions, units, enum labels and preset names, so the generated JSON
+ * Schema is English. Other locales are plain tables of the same shape keyed by dotted path (see
+ * locales/*.ts); the helpers below fall back to English for anything a table does not cover.
  */
 
-import { type FieldDef, type GroupDef, isGroup } from './fields';
 import { ru } from './locales/ru';
-import { getNode } from './paths';
-import { PRESETS, type PresetId } from './presets';
+import { type FieldMeta, type GroupMeta, SCHEMA_META } from './meta';
+import type { PresetId } from './presets';
 
 export type Locale = 'en' | 'ru';
 
@@ -31,7 +30,7 @@ export interface LocalizedPreset {
   description: string;
 }
 
-/** Shape of a translation table (every non-English locale provides one). */
+/** Shape of a translation table (every locale provides one; English is the UI metadata). */
 export interface SchemaLocaleTexts {
   /** Groups by dotted path (units never apply to groups). */
   groups: Record<string, { label: string; description?: string }>;
@@ -42,17 +41,25 @@ export interface SchemaLocaleTexts {
   presets: Record<PresetId, LocalizedPreset>;
 }
 
-const TABLES: Record<Exclude<Locale, 'en'>, SchemaLocaleTexts> = { ru };
+const TABLES: Record<Locale, SchemaLocaleTexts> = { en: SCHEMA_META, ru };
 
-/** The translation table of a locale (undefined for English, which lives in the schema). */
-export function getSchemaLocaleTexts(locale: Locale): SchemaLocaleTexts | undefined {
-  return locale === 'en' ? undefined : TABLES[locale];
+/** Own entry of a table (paths are user input: never read inherited keys like 'constructor'). */
+function own<T>(table: Record<string, T> | undefined, key: string): T | undefined {
+  return table && Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
-function englishOf(node: FieldDef | GroupDef): LocalizedText {
-  const out: LocalizedText = { label: node.label };
-  if (node.description) out.description = node.description;
-  if (!isGroup(node) && 'unit' in node && node.unit) out.unit = node.unit;
+/**
+ * The translation table of a locale. For English it is the UI metadata table itself (SCHEMA_META);
+ * undefined only for an unknown locale.
+ */
+export function getSchemaLocaleTexts(locale: Locale): SchemaLocaleTexts | undefined {
+  return own(TABLES, locale);
+}
+
+function textOf(meta: GroupMeta | FieldMeta): LocalizedText {
+  const out: LocalizedText = { label: meta.label };
+  if (meta.description) out.description = meta.description;
+  if ('unit' in meta && meta.unit) out.unit = meta.unit;
   return out;
 }
 
@@ -61,12 +68,13 @@ function englishOf(node: FieldDef | GroupDef): LocalizedText {
  * unknown path; missing translations fall back to English field by field.
  */
 export function localizedText(path: string, locale: Locale): LocalizedText | undefined {
-  const node = getNode(path);
-  if (!node) return undefined;
-  const base = englishOf(node);
-  const table = getSchemaLocaleTexts(locale);
+  const field = own(SCHEMA_META.fields, path);
+  const meta = field ?? own(SCHEMA_META.groups, path);
+  if (!meta) return undefined;
+  const base = textOf(meta);
+  const table = locale === 'en' ? undefined : own(TABLES, locale);
   if (!table) return base;
-  const tr: LocalizedText | undefined = isGroup(node) ? table.groups[path] : table.fields[path];
+  const tr: LocalizedText | undefined = field ? own(table.fields, path) : own(table.groups, path);
   if (!tr) return base;
   const out: LocalizedText = { label: tr.label || base.label };
   const description = tr.description ?? base.description;
@@ -78,20 +86,19 @@ export function localizedText(path: string, locale: Locale): LocalizedText | und
 
 /** Label of one enum value; falls back to the English label, then to the raw value. */
 export function localizedEnumLabel(path: string, value: string, locale: Locale): string {
-  const node = getNode(path);
-  const english =
-    node?.kind === 'enum'
-      ? ((node.labels as Record<string, string> | undefined)?.[value] ?? value)
-      : value;
-  return getSchemaLocaleTexts(locale)?.enums[path]?.[value] ?? english;
+  return (
+    own(own(own(TABLES, locale)?.enums, path), value) ??
+    own(own(SCHEMA_META.enums, path), value) ??
+    value
+  );
 }
 
 /** Name and description of a preset in `locale`. */
 export function localizedPreset(id: PresetId, locale: Locale): LocalizedPreset {
-  const def = PRESETS[id];
-  const tr = getSchemaLocaleTexts(locale)?.presets[id];
+  const en = SCHEMA_META.presets[id];
+  const tr = own<LocalizedPreset>(own(TABLES, locale)?.presets, id);
   return {
-    label: tr?.label ?? def.label,
-    description: tr?.description ?? def.description,
+    label: tr?.label ?? en.label,
+    description: tr?.description ?? en.description,
   };
 }

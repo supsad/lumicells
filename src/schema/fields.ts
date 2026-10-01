@@ -4,7 +4,8 @@
  * The schema tree (schema.ts) is the single source of truth: the config type, defaults,
  * normalization, the stand UI, JSON Schema and the GPU parameter layout are all derived from it.
  * Factories return precisely typed objects so the config type can be inferred without a
- * hand-written duplicate.
+ * hand-written duplicate. Fields carry runtime data only; their UI metadata (labels,
+ * descriptions, units, presentation hints) lives in meta.ts.
  */
 
 /**
@@ -17,25 +18,12 @@
  */
 export type Live = 'uniform' | 'lut' | 'realloc' | 'restart' | 'static';
 
-/** Show a control only when another field matches. Exactly one comparison is expected. */
-export interface VisibleWhen {
-  path: string;
-  eq?: unknown;
-  neq?: unknown;
-  gt?: number;
-}
-
 export interface Base<T> {
   default: T;
-  label: string;
-  description?: string;
-  order?: number;
-  advanced?: boolean;
   /** Defaults to 'uniform'. */
   live?: Live;
   /** Packed into the Params UBO. Defaults to false. */
   gpu?: boolean;
-  visibleWhen?: VisibleWhen;
 }
 
 export interface NumOptions extends Base<number> {
@@ -43,9 +31,7 @@ export interface NumOptions extends Base<number> {
   max: number;
   step?: number;
   scale?: 'linear' | 'log';
-  unit?: string;
   tween?: 'exp' | 'none';
-  widget?: 'slider' | 'knob';
 }
 
 export interface NumField extends NumOptions {
@@ -71,7 +57,6 @@ export interface AngleField extends Base<number> {
   min: number;
   max: number;
   step: number;
-  unit: string;
   /** True when [min, max] spans a full turn: values wrap and tween along the shortest arc. */
   fullCircle: boolean;
   live: Live;
@@ -96,7 +81,6 @@ export interface Vec2Options extends Base<Vec2> {
   min: number;
   max: number;
   step?: number;
-  unit?: string;
 }
 
 export interface Vec2Field extends Vec2Options {
@@ -107,7 +91,6 @@ export interface Vec2Field extends Vec2Options {
 
 export interface EnumOptions<V extends readonly string[]> extends Base<V[number]> {
   values: V;
-  labels?: Record<V[number], string>;
   transition?: 'instant' | 'crossfade';
 }
 
@@ -143,22 +126,12 @@ export type FieldDef =
 
 export type FieldKind = FieldDef['kind'];
 
-export interface GroupMeta {
-  label: string;
-  description?: string;
-  order?: number;
-  advanced?: boolean;
-  visibleWhen?: VisibleWhen;
-  /** 'mode' marks an animation mode (children start with `weight`). */
-  kind?: 'mode';
-}
-
 export type SchemaNode = FieldDef | GroupDef<SchemaFields>;
 export type SchemaFields = { readonly [key: string]: SchemaNode };
 
-export interface GroupDef<F extends SchemaFields = SchemaFields> extends Omit<GroupMeta, 'kind'> {
+export interface GroupDef<F extends SchemaFields = SchemaFields> {
   readonly kind: 'group';
-  /** 'mode' for animation mode groups. */
+  /** 'mode' marks an animation mode (its children start with `weight`). */
   role?: 'mode';
   fields: F;
 }
@@ -183,7 +156,6 @@ export function angle(o: AngleOptions): AngleField {
     min,
     max,
     step: o.step ?? 1,
-    unit: '°',
     fullCircle: max - min >= 360,
     live: o.live ?? 'uniform',
     gpu: o.gpu ?? false,
@@ -223,11 +195,13 @@ export function palette(o: PaletteOptions): PaletteField {
   };
 }
 
-export function group<const F extends SchemaFields>(meta: GroupMeta, fields: F): GroupDef<F> {
-  const { kind, ...rest } = meta;
-  const g: GroupDef<F> = { ...rest, kind: 'group', fields };
-  if (kind === 'mode') g.role = 'mode';
-  return g;
+export function group<const F extends SchemaFields>(fields: F): GroupDef<F> {
+  return { kind: 'group', fields };
+}
+
+/** An animation mode group (its first field is `weight`). */
+export function mode<const F extends SchemaFields>(fields: F): GroupDef<F> {
+  return { kind: 'group', role: 'mode', fields };
 }
 
 export function isGroup(node: SchemaNode | undefined): node is GroupDef {

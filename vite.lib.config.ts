@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
+import { glslMinify } from './scripts/glsl-minify.mjs';
 import { toJsonSchema } from './src/schema/json-schema';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -21,9 +22,11 @@ function jsonSchemaAsset(): Plugin {
 
 // Library build: ES entry points sharing common chunks (the core is bundled once).
 // The <script src> bundle of the Web Component is produced by vite.element.config.ts, which
-// runs after this config (this one empties the output directory).
+// runs after this config (this one empties the output directory). The ES modules are not
+// minified (the consumer's bundler does that), but the GLSL inside them is: a minifier never
+// touches string contents (see scripts/glsl-minify.mjs).
 export default defineConfig({
-  plugins: [jsonSchemaAsset()],
+  plugins: [glslMinify(), jsonSchemaAsset()],
   // public/ holds demo assets; they must not leak into the package.
   publicDir: false,
   build: {
