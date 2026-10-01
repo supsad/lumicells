@@ -100,8 +100,8 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 ```
 
 Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `priority`,
-`renderer`, `fallback`, `onReady`, `onError`, `onStats`, `ref`, plus regular `div` attributes. The merge order is
-defaults, then `preset`, then `config`. `config` may be a new object on every render: the
+`renderer`, `look`, `lookOffset`, `fallback`, `onReady`, `onError`, `onStats`, `ref`, plus
+regular `div` attributes. The merge order is defaults, then `preset`, then `config`. `config` may be a new object on every render: the
 component compares content, not identity. Requires React 19 (`ref` is a regular prop).
 
 | Hook | Purpose |
@@ -136,8 +136,9 @@ Without a bundler, load the single file `dist/lib/lumicells-element.iife.js` wit
 `<script>`: it registers the tag and exposes the API as the global `LumiCells`.
 
 Attributes: `preset`, `src` (URL of a config file), `interactive`, `overflow`, `paused`,
-`transition`, `priority`, `renderer`. Properties: `config`, `preset`, `src`, `paused`,
-`interactive`, `overflow`, `transition`, `priority`, `renderer` and the read-only `instance`.
+`transition`, `priority`, `renderer`, `look`, `look-offset`. Properties: `config`, `preset`,
+`src`, `paused`, `interactive`, `overflow`, `transition`, `priority`, `renderer`, `look`,
+`lookOffset` and the read-only `instance`.
 
 Declarative binding of child elements:
 
@@ -339,8 +340,8 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
   `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
   `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
 - No objects or arrays are allocated per frame; uniform buffers upload only on change.
-- Bundle: an app that imports only `LumiCells` ships about 68 KB gzip (60 KB brotli) after
-  minification, the plain `<script>` bundle about 73 KB gzip. Shaders are minified at build
+- Bundle: an app that imports only `LumiCells` ships about 74 KB gzip (65 KB brotli) after
+  minification, the plain `<script>` bundle about 79 KB gzip. Shaders are minified at build
   time and UI texts of the schema are not part of the runtime. `npm run size` checks the budget.
 
 Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
@@ -514,6 +515,75 @@ GPU per frame):
 One or four cards run as before (165 fps), and the card under the pointer stays at 165 fps on
 the full pipeline.
 
+### Identical cards
+
+A list of cards with one config animates a hundred copies of the same picture. With
+`look: 'shared'` (opt-in: it changes how the page looks), cards whose config draws the same picture
+share one: it is rendered once per frame, and each card shows its part of it.
+
+```ts
+new LumiCells(cardEl, { preset: 'orb', look: 'shared' });
+new LumiCells(otherEl, { preset: 'orb', look: 'shared', lookOffset: 0.25 }); // not in sync
+```
+
+In React use `<LumiCells look="shared">`, in HTML `<lumi-cells look="shared" look-offset="0.25">`.
+
+- **Same picture.** Cards share when their configs match apart from `interaction`,
+  `render.pauseOffscreen` and `transition`, which change no frame by themselves. All cards of a
+  group animate in sync; `lookOffset` (0 to 0.5) shifts each card's window by up to that share of
+  its size, in whole cells and seeded per instance, so neighbours do not show the same cells (the
+  group renders that much larger: a large shift shows more of the picture's outskirts). The cells
+  keep the card's own size, with `grid.sizing: 'count'` too.
+- **Crop, never scale.** A card shows the part of the shared picture its own canvas covers, at its
+  own pixel scale: in a group of equal cards each shows exactly what it would draw alone. Cards of
+  different sizes share only when their cells come out the same size (`grid.sizing: 'pitch'`, or
+  `'count'` with the same shorter side). A smaller or shifted card then has its cells where it
+  would draw them alone, but the pattern is laid out for the group's size, and with
+  `render.overflow` its margin shows the group's cells. A group never resizes once it has drawn:
+  a larger card that comes later gets a picture of its own, and a group keeps its size when its
+  largest card leaves, so no card's picture changes when another one comes or goes.
+- **Leaving and rejoining.** A card leaves its group the moment it draws something of its own: a
+  pointer light or hover lift (`interactive`), a click ripple or `pulse()`, an influence or bound
+  element, `lift()`, a modulator, `setEnergy()`, a config change or a debug view. It continues the
+  shared picture in a region of its own with the same clock, cells and lifted cells (the Life
+  automaton reseeds; the pattern of a card smaller than its group, or shifted in it, lays out for
+  the card's own size) and rejoins about 2 seconds after the last of these is gone, its lifted
+  cells changing to the group's then. `setLook('own')` leaves at once. The GPU targets of a card
+  that rejoins are kept for a while for the next card that leaves, so hovering one card after
+  another does not allocate new ones per card.
+- **Renderers and cost.** A shared look needs the shared renderer: with `renderer: 'auto'` the card
+  stays there whatever its size, and `renderer: 'own'` wins over `look`. A group counts once for
+  the atlas, the pixel budget and the lite pipeline, and is drawn in every frame in which one of
+  its cards presents. Each card keeps its own pace from the secondary frame rate: what it still
+  costs is its copy. Parking, context loss (each card keeps its last frame) and stats work per
+  card as before.
+- **Stats and events.** While in a group a card's stats describe what it shows: the group's
+  quality tier and scale, its crop's pixels and cells, the group's lifted cells. A card that joins
+  (or leaves) a group at another tier than it last reported gets a `quality` event with the reason
+  `'look'`. `getStats().look` is `'group'` or `'own'` and `getStats().groupSize` the
+  number of cards sharing the picture; `getStats().shared.groups` counts the pictures and
+  `.draws` the regions drawn in the last frame. The `look` event `{ look, previous, reason,
+  groupSize }` (`lc-look` on the Web Component) reports joins and leaves, with the reason
+  `'join'`, `'layers'`, `'config'`, `'explicit'` or `'renderer'` (parked or moved to a context of
+  its own).
+
+Stress bench, 100 cards of 130×80 px (Chrome, RTX 5090, 165 Hz; main thread and GPU per frame,
+regions drawn per frame):
+
+| | `look: 'own'` | `look: 'shared'` |
+| --- | --- | --- |
+| CPU ×1 | 164 fps, 0.9 ms, GPU 1.0 ms, 34 draws | 165 fps, 0.3 ms, GPU 0.05 ms, 1 draw |
+| CPU ×4 | 161 fps, 2.3 ms, inactive cards at 15 fps | 161 fps, 1.6 ms, inactive cards at 55 fps |
+| DPR 2, CPU ×4 | 160 fps, 2.6 ms, inactive cards at 15 fps | 157 fps, 1.8 ms, inactive cards at 55 fps |
+| CPU ×4, every card every frame | 67 fps, 8.0 ms, GPU 4.2 ms, 100 draws | 109 fps, 2.3 ms, GPU 0.04 ms, 1 draw |
+
+The last row turns the secondary frame rate off (`secondaryMaxFps: 0`): what is left of a shared
+look's cost is one `drawImage` per card and frame, and the browser compositing every canvas that
+changed. The rate of the inactive cards is not set by the shared look but by the frame budget (the
+crowding floor is about 55 fps, the budget can lower it to about 15 fps), so it depends on the load
+of the machine: re-measured under other load, both looks had the inactive cards at 15 fps, with the
+shared look still ahead on frame rate and main-thread time (138 against 108 to 113 fps at CPU ×4).
+
 ## Browser support
 
 Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2, after a
@@ -577,6 +647,14 @@ npm run dev   # http://localhost:5173/
 | `npm test` | Unit tests (Vitest) |
 | `npm run typecheck` | Type check |
 | `npm run lint` | Biome |
+| `npm run test:e2e` | Browser end-to-end tests (Playwright, Chromium) |
+| `npm run size` | Consumer bundle sizes against the budget (after `npm run build:lib`) |
+
+Run `npx playwright install chromium` once before the first e2e run. The GPU, port and server
+switches are described in `tests/e2e/support/env.ts`: CI renders with SwiftShader, local runs use
+the hardware GPU. The e2e suite checks hard invariants (no lost contexts, the context budget,
+every visible card live, no leaks after 20 mount/destroy cycles, recovery from context loss,
+pixel parity pages) and records timings in `test-results/e2e-perf.json`.
 
 Dev pages: `/` (playground), `/examples/web-component.html`, `/examples/core-basic.html`,
 `/examples/engine-harness.html` (passes one by one, frame timing),
