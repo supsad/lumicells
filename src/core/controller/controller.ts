@@ -4,19 +4,27 @@
  * It owns the config layers (base -> tweened -> modulated), the palette LUT, the phase clock,
  * influences, pulses, lifts, grid geometry and the adaptive quality state, and turns them into
  * FrameInputs for the engine. Every buffer is preallocated: update() allocates nothing.
+ *
+ * Creation is cheap when many controllers start from the same config input (a list of cards with
+ * one preset): the normalized config, the ParamStore values after its reset and the CSS poster
+ * are kept per input (see initState), the palette LUT per palette (lut.ts), and the store's
+ * schema-derived part per layout (tween.ts). Each controller still gets its own config copy.
  */
 
 import {
+  cloneData,
   deepMerge,
   diffConfigs,
   getField,
   getPath,
+  isPlainObject,
   type LumiCellsConfig,
   type LumiCellsConfigInput,
   type ModulatablePath,
   normalizeConfig,
   normalizePatch,
   type ParamPath,
+  posterCss,
 } from '../../schema';
 import {
   FRAME_FLOATS,
@@ -62,7 +70,7 @@ import { clamp, hexToLinearInto, mulberry32 } from './math';
 import type { ModBlend, ModSource } from './modulators';
 import { type PerfChange, PerfController, type QualityMode } from './perf';
 import { type PulseInit, PulseList } from './pulses';
-import { ParamStore, ScalarTween } from './tween';
+import { ParamStore, ScalarTween, type StoreSnapshot } from './tween';
 
 export interface ControllerOptions {
   config?: LumiCellsConfigInput;
@@ -136,6 +144,94 @@ export function getSharedLayout(): ParamLayout {
   if (!sharedLayout) sharedLayout = createParamLayout();
   return sharedLayout;
 }
+
+/**
+ * What a controller starts from for one config input (see the header): never handed out, each
+ * controller gets a copy of `config`.
+ */
+interface InitState {
+  readonly config: LumiCellsConfig;
+  /**
+   * `config` as JSON when that round trip is exact (it is for normalized configs: finite
+   * numbers, strings, booleans, arrays, plain objects): JSON.parse copies it faster than a walk,
+   * mostly while the code is still cold (a page mounting its backgrounds).
+   */
+  readonly json: string | null;
+  readonly store: StoreSnapshot;
+  /** posterCss(config), computed on first use. */
+  poster: string | null;
+}
+
+/** Inputs kept per layout (least recently used first out). */
+const INIT_MAX = 32;
+const initStates = new WeakMap<ParamLayout, Map<string, InitState>>();
+let initMisses = 0;
+
+/** How many controllers normalized and reset their config themselves (a cached input does not). */
+export function initMissCount(): number {
+  return initMisses;
+}
+
+/**
+ * Exact content key of a config input, or null when it holds anything but plain data (plain
+ * objects, arrays, strings, numbers, booleans, null): normalization treats class instances and
+ * the like differently from plain objects with the same fields, so those are never cached.
+ */
+function inputKey(v: unknown, depth = 0): string | null {
+  if (v === null) return 'n';
+  switch (typeof v) {
+    case 'string':
+      return JSON.stringify(v);
+    case 'number':
+      return String(v);
+    case 'boolean':
+      return v ? 't' : 'f';
+    case 'object':
+      break;
+    default:
+      return null;
+  }
+  if (depth > 16) return null;
+  if (Array.isArray(v)) {
+    let out = '[';
+    for (let i = 0; i < v.length; i++) {
+      const k = inputKey(v[i], depth + 1);
+      if (k === null) return null;
+      out += i > 0 ? `,${k}` : k;
+    }
+    return `${out}]`;
+  }
+  if (!isPlainObject(v)) return null;
+  const keys = Object.keys(v).sort();
+  let out = '{';
+  let first = true;
+  for (const key of keys) {
+    const val = v[key];
+    // Normalization ignores undefined values like absent keys.
+    if (val === undefined) continue;
+    const k = inputKey(val, depth + 1);
+    if (k === null) return null;
+    out += `${first ? '' : ','}${JSON.stringify(key)}:${k}`;
+    first = false;
+  }
+  return `${out}}`;
+}
+
+/** Whether JSON.parse(JSON.stringify(v)) gives back exactly `v` (see InitState.json). */
+function jsonExact(v: unknown, depth = 0): boolean {
+  if (v === null || typeof v === 'string' || typeof v === 'boolean') return true;
+  if (typeof v === 'number') return Number.isFinite(v) && !Object.is(v, -0);
+  if (depth > 16) return false;
+  if (Array.isArray(v)) return v.every((x) => jsonExact(x, depth + 1));
+  if (!isPlainObject(v)) return false;
+  for (const key of Object.keys(v)) {
+    if (key === '__proto__' || !jsonExact(v[key], depth + 1)) return false;
+  }
+  return true;
+}
+
+/** Store ids of the parameters read every frame, per layout (they depend on the schema only). */
+const idsByLayout = new WeakMap<ParamLayout, ParamIds>();
 
 export class Controller {
   readonly layout: ParamLayout;
@@ -220,6 +316,10 @@ export class Controller {
   private clientX = 0;
   private clientY = 0;
   private hasViewport = false;
+  /** The cached start this config came from (its poster is known), until the first change. */
+  private init: InitState | null = null;
+  private posterFor: LumiCellsConfig | null = null;
+  private posterText = '';
 
   // Resolved entry ids of the parameters read every frame.
   private readonly ids: ParamIds;
@@ -228,8 +328,42 @@ export class Controller {
     this.random = opts.random ?? mulberry32((Math.random() * 4294967296) >>> 0);
     this.onWarn = opts.onWarn;
     this.layout = opts.layout ?? getSharedLayout();
-    this.config = normalizeConfig(opts.config ?? {}).config;
-    this.store = new ParamStore(this.layout, this.config);
+    const input = opts.config ?? {};
+    let key: string | null = null;
+    try {
+      key = inputKey(input);
+    } catch {
+      // A getter that throws, or the like: normalization copes, the cache stays out of it.
+    }
+    let states = initStates.get(this.layout);
+    if (!states) {
+      states = new Map();
+      initStates.set(this.layout, states);
+    }
+    const hit = key === null ? undefined : states.get(key);
+    if (hit) {
+      states.delete(key as string);
+      states.set(key as string, hit);
+      this.config = hit.json !== null ? JSON.parse(hit.json) : cloneData(hit.config);
+      this.store = new ParamStore(this.layout, this.config, hit.store);
+      this.init = hit;
+    } else {
+      initMisses++;
+      this.config = normalizeConfig(input).config;
+      this.store = new ParamStore(this.layout, this.config);
+      if (key !== null) {
+        const config = cloneData(this.config);
+        const state: InitState = {
+          config,
+          json: jsonExact(config) ? JSON.stringify(config) : null,
+          store: this.store.snapshot(),
+          poster: null,
+        };
+        states.set(key, state);
+        if (states.size > INIT_MAX) states.delete(states.keys().next().value as string);
+        this.init = state;
+      }
+    }
     this.lut = new PaletteLut(this.config.color.palette, this.config.color.interpolation);
     this.lifts = new LiftScheduler(this.random, this.pulses);
     this.sizingMix = new ScalarTween(this.config.grid.sizing === 'pitch' ? 1 : 0);
@@ -247,7 +381,12 @@ export class Controller {
       defaultFalloff: 2,
     };
 
-    this.ids = resolveIds(this.store);
+    let ids = idsByLayout.get(this.layout);
+    if (!ids) {
+      ids = resolveIds(this.store);
+      idsByLayout.set(this.layout, ids);
+    }
+    this.ids = ids;
 
     this.frame = {
       canvasWidth: 1,
@@ -285,6 +424,22 @@ export class Controller {
 
   getConfig(): Readonly<LumiCellsConfig> {
     return this.config;
+  }
+
+  /** CSS poster of the current config (posterCss), computed once per config. */
+  get poster(): string {
+    const cfg = this.config;
+    if (this.posterFor !== cfg) {
+      const init = this.init;
+      if (init) {
+        init.poster ??= posterCss(cfg);
+        this.posterText = init.poster;
+      } else {
+        this.posterText = posterCss(cfg);
+      }
+      this.posterFor = cfg;
+    }
+    return this.posterText;
   }
 
   /** Merges a partial config; returns the changed leaf paths (schema order). */
@@ -486,7 +641,9 @@ export class Controller {
 
   /** Extra pixel budget cap in megapixels (coarse pointer 2.4, software GL 0.5). */
   setPixelCap(mpx: number): void {
-    this.pixelCap = mpx > 0 ? mpx : Number.POSITIVE_INFINITY;
+    const v = mpx > 0 ? mpx : Number.POSITIVE_INFINITY;
+    if (v === this.pixelCap) return;
+    this.pixelCap = v;
     this.updateGeometry();
   }
 
@@ -744,6 +901,7 @@ export class Controller {
     const changed = diffConfigs(this.config, next);
     if (changed.length === 0) return changed;
     this.config = next;
+    this.init = null;
     const dur = Math.max(0, opts.transition ?? next.transition);
     let lut = false;
     for (const path of changed) {

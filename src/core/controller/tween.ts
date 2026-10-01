@@ -8,6 +8,11 @@
  * linearly in their own units, angles along the shortest arc (full-circle fields), colors in
  * OKLab, and `crossfade` enums keep the previous index plus a 0..1 mix. Everything else (booleans,
  * instant enums, static fields) snaps.
+ *
+ * What depends on the schema and the layout only (kinds, ranges, offsets, slots, the path index)
+ * is built once per layout and shared by every store (StoreTemplate). A new store either resets
+ * from its config or copies a snapshot of a store reset from the same config (StoreSnapshot):
+ * many instances mounting with one config pay the reset once.
  */
 
 import {
@@ -33,6 +38,10 @@ const K_OTHER = 7;
 
 const DEG = Math.PI / 180;
 
+/**
+ * The schema-derived part of one leaf: immutable, shared by every store of a layout. The values
+ * (effective, enum indices, tween duration and state, modulators) live in the store's arrays.
+ */
 export interface ParamEntry {
   readonly id: number;
   readonly path: ParamPath;
@@ -50,14 +59,6 @@ export interface ParamEntry {
   readonly tweenable: boolean;
   readonly fullCircle: boolean;
   readonly slot: ParamSlot | undefined;
-  dur: number;
-  active: boolean;
-  mods: Modulator[] | null;
-  /** Effective scalar value (numbers, angles in degrees, enum index, bool 0/1). */
-  eff: number;
-  /** Enum index (current) and previous index (crossfade source). */
-  index: number;
-  prev: number;
 }
 
 function kindOf(f: FieldDef): number {
@@ -87,86 +88,164 @@ function compsOf(kind: number): number {
   return 0;
 }
 
+/** The immutable part of a store, per layout (see the header). */
+interface StoreTemplate {
+  readonly entries: readonly ParamEntry[];
+  /** Entry id per leaf path. */
+  readonly ids: ReadonlyMap<string, number>;
+  /** Tweened components of all entries (length of cur/tgt). */
+  readonly comps: number;
+}
+
+const templates = new WeakMap<ParamLayout, StoreTemplate>();
+
+function templateOf(layout: ParamLayout): StoreTemplate {
+  let t = templates.get(layout);
+  if (t) return t;
+  const entries: ParamEntry[] = [];
+  const ids = new Map<string, number>();
+  let off = 0;
+  for (const path of getLeafPaths()) {
+    const field = getField(path);
+    if (!field) continue;
+    const kind = kindOf(field);
+    const n = compsOf(kind);
+    const ranged = field as { min?: number; max?: number; tween?: string };
+    const lo = typeof ranged.min === 'number' ? ranged.min : 0;
+    const hi = typeof ranged.max === 'number' ? ranged.max : 1;
+    const tweenable =
+      n > 0 && (field.live === 'uniform' || field.live === 'realloc') && ranged.tween !== 'none';
+    const eps = kind === K_COLOR || kind === K_XFADE ? 1e-4 : Math.max(1e-9, (hi - lo) * 1e-4);
+    ids.set(path, entries.length);
+    entries.push({
+      id: entries.length,
+      path,
+      field,
+      kind,
+      off,
+      n,
+      lo,
+      hi,
+      eps,
+      tweenable,
+      fullCircle: kind === K_ANGLE && (field as { fullCircle?: boolean }).fullCircle === true,
+      slot: layout.slots.get(path),
+    });
+    off += n;
+  }
+  t = { entries, ids, comps: off };
+  templates.set(layout, t);
+  return t;
+}
+
+/**
+ * The values a store holds right after a reset from one config (tweened = target, no modulators):
+ * a store created with it starts exactly like one reset from that config.
+ */
+export interface StoreSnapshot {
+  readonly params: Float32Array;
+  readonly cur: Float64Array;
+  readonly eff: Float64Array;
+  readonly index: Int32Array;
+  readonly prev: Int32Array;
+}
+
 export class ParamStore {
   readonly params: Float32Array;
   /** Set whenever a ParamsBlock slot is written; cleared by the consumer. */
   dirty = true;
-  private readonly entries: ParamEntry[] = [];
-  private readonly byPath = new Map<string, ParamEntry>();
+  private readonly entries: readonly ParamEntry[];
+  private readonly ids: ReadonlyMap<string, number>;
   private readonly cur: Float64Array;
   private readonly tgt: Float64Array;
+  /** Per entry: effective scalar (numbers, angles in degrees, enum index, bool 0/1). */
+  private readonly eff: Float64Array;
+  /** Per entry: enum index (current) and previous index (crossfade source). */
+  private readonly index: Int32Array;
+  private readonly prev: Int32Array;
+  /** Per entry: tween duration, ms, and whether it is tweening (1) right now. */
+  private readonly dur: Float64Array;
+  private readonly on: Uint8Array;
+  /** Per entry: its modulators (a sparse array: absent without any). */
+  private readonly mods: (Modulator[] | undefined)[] = [];
   private readonly active: Int32Array;
   private activeCount = 0;
   private modIds: Int32Array;
   private modCount = 0;
   private readonly rgb = new Float64Array(3);
 
+  /**
+   * `from`: a snapshot taken from a store reset from the same `config` (see StoreSnapshot); the
+   * store then copies it instead of resetting.
+   */
   constructor(
     readonly layout: ParamLayout,
     config: LumiCellsConfig,
+    from?: StoreSnapshot,
   ) {
+    const t = templateOf(layout);
+    this.entries = t.entries;
+    this.ids = t.ids;
+    const n = t.entries.length;
     this.params = new Float32Array(layout.floatCount);
-    let off = 0;
-    for (const path of getLeafPaths()) {
-      const field = getField(path);
-      if (!field) continue;
-      const kind = kindOf(field);
-      const n = compsOf(kind);
-      const ranged = field as { min?: number; max?: number; tween?: string };
-      const lo = typeof ranged.min === 'number' ? ranged.min : 0;
-      const hi = typeof ranged.max === 'number' ? ranged.max : 1;
-      const tweenable =
-        n > 0 && (field.live === 'uniform' || field.live === 'realloc') && ranged.tween !== 'none';
-      const eps = kind === K_COLOR || kind === K_XFADE ? 1e-4 : Math.max(1e-9, (hi - lo) * 1e-4);
-      const e: ParamEntry = {
-        id: this.entries.length,
-        path,
-        field,
-        kind,
-        off,
-        n,
-        lo,
-        hi,
-        eps,
-        tweenable,
-        fullCircle: kind === K_ANGLE && (field as { fullCircle?: boolean }).fullCircle === true,
-        slot: layout.slots.get(path),
-        dur: 0,
-        active: false,
-        mods: null,
-        eff: 0,
-        index: 0,
-        prev: 0,
-      };
-      off += n;
-      this.entries.push(e);
-      this.byPath.set(path, e);
-    }
-    this.cur = new Float64Array(off);
-    this.tgt = new Float64Array(off);
-    this.active = new Int32Array(this.entries.length);
+    this.cur = new Float64Array(t.comps);
+    this.tgt = new Float64Array(t.comps);
+    this.eff = new Float64Array(n);
+    this.index = new Int32Array(n);
+    this.prev = new Int32Array(n);
+    this.dur = new Float64Array(n);
+    this.on = new Uint8Array(n);
+    this.active = new Int32Array(n);
     this.modIds = new Int32Array(8);
-    this.reset(config);
+    if (from) this.restore(from);
+    else this.reset(config);
   }
 
   /** Entry id for a path (resolve once, then read with `num(id)` every frame). */
   id(path: ParamPath): number {
-    const e = this.byPath.get(path);
-    if (!e) throw new Error(`[lumicells] unknown parameter '${path}'`);
-    return e.id;
+    const id = this.ids.get(path);
+    if (id === undefined) throw new Error(`[lumicells] unknown parameter '${path}'`);
+    return id;
   }
 
   entry(path: string): ParamEntry | undefined {
-    return this.byPath.get(path);
+    const id = this.ids.get(path);
+    return id === undefined ? undefined : this.entries[id];
+  }
+
+  /**
+   * The current values, for stores created later from the same config (see StoreSnapshot). Only
+   * meaningful right after a reset: tweens and modulators are not part of it.
+   */
+  snapshot(): StoreSnapshot {
+    return {
+      params: this.params.slice(),
+      cur: this.cur.slice(),
+      eff: this.eff.slice(),
+      index: this.index.slice(),
+      prev: this.prev.slice(),
+    };
+  }
+
+  /** Starts from a snapshot (what reset() from the snapshot's config would have left). */
+  private restore(s: StoreSnapshot): void {
+    this.params.set(s.params);
+    this.cur.set(s.cur);
+    this.tgt.set(s.cur);
+    this.eff.set(s.eff);
+    this.index.set(s.index);
+    this.prev.set(s.prev);
+    this.activeCount = 0;
+    this.dirty = true;
   }
 
   /** Snaps every value to `config` (no tweens) and rewrites the whole ParamsBlock. */
   reset(config: LumiCellsConfig): void {
     this.activeCount = 0;
     for (const e of this.entries) {
-      e.active = false;
+      this.on[e.id] = 0;
       this.snapTo(e, getPath(config, e.path));
-      if (e.kind === K_XFADE) e.prev = e.index;
+      if (e.kind === K_XFADE) this.prev[e.id] = this.index[e.id] as number;
       this.refresh(e);
     }
     this.dirty = true;
@@ -176,19 +255,20 @@ export class ParamStore {
    * Starts tweening `path` toward `value` over `durationMs` (<= 0 or non-tweenable: instant).
    */
   setTarget(path: string, value: unknown, durationMs: number): void {
-    const e = this.byPath.get(path);
+    const e = this.entry(path);
     if (!e) return;
+    const id = e.id;
     if (!e.tweenable || !(durationMs > 0)) {
       if (e.kind === K_XFADE) {
         const idx = this.enumIndex(e, value);
-        e.index = idx;
-        e.prev = idx;
+        this.index[id] = idx;
+        this.prev[id] = idx;
         this.cur[e.off] = 1;
         this.tgt[e.off] = 1;
       } else {
         this.snapTo(e, value);
       }
-      if (e.active) this.deactivate(e);
+      if (this.on[id]) this.deactivate(e);
       this.refresh(e);
       return;
     }
@@ -214,19 +294,20 @@ export class ParamStore {
         break;
       case K_XFADE: {
         const idx = this.enumIndex(e, value);
-        if (idx === e.index) return;
+        const curIdx = this.index[id] as number;
+        if (idx === curIdx) return;
         const mix = this.cur[o] ?? 1;
-        if (idx === e.prev && mix < 1) {
+        if (idx === this.prev[id] && mix < 1) {
           // Reversal mid-transition: swap the slots and mirror the mix so the blend on screen
           // stays exactly where it is and fades back from there.
-          e.prev = e.index;
-          e.index = idx;
+          this.prev[id] = curIdx;
+          this.index[id] = idx;
           this.cur[o] = 1 - mix;
         } else {
           // A third value: crossfade from whatever dominates the screen right now (two slots
           // cannot hold a three-way blend).
-          e.prev = mix >= 0.5 ? e.index : e.prev;
-          e.index = idx;
+          if (mix >= 0.5) this.prev[id] = curIdx;
+          this.index[id] = idx;
           this.cur[o] = 0;
         }
         this.tgt[o] = 1;
@@ -234,10 +315,10 @@ export class ParamStore {
         break;
       }
     }
-    e.dur = durationMs;
-    if (!e.active) {
-      e.active = true;
-      this.active[this.activeCount++] = e.id;
+    this.dur[id] = durationMs;
+    if (!this.on[id]) {
+      this.on[id] = 1;
+      this.active[this.activeCount++] = id;
     }
   }
 
@@ -245,22 +326,24 @@ export class ParamStore {
   update(dt: number): boolean {
     const before = this.dirty;
     this.dirty = false;
+    const entries = this.entries;
     let w = 0;
     for (let i = 0; i < this.activeCount; i++) {
       const id = this.active[i] as number;
-      const e = this.entries[id] as ParamEntry;
+      const e = entries[id] as ParamEntry;
       const done = this.step(e, dt);
-      if (!e.mods) this.refresh(e);
-      if (done) e.active = false;
+      if (!this.mods[id]) this.refresh(e);
+      if (done) this.on[id] = 0;
       else this.active[w++] = id;
     }
     this.activeCount = w;
     for (let i = 0; i < this.modCount; i++) {
-      const e = this.entries[this.modIds[i] as number] as ParamEntry;
-      const mods = e.mods;
+      const id = this.modIds[i] as number;
+      const e = entries[id] as ParamEntry;
+      const mods = this.mods[id];
       if (!mods) continue;
       // Same as composeModulators(), inlined: no double crosses a call boundary per frame.
-      let v = e.kind === K_NUM || e.kind === K_ANGLE ? (this.cur[e.off] as number) : e.index;
+      let v = (e.kind === K_NUM || e.kind === K_ANGLE ? this.cur[e.off] : this.index[id]) as number;
       for (let j = 0; j < mods.length; j++) {
         const m = mods[j] as Modulator;
         if (m.disposed) continue;
@@ -273,8 +356,8 @@ export class ParamStore {
         else v += sv;
       }
       v = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v < e.lo ? e.lo : v > e.hi ? e.hi : v;
-      if (v !== e.eff) {
-        e.eff = v;
+      if (v !== this.eff[id]) {
+        this.eff[id] = v;
         const sl = e.slot;
         if (sl && e.kind === K_NUM) {
           // Hot path written inline (every modulated number, every frame).
@@ -297,7 +380,7 @@ export class ParamStore {
 
   /** Effective scalar: numbers/ints, angles (degrees), enum index, boolean 0/1. */
   num(id: number): number {
-    return (this.entries[id] as ParamEntry).eff;
+    return this.eff[id] as number;
   }
 
   /** Tweened component `c` of a vec2 (or color OKLab) entry. */
@@ -308,7 +391,7 @@ export class ParamStore {
 
   /** Crossfade state of a `crossfade` enum: previous index and mix (1 = current only). */
   crossfadePrev(id: number): number {
-    return (this.entries[id] as ParamEntry).prev;
+    return this.prev[id] as number;
   }
 
   crossfadeMix(id: number): number {
@@ -318,25 +401,28 @@ export class ParamStore {
 
   /** Tweening or modulated right now (its effective value may change this frame). */
   isLive(id: number): boolean {
-    const e = this.entries[id] as ParamEntry;
-    return e.active || e.mods !== null;
+    return this.on[id] === 1 || this.mods[id] !== undefined;
   }
 
   getEffective(path: string): number {
-    return this.byPath.get(path)?.eff ?? Number.NaN;
+    const id = this.ids.get(path);
+    return id === undefined ? Number.NaN : (this.eff[id] as number);
   }
 
   isModulated(path: string): boolean {
-    return !!this.byPath.get(path)?.mods;
+    const id = this.ids.get(path);
+    return id !== undefined && this.mods[id] !== undefined;
   }
 
   /** Adds a modulator on a numeric path. Returns null for non-numeric paths. */
   addModulator(path: string, source: ModSource, blend?: ModBlend, smoothingMs?: number) {
-    const e = this.byPath.get(path);
+    const e = this.entry(path);
     if (!e || (e.kind !== K_NUM && e.kind !== K_ANGLE)) return null;
     const m = new Modulator(source, blend, smoothingMs);
-    if (!e.mods) {
-      e.mods = [];
+    let list = this.mods[e.id];
+    if (!list) {
+      list = [];
+      this.mods[e.id] = list;
       if (this.modCount >= this.modIds.length) {
         const grown = new Int32Array(this.modIds.length * 2);
         grown.set(this.modIds);
@@ -344,18 +430,19 @@ export class ParamStore {
       }
       this.modIds[this.modCount++] = e.id;
     }
-    e.mods.push(m);
+    list.push(m);
     return m;
   }
 
   removeModulator(path: string, m: Modulator): void {
     m.disposed = true;
-    const e = this.byPath.get(path);
-    if (!e?.mods) return;
-    const i = e.mods.indexOf(m);
-    if (i >= 0) e.mods.splice(i, 1);
-    if (e.mods.length > 0) return;
-    e.mods = null;
+    const e = this.entry(path);
+    const list = e ? this.mods[e.id] : undefined;
+    if (!e || !list) return;
+    const i = list.indexOf(m);
+    if (i >= 0) list.splice(i, 1);
+    if (list.length > 0) return;
+    this.mods[e.id] = undefined;
     let w = 0;
     for (let i = 0; i < this.modCount; i++) {
       const id = this.modIds[i] as number;
@@ -376,7 +463,7 @@ export class ParamStore {
   }
 
   private deactivate(e: ParamEntry): void {
-    e.active = false;
+    this.on[e.id] = 0;
     let w = 0;
     for (let i = 0; i < this.activeCount; i++) {
       const id = this.active[i] as number;
@@ -410,15 +497,15 @@ export class ParamStore {
         this.tgt[o + 2] = this.cur[o + 2] as number;
         break;
       case K_XFADE:
-        e.index = this.enumIndex(e, value);
+        this.index[e.id] = this.enumIndex(e, value);
         this.cur[o] = 1;
         this.tgt[o] = 1;
         break;
       case K_ENUM:
-        e.index = this.enumIndex(e, value);
+        this.index[e.id] = this.enumIndex(e, value);
         break;
       case K_BOOL:
-        e.index = value ? 1 : 0;
+        this.index[e.id] = value ? 1 : 0;
         break;
     }
   }
@@ -426,7 +513,8 @@ export class ParamStore {
   /** One exponential step of every component; returns true when all snapped. */
   private step(e: ParamEntry, dt: number): boolean {
     // k computed here, not by the caller: a double argument would be boxed on every call.
-    const k = e.dur > 0 ? 1 - Math.exp((-dt * 5000) / e.dur) : 1;
+    const dur = this.dur[e.id] as number;
+    const k = dur > 0 ? 1 - Math.exp((-dt * 5000) / dur) : 1;
     let done = true;
     const end = e.off + e.n;
     for (let j = e.off; j < end; j++) {
@@ -447,12 +535,14 @@ export class ParamStore {
 
   /** Recomputes the effective value from the tweened one (no modulators) and writes the slot. */
   private refresh(e: ParamEntry): void {
+    const id = e.id;
+    const modulated = this.mods[id] !== undefined;
     switch (e.kind) {
       case K_NUM: {
         const v = this.cur[e.off] as number;
-        e.eff = v;
+        this.eff[id] = v;
         const sl = e.slot;
-        if (sl && !e.mods) {
+        if (sl && !modulated) {
           this.params[sl.offset] = v;
           this.dirty = true;
         }
@@ -460,18 +550,18 @@ export class ParamStore {
       }
       case K_ANGLE: {
         const v = this.cur[e.off] as number;
-        e.eff = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v;
+        this.eff[id] = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v;
         break;
       }
       case K_ENUM:
       case K_XFADE:
       case K_BOOL:
-        e.eff = e.index;
+        this.eff[id] = this.index[id] as number;
         break;
       default:
-        e.eff = 0;
+        this.eff[id] = 0;
     }
-    if (e.mods) return;
+    if (modulated) return;
     this.writeSlot(e);
   }
 
@@ -480,16 +570,17 @@ export class ParamStore {
     if (!s) return;
     const p = this.params;
     const o = s.offset;
+    const eff = this.eff[e.id] as number;
     switch (e.kind) {
       case K_NUM:
       case K_ENUM:
       case K_XFADE:
       case K_BOOL:
-        p[o] = e.eff;
+        p[o] = eff;
         break;
       case K_ANGLE:
         // Unwrapped degrees are fine on the GPU (only sin/cos read them) but keep them small.
-        p[o] = e.fullCircle ? wrap(e.eff * DEG, TAU) : e.eff * DEG;
+        p[o] = e.fullCircle ? wrap(eff * DEG, TAU) : eff * DEG;
         break;
       case K_VEC2:
         p[o] = this.cur[e.off] as number;

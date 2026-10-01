@@ -5,6 +5,10 @@
  *
  * The ramp is kept in OKLab and animated entry-wise toward the newly baked target, so palette
  * edits of any stop count and interrupted transitions blend smoothly without a second texture.
+ *
+ * Baked ramps (OKLab and the encoded bytes) are cached per palette and interpolation (a few
+ * dozen, least recently used first out): a page mounting many instances with one palette bakes
+ * it once.
  */
 
 import { hexToRgb, srgbToLinear } from '../color';
@@ -90,6 +94,71 @@ export function bakePaletteOklab(
   }
 }
 
+interface Baked {
+  /** LUT_SIZE OKLab triples. */
+  readonly oklab: Float32Array;
+  /** The encoded texture bytes of that ramp. */
+  readonly bytes: Uint8Array;
+}
+
+/** Palettes kept baked (least recently used first out). */
+const BAKED_MAX = 32;
+const baked = new Map<string, Baked>();
+let bakeCount = 0;
+
+/** How many palettes were baked so far (a cached one is not baked again). */
+export function lutBakeCount(): number {
+  return bakeCount;
+}
+
+function bakedRamp(palette: readonly string[], interpolation: LutInterpolation): Baked {
+  const key = `${interpolation}|${palette.join(',')}`;
+  let b = baked.get(key);
+  if (b) {
+    // Most recently used last.
+    baked.delete(key);
+    baked.set(key, b);
+    return b;
+  }
+  bakeCount++;
+  const oklab = new Float32Array(LUT_SIZE * 3);
+  bakePaletteOklab(palette, interpolation, oklab);
+  const bytes = new Uint8Array(LUT_SIZE * 2 * 4);
+  encodeRamp(oklab, bytes, srgbLut());
+  b = { oklab, bytes };
+  baked.set(key, b);
+  if (baked.size > BAKED_MAX) baked.delete(baked.keys().next().value as string);
+  return b;
+}
+
+/** OKLab -> linear -> sRGB bytes for both rows, fully inline (runs every transition frame). */
+function encodeRamp(cur: Float32Array, b: Uint8Array, tab: Uint8Array): void {
+  const N = SRGB_STEPS;
+  for (let x = 0; x < LUT_SIZE; x++) {
+    const A0 = cur[x * 3 + 1] as number;
+    const B0 = cur[x * 3 + 2] as number;
+    for (let row = 0; row < 2; row++) {
+      const L = row === 0 ? (cur[x * 3] as number) : HOT_L;
+      const A = row === 0 ? A0 : A0 * HOT_C;
+      const B = row === 0 ? B0 : B0 * HOT_C;
+      const l0 = L + 0.3963377774 * A + 0.2158037573 * B;
+      const m0 = L - 0.1055613458 * A - 0.0638541728 * B;
+      const s0 = L - 0.0894841775 * A - 1.291485548 * B;
+      const l = l0 * l0 * l0;
+      const m = m0 * m0 * m0;
+      const s = s0 * s0 * s0;
+      const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+      const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+      const bl = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+      const o = row * LUT_SIZE * 4 + x * 4;
+      b[o] = tab[r <= 0 ? 0 : r >= 1 ? N : (r * N + 0.5) | 0] as number;
+      b[o + 1] = tab[g <= 0 ? 0 : g >= 1 ? N : (g * N + 0.5) | 0] as number;
+      b[o + 2] = tab[bl <= 0 ? 0 : bl >= 1 ? N : (bl * N + 0.5) | 0] as number;
+      b[o + 3] = 255;
+    }
+  }
+}
+
 export class PaletteLut {
   /** Texture bytes: row 0 palette, row 1 hot tint. */
   readonly bytes = new Uint8Array(LUT_SIZE * 2 * 4);
@@ -102,9 +171,10 @@ export class PaletteLut {
   private dur = 0;
 
   constructor(palette: readonly string[], interpolation: LutInterpolation) {
-    bakePaletteOklab(palette, interpolation, this.tgt);
-    this.cur.set(this.tgt);
-    this.encode();
+    const b = bakedRamp(palette, interpolation);
+    this.tgt.set(b.oklab);
+    this.cur.set(b.oklab);
+    this.bytes.set(b.bytes);
   }
 
   get transitioning(): boolean {
@@ -113,14 +183,16 @@ export class PaletteLut {
 
   /** Re-bakes the target; the ramp moves there over `durationMs` (<= 0: instantly). */
   setTarget(palette: readonly string[], interpolation: LutInterpolation, durationMs: number): void {
-    bakePaletteOklab(palette, interpolation, this.tgt);
+    const b = bakedRamp(palette, interpolation);
+    this.tgt.set(b.oklab);
     if (durationMs > 0) {
       this.dur = durationMs;
       this.animating = true;
     } else {
-      this.cur.set(this.tgt);
+      this.cur.set(b.oklab);
       this.animating = false;
-      this.encode();
+      this.bytes.set(b.bytes);
+      this.dirty = true;
     }
   }
 
@@ -152,35 +224,8 @@ export class PaletteLut {
     out[2] = this.cur[o + 2] as number;
   }
 
-  /** OKLab -> linear -> sRGB bytes for both rows, fully inline (runs every transition frame). */
   private encode(): void {
-    const b = this.bytes;
-    const cur = this.cur;
-    const tab = this.srgb;
-    const N = SRGB_STEPS;
-    for (let x = 0; x < LUT_SIZE; x++) {
-      const A0 = cur[x * 3 + 1] as number;
-      const B0 = cur[x * 3 + 2] as number;
-      for (let row = 0; row < 2; row++) {
-        const L = row === 0 ? (cur[x * 3] as number) : HOT_L;
-        const A = row === 0 ? A0 : A0 * HOT_C;
-        const B = row === 0 ? B0 : B0 * HOT_C;
-        const l0 = L + 0.3963377774 * A + 0.2158037573 * B;
-        const m0 = L - 0.1055613458 * A - 0.0638541728 * B;
-        const s0 = L - 0.0894841775 * A - 1.291485548 * B;
-        const l = l0 * l0 * l0;
-        const m = m0 * m0 * m0;
-        const s = s0 * s0 * s0;
-        const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
-        const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
-        const bl = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
-        const o = row * LUT_SIZE * 4 + x * 4;
-        b[o] = tab[r <= 0 ? 0 : r >= 1 ? N : (r * N + 0.5) | 0] as number;
-        b[o + 1] = tab[g <= 0 ? 0 : g >= 1 ? N : (g * N + 0.5) | 0] as number;
-        b[o + 2] = tab[bl <= 0 ? 0 : bl >= 1 ? N : (bl * N + 0.5) | 0] as number;
-        b[o + 3] = 255;
-      }
-    }
+    encodeRamp(this.cur, this.bytes, this.srgb);
     this.dirty = true;
   }
 }
