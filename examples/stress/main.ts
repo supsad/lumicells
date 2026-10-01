@@ -1,13 +1,17 @@
 /**
  * Stress bench: N animated card backgrounds on one page, three ways.
  *
- * - `lumicells`: one LumiCells instance per card. With `renderer=own` (default) a live instance
- *   owns a WebGL2 context and browsers keep only about 16 per page (Chrome evicts the oldest one
- *   when a new one is created); the library's context budget (LumiCells.configure,
- *   maxContexts=N here) keeps the page below that, so the cards past the budget show their
- *   poster. With `renderer=shared` every card is a member of the library's shared renderer: one
- *   context for all of them, drawn into an atlas and copied into each card's 2D canvas (`own=N`
- *   keeps the first N cards on contexts of their own: a mixed page).
+ * - `lumicells`: one LumiCells instance per card, with the library's default renderer ('auto':
+ *   large backgrounds get a WebGL context of their own while the budget has room, the others
+ *   share one) unless `renderer=` says otherwise. With `renderer=own` a live instance owns a
+ *   WebGL2 context and browsers keep only about 16 per page (Chrome evicts the oldest one when a
+ *   new one is created); the library's context budget (LumiCells.configure, maxContexts=N here)
+ *   keeps the page below that, so the cards past the budget show their poster. With
+ *   `renderer=shared` every card is a member of the library's shared renderer: one context for
+ *   all of them, drawn into an atlas and copied into each card's 2D canvas (`own=N` keeps the
+ *   first N cards on contexts of their own: a mixed page). `hero=1` adds a full-viewport
+ *   background behind the cards (resizable through `window.bench`), `layout=large` makes every
+ *   card large enough for a context of its own under 'auto'.
  * - `shared`: one WebGL2 canvas renders a simple pixel-grid shader once per frame; each card is a
  *   2D canvas filled with drawImage() from it (see shared.ts).
  * - `mirror`: the same copy technique, but the source is ONE real LumiCells instance: the full
@@ -19,18 +23,21 @@
  * down and back up and reports, per step, whether the visible cards are live or on the poster
  * and how long the newly visible ones took to come alive; `mount()` reports the cost of
  * creating the instances (they are created in a task of their own after the page settled, so
- * that task's long task / long animation frame is theirs alone); `lossTest()` forces WebGL
+ * that task's long task / long animation frame is theirs alone; for a first-load figure load
+ * each run in a fresh browser profile or context: a reload reuses the V8 code cache and reads
+ * about 1.5x lower); `lossTest()` forces WebGL
  * context losses on live visible cards and reports what those cards show until the contexts
  * are restored (a lost context's canvas must never paint its blank box over the page).
  */
 
 import {
   type ConfigureOptions,
-  type InstanceRenderer,
   LumiCells,
+  type LumiCellsEvents,
   onBeforeFrame,
   PRESET_IDS,
   type PresetId,
+  type RendererMode,
   type SharedRendererStats,
   type Stats,
 } from 'lumicells';
@@ -44,13 +51,15 @@ const probe = installContextProbe();
 // Parameters
 
 type Mode = 'lumicells' | 'shared' | 'mirror';
-type Layout = 'visible' | 'scroll';
+type Layout = 'visible' | 'scroll' | 'large';
+const LAYOUTS: readonly Layout[] = ['visible', 'scroll', 'large'];
+const RENDERERS: readonly RendererMode[] = ['auto', 'own', 'shared'];
 
 const qs = new URLSearchParams(location.search);
 const presetParam = qs.get('preset') ?? 'reference';
 const params = {
   n: clampInt(qs.get('n'), 1, 1000, 16),
-  layout: (qs.get('layout') === 'scroll' ? 'scroll' : 'visible') as Layout,
+  layout: (LAYOUTS.find((l) => l === qs.get('layout')) ?? 'visible') as Layout,
   mode: (['shared', 'mirror'].includes(qs.get('mode') ?? '')
     ? qs.get('mode')
     : 'lumicells') as Mode,
@@ -58,16 +67,19 @@ const params = {
     ? presetParam
     : 'reference') as PresetId,
   pauseOffscreen: qs.get('pauseOffscreen') !== '0',
-  /** Renderer of the LumiCells instances (mode=lumicells). */
-  renderer: (qs.get('renderer') === 'shared' ? 'shared' : 'own') as InstanceRenderer,
-  /** With renderer=shared: the first N cards use their own context (a mixed page). */
+  /** Renderer of the LumiCells instances (mode=lumicells); null: the library default. */
+  renderer: RENDERERS.find((r) => r === qs.get('renderer')) ?? null,
+  /** The first N cards use renderer 'own' (a mixed page). */
   own: clampInt(qs.get('own'), 0, 1000, 0),
+  /** A full-viewport background behind the cards (mode=lumicells). */
+  hero: qs.get('hero') === '1',
   hud: qs.get('hud') !== '0',
   /** LumiCells.configure() overrides (library default when absent). */
   maxContexts: qs.get('maxContexts'),
   parkAfterMs: qs.get('parkAfterMs'),
   createPerFrame: qs.get('createPerFrame'),
   sharedBudget: qs.get('sharedBudget'),
+  promoteArea: qs.get('promoteArea'),
   /** Delay before the instances are created, ms (lets a profiler attach first). */
   mountDelay: clampInt(qs.get('mountDelay'), 0, 60_000, 0),
 };
@@ -78,7 +90,12 @@ function clampInt(v: string | null, min: number, max: number, fallback: number):
 }
 
 /** Card CSS size per layout (must match stress.html). */
-const CARD = params.layout === 'visible' ? { w: 130, h: 80 } : { w: 320, h: 200 };
+const CARD =
+  params.layout === 'visible'
+    ? { w: 130, h: 80 }
+    : params.layout === 'large'
+      ? { w: 720, h: 720 }
+      : { w: 320, h: 200 };
 const DPR = Math.min(2, window.devicePixelRatio || 1);
 
 // -------------------------------------------------------------------------------------------
@@ -188,6 +205,8 @@ try {
 document.body.className = params.layout;
 const grid = document.getElementById('grid') as HTMLElement;
 const hud = document.getElementById('hud') as HTMLElement;
+const heroEl = document.getElementById('hero') as HTMLElement;
+heroEl.hidden = !(params.hero && params.mode === 'lumicells');
 
 interface Card {
   host: HTMLElement;
@@ -296,6 +315,8 @@ function applyRuntimeParams(): ConfigureOptions {
   const budget = num(params.sharedBudget);
   if (params.sharedBudget === 'auto') opts.sharedBudget = 'auto';
   else if (budget !== null) opts.sharedBudget = budget;
+  const promote = num(params.promoteArea);
+  if (promote !== null) opts.promoteArea = promote;
   if (Object.keys(opts).length > 0) LumiCells.configure(opts);
   return opts;
 }
@@ -303,16 +324,44 @@ const runtimeParams = applyRuntimeParams();
 
 const mountInfo = { startAt: -1, syncMs: -1 };
 
+/** Renderer switches of the instances (the 'renderer' event), in order. */
+type RendererEvent = LumiCellsEvents['renderer'] & {
+  /** Card index, -1 for the hero. */
+  index: number;
+  /** ms since the instances were created. */
+  t: number;
+};
+const rendererEvents: RendererEvent[] = [];
+let heroEntry: Entry | null = null;
+
+function watchRenderer(e: Entry, index: number): void {
+  e.cells.on('renderer', (ev) =>
+    rendererEvents.push({ ...ev, index, t: Math.round(performance.now() - t0) }),
+  );
+}
+
 function mountAll(): void {
   if (params.mode === 'lumicells') {
+    if (params.hero) {
+      const hero = new LumiCells(heroEl, {
+        preset: params.preset,
+        config: renderConfig,
+        priority: 'high',
+        ...(params.renderer ? { renderer: params.renderer } : {}),
+      });
+      heroEntry = watch(hero, { host: heroEl, visible: true });
+      watchRenderer(heroEntry, -1);
+    }
     cards.forEach((card, i) => {
-      const renderer = params.renderer === 'shared' && i < params.own ? 'own' : params.renderer;
+      const renderer = i < params.own ? 'own' : params.renderer;
       const cells = new LumiCells(card.host, {
         preset: params.preset,
         config: renderConfig,
-        renderer,
+        ...(renderer ? { renderer } : {}),
       });
-      entries.push(watch(cells, card));
+      const e = watch(cells, card);
+      watchRenderer(e, i);
+      entries.push(e);
     });
     onBeforeFrame(() => {
       const r = rec;
@@ -450,6 +499,8 @@ function snapshot() {
   let visibleDead = 0;
   let visibleBlank = 0;
   const states: Record<string, number> = {};
+  /** Instances by the renderer they use: 'own' / 'shared'. */
+  const renderers: Record<string, number> = {};
   /** Adaptive quality of the live instances: "tier@scale" -> count. */
   const quality: Record<string, number> = {};
   let readyAllMs: number | null = null;
@@ -474,6 +525,7 @@ function snapshot() {
       const st = e.cells.getStats();
       const state = st.state;
       if (state) states[state] = (states[state] ?? 0) + 1;
+      renderers[st.renderer] = (renderers[st.renderer] ?? 0) + 1;
       if (look === 'frozen') frozen++;
       if (state === 'live') {
         const q = `${st.quality}@${st.scale}`;
@@ -535,8 +587,17 @@ function snapshot() {
       lostCanvas,
       frozen,
       states,
+      renderers,
       quality,
     },
+    hero: heroEntry
+      ? {
+          renderer: heroEntry.cells.renderer,
+          state: heroEntry.cells.getStats().state,
+          look: cardLook(heroEntry),
+        }
+      : null,
+    rendererEvents: rendererEvents.length,
     readyAllMs,
     shared:
       sharedMembers > 0
@@ -961,6 +1022,41 @@ async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: 
   };
 }
 
+/**
+ * Resizes the hero (CSS px; null restores the full viewport). With `dragMs` the size moves back
+ * and forth between `from` and `to` every `periodMs` for that long (a dragged resize handle),
+ * then stays at `to`. Reports the renderer events of the hero during the call.
+ */
+async function resizeHero(
+  opts: {
+    to?: [number, number] | null;
+    from?: [number, number] | null;
+    dragMs?: number;
+    periodMs?: number;
+  } = {},
+) {
+  const set = (s: [number, number] | null | undefined) => {
+    heroEl.style.width = s ? `${s[0]}px` : '';
+    heroEl.style.height = s ? `${s[1]}px` : '';
+  };
+  const first = rendererEvents.length;
+  const start = performance.now();
+  const drag = opts.dragMs ?? 0;
+  const period = Math.max(16, opts.periodMs ?? 100);
+  let flips = 0;
+  while (performance.now() - start < drag) {
+    set(flips % 2 ? opts.from : opts.to);
+    flips++;
+    await sleep(period);
+  }
+  set(opts.to);
+  return {
+    flips,
+    renderer: heroEntry?.cells.renderer ?? null,
+    events: rendererEvents.slice(first).filter((e) => e.index === -1),
+  };
+}
+
 /** Cost of creating the instances (they are created in one task, see mountAll()). */
 function mount() {
   const start = mountInfo.startAt;
@@ -1002,6 +1098,16 @@ const bench = {
   scrollThrough,
   mount,
   lossTest,
+  resizeHero,
+  /** Renderer switches so far (the 'renderer' events), in order. */
+  get rendererEvents() {
+    return rendererEvents.slice();
+  },
+  get hero() {
+    return heroEntry
+      ? { renderer: heroEntry.cells.renderer, stats: heroEntry.cells.getStats() }
+      : null;
+  },
 };
 declare global {
   interface Window {
@@ -1027,7 +1133,7 @@ if (params.hud) {
     const s = snapshot();
     const c = sampleCost();
     hud.textContent =
-      `${params.mode}${params.mode === 'lumicells' ? `/${params.renderer}${params.own ? ` own=${params.own}` : ''}` : ''} n=${params.n} ${params.layout} pauseOffscreen=${params.pauseOffscreen ? 1 : 0}\n` +
+      `${params.mode}${params.mode === 'lumicells' ? `/${params.renderer ?? 'default'}${params.own ? ` own=${params.own}` : ''}` : ''} n=${params.n} ${params.layout} pauseOffscreen=${params.pauseOffscreen ? 1 : 0}\n` +
       `fps ${fps.toFixed(0)}  cpu ${c.cpu.toFixed(2)} ms  gpu ${c.gpu?.toFixed(2) ?? 'n/a'} ms\n` +
       `live ${s.instances.live}  poster ${s.instances.poster}  ready ${s.instances.ready}\n` +
       `visible ${s.instances.visible}: live ${s.instances.visibleLive}  poster ${s.instances.visiblePoster}  dead ${s.instances.visibleDead}\n` +
@@ -1035,6 +1141,11 @@ if (params.hud) {
 ` +
       `states ${Object.entries(s.instances.states)
         .map(([k, v]) => `${k} ${v}`)
-        .join('  ')}`;
+        .join('  ')}\n` +
+      `renderers ${Object.entries(s.instances.renderers)
+        .map(([k, v]) => `${k} ${v}`)
+        .join(
+          '  ',
+        )}${s.hero ? `  hero ${s.hero.renderer} ${s.hero.state}` : ''}  switches ${s.rendererEvents}`;
   }, 500);
 }

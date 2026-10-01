@@ -11,16 +11,22 @@
     <!--
       Dev-only stress bench (not part of the production build). URL parameters:
         n=100                        number of backgrounds
-        layout=visible|scroll        visible: all cards on one screen; scroll: a long feed
+        layout=visible|scroll|large  visible: all cards on one screen; scroll: a long feed;
+                                     large: 720x720 cards (each over 0.5 Mpx: 'auto' gives them
+                                     contexts of their own while the budget has room)
         mode=lumicells|shared|mirror lumicells: one LumiCells instance per card;
                                      shared: one WebGL canvas with a simple shader, copied into
                                      every card's 2D canvas with drawImage;
                                      mirror: one real LumiCells instance copied the same way
-        renderer=own|shared          (lumicells) the instances' renderer: own = one WebGL context
-                                     each (within the context budget), shared = the library's
-                                     shared renderer (one context, atlas + 2D copies)
-        own=N                        (lumicells, renderer=shared) the first N cards use 'own':
-                                     a mixed page
+        renderer=auto|own|shared     (lumicells) the instances' renderer (default: the
+                                     library's, 'auto'): own = one WebGL context each (within the
+                                     context budget), shared = the library's shared renderer (one
+                                     context, atlas + 2D copies), auto = own for large ones while
+                                     the budget has room, shared for the rest
+        own=N                        (lumicells) the first N cards use 'own': a mixed page
+        hero=1                       (lumicells) a full-viewport background (priority high)
+                                     behind the cards; window.bench.resizeHero() resizes it
+        promoteArea=N                LumiCells.configure() 'auto' threshold, megapixels
         sharedBudget=auto|N          LumiCells.configure() shared atlas budget, megapixels
         preset=reference             LumiCells preset (lumicells / mirror)
         pauseOffscreen=1             pause offscreen cards (0 keeps them running)
@@ -30,8 +36,8 @@
         mountDelay=0                 ms before the instances are created (to attach a profiler)
         hud=0                        hide the status line
       The instances are created in a task of their own after the first paint.
-      window.bench exposes measure(ms), snapshot(), scrollThrough(), mount() and lossTest() for
-      automated runs.
+      window.bench exposes measure(ms), snapshot(), scrollThrough(), mount(), lossTest(),
+      resizeHero() and rendererEvents for automated runs.
     -->
     <style>
       :root {
@@ -49,6 +55,9 @@
         overflow: hidden;
       }
       #grid {
+        /* Above the hero. */
+        position: relative;
+        z-index: 1;
         display: grid;
         gap: 8px;
         padding: 8px;
@@ -63,6 +72,22 @@
         grid-auto-rows: 200px;
         gap: 16px;
         padding: 16px;
+      }
+      body.large #grid {
+        grid-template-columns: repeat(2, 720px);
+        grid-auto-rows: 720px;
+        gap: 16px;
+        padding: 16px;
+      }
+      /* The hero sits behind the cards, full viewport unless resized (bench.resizeHero). */
+      #hero {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 0;
+        background: #050632;
       }
       .card {
         position: relative;
@@ -113,6 +138,7 @@
     </style>
   </head>
   <body>
+    <div id="hero" hidden></div>
     <div id="grid"></div>
     <div id="hud" hidden></div>
     <script type="module" src="./stress/main.ts"></script>
