@@ -13,6 +13,12 @@
  * with the unfolded kernel (up to 16 per side, cheap at cell resolution).
  * Every pass rewrites its target's whole logical rect, so the old contents are discarded first
  * (tiled GPUs then skip loading them).
+ *
+ * Lite pipeline (run(..., lite)): the downsample, then the combine pass alone, which blurs the
+ * bloom source and the downsampled haze in 2-D itself (a uniform branch in the same program):
+ * 2 passes instead of 5, for small regions where the 2-D kernels cost little (at cell resolution
+ * a card has a few hundred to a few thousand cells). On float targets the 2-D bloom equals the
+ * separable one; the haze differs only in how it is interpolated (see liteHazeSigma).
  * The programs belong to the device and are shared by every slot: kernels and target sizes are
  * cached by value, so they are re-uploaded only when the slot that draws next needs other ones.
  */
@@ -77,6 +83,58 @@ void main() {
 `;
 }
 
+/**
+ * The lite pipeline's 2-D kernels (combine program only): the separable gaussian of `TAPS` (folded
+ * pairs on float targets, per-texel weights on RGBA8) applied in both directions at once, straight
+ * from `tex`. On float targets every bilinear tap is the product of the two 1-D interpolations, so
+ * at texel centers the result equals the two-pass blur exactly.
+ */
+function blur2dGlsl(name: string, taps: string, count: string, w: string, radius: string): string {
+  return `
+#if HDR_RT
+// Folded tap k of 2 * count - 1: 0 is the center, odd ones +offset, even ones -offset.
+vec2 ${name}Tap(int k) {
+  vec2 t = ${taps}[(k + 1) / 2];
+  return vec2((k & 1) == 1 ? t.x : -t.x, t.y);
+}
+vec3 ${name}(sampler2D s, vec2 pos, vec4 tex) {
+  int n = 2 * ${count} - 1;
+  vec3 acc = vec3(0.0);
+  for (int y = 0; y < ${2 * MAX_TAPS - 1}; y++) {
+    if (y >= n) break;
+    vec2 ty = ${name}Tap(y);
+    vec3 row = vec3(0.0);
+    for (int x = 0; x < ${2 * MAX_TAPS - 1}; x++) {
+      if (x >= n) break;
+      vec2 tx = ${name}Tap(x);
+      row += texBilinear(s, pos + vec2(tx.x, ty.x), tex.xy, tex.zw).rgb * tx.y;
+    }
+    acc += row * ty.y;
+  }
+  return acc;
+}
+#else
+// Decoded bilinear taps one texel apart (exact texel fetches when pos is a texel center).
+vec3 ${name}(sampler2D s, vec2 pos, vec4 tex) {
+  int r = ${radius};
+  vec3 acc = vec3(0.0);
+  for (int j = 0; j <= ${2 * MAX_RADIUS}; j++) {
+    if (j > 2 * r) break;
+    int y = j - r;
+    vec3 row = vec3(0.0);
+    for (int i = 0; i <= ${2 * MAX_RADIUS}; i++) {
+      if (i > 2 * r) break;
+      int x = i - r;
+      row += texBilinearDec(s, pos + vec2(float(x), float(y)), tex.xy, tex.zw).rgb * ${w}[abs(x)];
+    }
+    acc += row * ${w}[abs(y)];
+  }
+  return acc;
+}
+#endif
+`;
+}
+
 function blurFs(header: string, dir: 'x' | 'y', combine = false): string {
   return `${header}
 #define BLUR_DIR ${dir === 'x' ? 'vec2(1.0, 0.0)' : 'vec2(0.0, 1.0)'}
@@ -95,9 +153,22 @@ uniform int u_radius;
 uniform sampler2D u_haze;
 uniform vec4 u_hazeTex;          // same for the quarter-res haze
 uniform vec3 u_mix;              // x bloom on, y haze on, z vignette on (debug views isolate one)
+// Lite pipeline (see LITE in BloomPass): u_src is the bloom source and u_haze the downsampled
+// (not yet blurred) haze; both are blurred here in 2-D, the haze with its own kernel.
+uniform float u_lite;
+#if HDR_RT
+uniform vec2 u_hazeTaps[${MAX_TAPS}];
+uniform int u_hazeCount;
+#else
+uniform float u_hazeW[${MAX_RADIUS + 1}];
+uniform int u_hazeRadius;
+#endif
+${blur2dGlsl('bloom2d', 'u_taps', 'u_count', 'u_w', 'u_radius')}
+${blur2dGlsl('haze2d', 'u_hazeTaps', 'u_hazeCount', 'u_hazeW', 'u_hazeRadius')}
 #endif
 out vec4 o_color;
-void main() {
+
+vec3 blur1d() {
 #if HDR_RT
   vec2 pos = gl_FragCoord.xy;
   vec3 acc = texBilinear(u_src, pos, u_tex.xy, u_tex.zw).rgb * u_taps[0].y;
@@ -119,12 +190,24 @@ void main() {
           + dec4(texelFetch(u_src, clamp(c - o, ivec2(0), lim), 0)).rgb) * u_w[i];
   }
 #endif
+  return acc;
+}
+
+void main() {
 #if COMBINE
-  // The composite used to B-spline sample bloom (at the pixel) and haze (at pixel / 4) and add
-  // them. Haze is wide enough that sampling it at the cell center and letting the composite's
-  // single B-spline lookup carry it the rest of the way is indistinguishable; so is the vignette
-  // taken per cell (it varies over the whole host).
-  vec3 haze = texBicubicDec(u_haze, gl_FragCoord.xy * 0.25, u_hazeTex.xy, u_hazeTex.zw).rgb;
+  vec3 acc;
+  vec3 haze;
+  if (u_lite > 0.5) {
+    acc = bloom2d(u_src, gl_FragCoord.xy, u_tex);
+    haze = haze2d(u_haze, gl_FragCoord.xy * 0.25, u_hazeTex);
+  } else {
+    acc = blur1d();
+    // The composite used to B-spline sample bloom (at the pixel) and haze (at pixel / 4) and
+    // add them. Haze is wide enough that sampling it at the cell center and letting the
+    // composite's single B-spline lookup carry it the rest of the way is indistinguishable; so
+    // is the vignette taken per cell (it varies over the whole host).
+    haze = texBicubicDec(u_haze, gl_FragCoord.xy * 0.25, u_hazeTex.xy, u_hazeTex.zw).rgb;
+  }
   vec2 cpx = f_origin.xy + gl_FragCoord.xy * f_grid.z;
   vec2 nuv = (cpx - f_space.xy) / max(0.5 * f_host.zw, vec2(1.0));
   float vig = 1.0 - P_background_vignette * smoothstep(0.5, 1.45, length(nuv));
@@ -134,6 +217,8 @@ void main() {
   acc = saturateColor(acc, gs) * (P_glow_bloom_strength * u_mix.x)
       + saturateColor(haze, gs) * (P_glow_haze_strength * u_mix.y * mix(1.0, vig, u_mix.z));
   acc *= 1.0 / GLOW_SCALE;
+#else
+  vec3 acc = blur1d();
 #endif
   o_color = enc4(vec4(acc, 1.0));
 }
@@ -200,6 +285,18 @@ export function glowMix(debugView: number): readonly [number, number, number] {
   return [1, 1, 1];
 }
 
+/**
+ * Sigma, in quarter texels, of the lite pipeline's 2-D haze kernel for a haze radius of
+ * `hazeSigma` cells. The full pipeline blurs the haze at quarter-texel centers and the combine
+ * pass reads it with a cubic B-spline (variance 1/3 texel^2); the lite one interpolates the
+ * downsampled haze bilinearly (variance 1/6) and blurs that, so its kernel is widened by the
+ * difference to keep the same overall spread.
+ */
+export function liteHazeSigma(hazeSigma: number): number {
+  const q = hazeSigma / 4;
+  return Math.sqrt(q * q + 1 / 6);
+}
+
 export class BloomPass {
   private readonly downsample: LazyProgram;
   private readonly blurs: LazyProgram[];
@@ -208,6 +305,8 @@ export class BloomPass {
   private bloomSigma = -1;
   private hazeSigma = -1;
   private mixView = -1;
+  /** Last u_lite of the combine program (-1: unknown). */
+  private liteFlag = -1;
   /** Last uploaded target sizes (setSizes arguments). */
   private readonly sizes = new Float32Array(8).fill(Number.NaN);
 
@@ -246,22 +345,27 @@ export class BloomPass {
     this.bloomSigma = -1;
     this.hazeSigma = -1;
     this.mixView = -1;
+    this.liteFlag = -1;
     this.sizes.fill(Number.NaN);
   }
 
-  private uploadKernel(first: number, sigma: number): void {
+  /**
+   * Uploads the kernel of `sigma` to programs `first`..`last`: u_taps / u_count (u_w / u_radius
+   * on RGBA8), or with `haze` the combine program's lite haze kernel (u_hazeTaps / u_hazeCount).
+   */
+  private uploadKernel(first: number, last: number, sigma: number, haze = false): void {
     const gl = this.ctx.gl;
     const hdr = this.ctx.caps.hdr;
     const count = hdr ? gaussianTaps(sigma, this.taps) : gaussianWeights(sigma, this.weights);
-    for (let i = first; i < first + 2; i++) {
+    for (let i = first; i <= last; i++) {
       const p = this.blurs[i]?.use();
       if (!p) continue;
       if (hdr) {
-        gl.uniform2fv(p.uniform('u_taps'), this.taps);
-        gl.uniform1i(p.uniform('u_count'), count);
+        gl.uniform2fv(p.uniform(haze ? 'u_hazeTaps' : 'u_taps'), this.taps);
+        gl.uniform1i(p.uniform(haze ? 'u_hazeCount' : 'u_count'), count);
       } else {
-        gl.uniform1fv(p.uniform('u_w'), this.weights);
-        gl.uniform1i(p.uniform('u_radius'), count);
+        gl.uniform1fv(p.uniform(haze ? 'u_hazeW' : 'u_w'), this.weights);
+        gl.uniform1i(p.uniform(haze ? 'u_hazeRadius' : 'u_radius'), count);
       }
     }
   }
@@ -270,11 +374,13 @@ export class BloomPass {
   setSigmas(bloomSigma: number, hazeSigma: number): void {
     if (bloomSigma !== this.bloomSigma) {
       this.bloomSigma = bloomSigma;
-      this.uploadKernel(0, bloomSigma);
+      this.uploadKernel(0, 1, bloomSigma);
     }
     if (hazeSigma !== this.hazeSigma) {
       this.hazeSigma = hazeSigma;
-      this.uploadKernel(2, hazeSigma / 4);
+      this.uploadKernel(2, 3, hazeSigma / 4);
+      // The lite combine blurs the downsampled haze itself (see liteHazeSigma).
+      this.uploadKernel(1, 1, liteHazeSigma(hazeSigma), true);
     }
   }
 
@@ -337,6 +443,7 @@ export class BloomPass {
     hazeTmp: BlurTarget,
     glow: BlurTarget,
     debugView: number,
+    lite = false,
   ): void {
     const gl = this.ctx.gl;
     // Haze first (the combine step reads it): source -> quarter res, x -> tmp, y -> haze.
@@ -346,6 +453,12 @@ export class BloomPass {
     discardTargets(this.ctx);
     gl.viewport(0, 0, qw, qh);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (lite) {
+      // Lite: the combine pass blurs the bloom source and the downsampled haze in 2-D itself.
+      gl.viewport(0, 0, w, h);
+      this.combine(bloom.tex, glow, debugView, 1);
+      return;
+    }
     this.blurs[2]?.use();
     bindTexture(gl, UNIT_SRC, haze.tex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, hazeTmp.fb);
@@ -363,13 +476,23 @@ export class BloomPass {
     gl.bindFramebuffer(gl.FRAMEBUFFER, bloomTmp.fb);
     discardTargets(this.ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.combine(bloomTmp.tex, glow, debugView, 0);
+  }
+
+  /** bloom-y-combine: `src` blurred (in y, or in 2-D when `lite`) plus the haze -> `glow`. */
+  private combine(src: WebGLTexture, glow: BlurTarget, debugView: number, lite: number): void {
+    const gl = this.ctx.gl;
     const p = this.blurs[1]?.use();
     if (p && this.mixView !== debugView) {
       this.mixView = debugView;
       const m = glowMix(debugView);
       gl.uniform3f(p.uniform('u_mix'), m[0], m[1], m[2]);
     }
-    bindTexture(gl, UNIT_SRC, bloomTmp.tex);
+    if (p && this.liteFlag !== lite) {
+      this.liteFlag = lite;
+      gl.uniform1f(p.uniform('u_lite'), lite);
+    }
+    bindTexture(gl, UNIT_SRC, src);
     gl.bindFramebuffer(gl.FRAMEBUFFER, glow.fb);
     discardTargets(this.ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

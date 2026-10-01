@@ -37,6 +37,13 @@
  * screen until the new renderer draws: the 2D canvas itself (shared to own), or a 2D copy of the
  * WebGL canvas taken right after it drew (own to shared, so a size demotion runs in the render
  * phase).
+ * Cost reducers: a shared instance that is not active (pointer over the host, or a change of
+ * its own within ACTIVE_MS, see Controller.takeActivity) may present on every n-th frame only,
+ * as the shared renderer decides each frame (SharedSeat.divisor and phase); skipped frames
+ * accumulate their time, so the animation runs on and only fewer frames are shown. It may also
+ * draw with the lite pipeline (FrameInputs.lite), which an own instance uses only at the 'low'
+ * adaptive tier. The display refresh calibration (runtime/display) may hold every instance's GL
+ * work for a few frames at page start and after the page comes back from a hidden tab.
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -67,6 +74,12 @@ import { DEBUG_VIEW, EngineError } from './engine/types';
 import { AutoDwell, type AutoSize, autoScore, autoWants } from './runtime/auto-renderer';
 import { areaBucket } from './runtime/context-budget';
 import {
+  calibrationHold,
+  displayEpoch,
+  displayIntervalMs,
+  requestDisplayCalibration,
+} from './runtime/display';
+import {
   cancelRequest,
   claimBudgetWarning,
   configureRuntime,
@@ -86,7 +99,14 @@ import {
   type SharedClient,
   type SharedSeat,
 } from './runtime/shared-renderer';
-import { frameNow, subscribeTicker } from './ticker';
+import {
+  frameLateMs,
+  frameNow,
+  frameSerial,
+  frameWorkMs,
+  noteGpuWork,
+  subscribeTicker,
+} from './ticker';
 import type {
   BindElementOptions,
   ConfigSource,
@@ -124,6 +144,10 @@ const STATS_INTERVAL = 250;
 const RESIZE_THROTTLE = 100;
 /** IntersectionObserver margin around the canvas (host + overflow), CSS px. */
 const IO_MARGIN = 64;
+/** An instance stays active (full frame rate on the shared renderer) this long after a change, ms. */
+const ACTIVE_MS = 1000;
+/** Longest animation step of one frame, ms (longer gaps are stalls, not frames to catch up). */
+const MAX_STEP_MS = 100;
 /**
  * Creation zone: one viewport beyond the screen on every side. The engine is created when the
  * host enters it (ahead of scrolling it into view) and parked after it stays out of it. The
@@ -239,6 +263,12 @@ export class LumiCells {
   #sharedDt = 0;
   #sharedIdeal = 16.67;
   #presentEma = 0;
+  /** The pointer is over the host (any pointer, whatever `interaction` says). */
+  #pointerInside = false;
+  /** The pointer left since the last frame (the instance stays active from that frame on). */
+  #pointerLeft = false;
+  /** Frame timestamp of the last change of the instance's own (see Controller.takeActivity). */
+  #activeAt = Number.NEGATIVE_INFINITY;
   readonly #sharedStats: SharedRendererStats = {
     gpuMs: null,
     drawMs: 0,
@@ -251,6 +281,15 @@ export class LumiCells {
     regions: 0,
     scale: 1,
     copyStaged: false,
+    reducers: {
+      frameDivisor: 1,
+      level: 0,
+      reason: 'off',
+      secondary: 0,
+      lite: 0,
+      intervalMs: 16.67,
+      copyBudget: null,
+    },
   };
   #unwatchSettings: (() => void) | null = null;
   #hookedCanvas: HTMLCanvasElement | null = null;
@@ -350,6 +389,7 @@ export class LumiCells {
     rendererMode: 'auto',
     presentMs: null,
     shared: null,
+    reducers: { lite: false, frameDivisor: 1 },
   };
 
   constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
@@ -407,6 +447,9 @@ export class LumiCells {
       get lastVisible() {
         return self.#lastVisible;
       },
+      get active() {
+        return self.#isActive();
+      },
       get layout() {
         return self.#controller.layout;
       },
@@ -449,13 +492,26 @@ export class LumiCells {
     this.#view.onChange = () => this.#tracker.markAllDirty();
     // Another display may have another refresh rate (and another DPR: another canvas size).
     this.#view.onDprChange = () => {
-      this.#controller.perf.resetVsync();
+      this.#relearnDisplay();
       this.#autoCheck();
     };
     this.#view.showPoster(this.#controller.poster);
     this.#tracker = new ElementTracker(this.#controller.influences, signal);
     this.#pointer = new PointerInteraction(host, this.#controller, signal);
     this.#pointer.configure(this.#controller.getConfig().interaction);
+    // Hover keeps a shared instance at the full frame rate (whatever `interaction` says): the
+    // card under the pointer is the one being looked at.
+    const listen = { passive: true, signal } as const;
+    const enter = () => {
+      this.#pointerInside = true;
+    };
+    const leave = () => {
+      this.#pointerInside = false;
+      this.#pointerLeft = true;
+    };
+    host.addEventListener('pointerenter', enter, listen);
+    host.addEventListener('pointerleave', leave, listen);
+    host.addEventListener('pointercancel', leave, listen);
     this.#coarse = this.#view.coarsePointer;
     this.#applyPixelCap();
     this.#watchEnvironment();
@@ -696,7 +752,11 @@ export class LumiCells {
 
   getStats(): Stats {
     const s = this.#stats;
-    return { ...s, shared: s.shared ? { ...s.shared } : null };
+    return {
+      ...s,
+      shared: s.shared ? { ...s.shared, reducers: { ...s.shared.reducers } } : null,
+      reducers: { ...s.reducers },
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1839,6 +1899,16 @@ export class LumiCells {
     this.#pointer.measure(o[0] as number, o[1] as number, now);
   }
 
+  /**
+   * Presents at the full rate on the shared renderer: the pointer is over the host, or a change
+   * of its own is pending or less than ACTIVE_MS old.
+   */
+  #isActive(): boolean {
+    if (this.#pointerInside || this.#pointerLeft || this.#controller.activityPending) return true;
+    const now = frameNow();
+    return (Number.isNaN(now) ? performance.now() : now) - this.#activeAt < ACTIVE_MS;
+  }
+
   #render(now: number): void {
     const engine = this.#engine;
     const seat = this.#seat;
@@ -1848,16 +1918,29 @@ export class LumiCells {
       this.#enterLost();
       return;
     }
-    // The shared renderer settles this frame's budget scale before any shared instance updates.
+    // A display refresh calibration wants frames without GL work (see runtime/display): the
+    // canvas keeps its frame, or the poster stays up, and the animation time waits.
+    if (calibrationHold(now)) {
+      this.#lastNow = now;
+      return;
+    }
+    // The shared renderer settles this frame's budget scale and reducers before any shared
+    // instance updates.
     seat?.beginFrame(now);
     const c = this.#controller;
     const perf = c.perf;
     const raw = this.#lastNow < 0 ? perf.vsyncMs : now - this.#lastNow;
     this.#lastNow = now;
+    if (c.takeActivity() || this.#pointerLeft) this.#activeAt = now;
+    this.#pointerLeft = false;
     // Feed every rAF (skipped ones too) so the refresh estimate reflects the display. A shared
-    // instance feeds the GPU time of the whole shared device.
+    // instance feeds the GPU time of the whole shared device. The main-thread figure for the
+    // jank guard is the whole frame's (every instance and the app's frame callbacks) plus how
+    // late this frame started (main-thread work before it), not just this instance's share.
+    perf.setDisplayHint(displayIntervalMs(), displayEpoch());
     const gpuMs = engine ? engine.gpuTimeMs : (seat?.stats.gpuMs ?? null);
-    const change = c.samplePerf(raw, this.#lastCpu, gpuMs, now);
+    const busyMs = Math.max(this.#lastCpu, frameWorkMs() + frameLateMs());
+    const change = c.samplePerf(raw, busyMs, gpuMs, now);
     if (change) {
       this.#emit('quality', {
         scale: change.scale,
@@ -1869,26 +1952,42 @@ export class LumiCells {
     // maxFps: render every k-th vsync (integer divisor of the refresh rate, even cadence). The
     // divisor uses the observed cadence, not the sticky refresh estimate: after a drop to a
     // slower display/OS rate, k must follow it (a 60 Hz cap with maxFps 60 is k = 1, not 2).
+    // A shared instance the renderer runs at a lower rate presents on the frames of its phase
+    // instead (spread over the frames together with the other secondary instances). Skipped
+    // frames add their time to the next presented one: the animation never slows down.
     const vsync = perf.cadenceMs;
     const maxFps = c.getConfig().render.maxFps;
-    let k = 1;
-    let deltaMs = raw;
-    if (maxFps > 0) {
-      k = Math.max(1, Math.round(1000 / vsync / maxFps));
-      this.#accMs += raw;
-      if (++this.#skip < k) return;
-      this.#skip = 0;
-      deltaMs = this.#accMs;
-      this.#accMs = 0;
+    let k = maxFps > 0 ? Math.max(1, Math.round(1000 / vsync / maxFps)) : 1;
+    let due: boolean;
+    const sd = seat ? seat.divisor : 1;
+    if (sd > k) {
+      k = sd;
+      due = (seat as SharedSeat).isDue(frameSerial());
+    } else {
+      due = k <= 1 || ++this.#skip >= k;
     }
+    this.#stats.reducers.frameDivisor = k;
+    this.#accMs += raw;
+    if (!due) return;
+    this.#skip = 0;
+    let deltaMs = this.#accMs;
+    this.#accMs = 0;
     // Snap to vsync multiples: removes the +-1-2 ms rAF jitter from motion.
     const ideal = k * vsync;
     if (Math.abs(deltaMs - ideal) < 0.15 * ideal) deltaMs = ideal;
-    const dt = Math.min(deltaMs, 100) / 1000;
+    const maxDt = Math.max(MAX_STEP_MS, 1.5 * ideal) / 1000;
+    const dt = Math.min(deltaMs / 1000, maxDt);
 
     this.#flushConfig();
     const t0 = performance.now();
-    const inputs = c.update(dt, now);
+    const inputs = c.update(dt, now, maxDt);
+    if (engine) {
+      // An own instance draws lite only at the 'low' tier (see LumiCells.configure({ lite })).
+      inputs.lite = inputs.quality === 'low' && runtimeSettings().lite !== false;
+      this.#stats.reducers.lite = inputs.lite;
+    } else {
+      this.#stats.reducers.lite = (seat as SharedSeat).lite;
+    }
     if (!engine) {
       // Shared: drawn and copied in the present phase, reported in #onPresented.
       this.#updateMs = performance.now() - t0;
@@ -1901,6 +2000,7 @@ export class LumiCells {
     // A failure inside render() disposed the engine and dropped the canvas.
     if (this.#engine !== engine) return;
     if (drawn) {
+      noteGpuWork();
       c.commitFrame();
       this.#drawnAt = now;
       if (!this.#drawnSinceMount) {
@@ -2019,6 +2119,7 @@ export class LumiCells {
       d.regions = src.regions;
       d.scale = src.scale;
       d.copyStaged = src.copyStaged;
+      Object.assign(d.reducers, src.reducers);
       s.shared = d;
       s.presentMs = this.#presentEma;
     }
@@ -2037,6 +2138,17 @@ export class LumiCells {
     this.#controller.setReducedMotion(respect && !!this.#reducedMql?.matches);
   }
 
+  /**
+   * The display may have changed (DPR change, resume from a hidden tab): adaptive quality and
+   * the shared frame budget forget the refresh rate they learned, and a calibration measures it
+   * again.
+   */
+  #relearnDisplay(): void {
+    this.#controller.perf.resetVsync();
+    peekSharedRenderer()?.load.resetVsync();
+    requestDisplayCalibration();
+  }
+
   #watchEnvironment(): void {
     const doc = this.host.ownerDocument;
     const win = doc.defaultView;
@@ -2048,7 +2160,7 @@ export class LumiCells {
         this.#hidden = doc.visibilityState === 'hidden';
         // OS power modes (low-power, energy saver) and displays may have changed meanwhile:
         // re-learn the refresh rate instead of trusting the sticky estimate.
-        if (wasHidden && !this.#hidden) this.#controller.perf.resetVsync();
+        if (wasHidden && !this.#hidden) this.#relearnDisplay();
         this.#updateSubscription();
       }),
     );

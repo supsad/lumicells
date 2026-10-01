@@ -17,6 +17,7 @@ import {
   OFF_MISC,
   writeEpochPhase,
 } from '../src/core/engine/frame-block';
+import { MAX_LIFE_STEPS } from '../src/core/engine/types';
 
 const layout = createParamLayout();
 const MASK = EPOCH_WRAP - 1;
@@ -188,6 +189,27 @@ describe('Clock', () => {
     }
     expect(total).toBe(30);
   });
+
+  it('a frame that spans several display frames carries their life steps (reduced rates)', () => {
+    // 40 steps/s presented at 15 fps (a secondary shared instance at level 3): 2.67 per frame.
+    const c = new Clock();
+    const r = rates({ lifeRate: 40 });
+    let total = 0;
+    for (let i = 0; i < 150; i++) {
+      c.advance(1 / 15, r);
+      total += c.lifeSteps;
+    }
+    expect(total).toBeGreaterThanOrEqual(399);
+    expect(total).toBeLessThanOrEqual(400);
+    // A stall is still not fast-forwarded: at most MAX_LIFE_STEPS whatever the step.
+    const d = new Clock();
+    d.advance(5, r);
+    expect(d.lifeSteps).toBe(MAX_LIFE_STEPS);
+    // A 60 Hz frame keeps the two-step cap.
+    const e = new Clock();
+    e.advance(1 / 60, rates({ lifeRate: 1000 }));
+    expect(e.lifeSteps).toBe(2);
+  });
 });
 
 describe('Controller clock outputs', () => {
@@ -211,6 +233,23 @@ describe('Controller clock outputs', () => {
     expect(steps).toBeGreaterThanOrEqual(59);
     expect(steps).toBeLessThanOrEqual(61);
     expect((c.frame.lifeSeed - seed0) >>> 0).toBe(steps);
+  });
+
+  it('a caller presenting at a low rate passes its step bound: nothing slows down', () => {
+    // secondaryMaxFps 5: one present every 200 ms, life at 30 steps/s.
+    const c = controller({ modes: { life: { weight: 1, stepRate: 30 } } });
+    c.update(0.2, 0, 0.3);
+    const elapsed0 = c.clock.elapsed;
+    let steps = 0;
+    for (let i = 0; i < 25; i++) steps += c.update(0.2, 0, 0.3).lifeSteps;
+    expect(c.clock.elapsed - elapsed0).toBeCloseTo(5, 6);
+    expect(steps).toBeGreaterThanOrEqual(149);
+    expect(steps).toBeLessThanOrEqual(151);
+    // Without the bound the default 0.1 s cap applies (a stall is not fast-forwarded).
+    const d = controller();
+    const e0 = d.clock.elapsed;
+    d.update(0.2);
+    expect(d.clock.elapsed - e0).toBeCloseTo(0.1, 6);
   });
 
   it('uploads epoch phases from the effect periods and rates', () => {

@@ -8,9 +8,16 @@
  * switches).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OFF_CLOCK } from '../src/core/engine/frame-block';
 import type { FrameInputs } from '../src/core/engine/types';
 import { EngineError } from '../src/core/engine/types';
 import { LumiCells } from '../src/core/lumi-cells';
+import {
+  CADENCE_MIN_SAMPLES,
+  displayIntervalMs,
+  HOLD_MAX_FRAMES,
+  requestDisplayCalibration,
+} from '../src/core/runtime/display';
 import {
   claimContextCreation,
   contextsInUse,
@@ -19,6 +26,7 @@ import {
 } from '../src/core/runtime/scheduler';
 import {
   CHEAP_COPY_MS,
+  CROWD,
   FIRST_DRAWS_PER_FRAME,
   GRANTS_PER_FRAME,
   getSharedRenderer,
@@ -40,6 +48,10 @@ const fake = vi.hoisted(() => {
     disposed = false;
     draws = 0;
     last: { x: number; y: number; w: number; h: number } | null = null;
+    /** FrameInputs.lite of the last draw. */
+    lite = false;
+    /** The frame block of the last draw (the controller's, updated in place). */
+    block: Float32Array | null = null;
     constructor(
       readonly device: FakeDevice,
       readonly tag: number,
@@ -48,6 +60,8 @@ const fake = vi.hoisted(() => {
       if (this.disposed || this.device.lost) return false;
       if (FakeDevice.failDraw) throw new Error('fake draw failure');
       this.draws++;
+      this.lite = f.lite === true;
+      this.block = f.frame;
       this.last = { x: surface.left, y: surface.top, w: f.canvasWidth, h: f.canvasHeight };
       log.push(`draw ${this.tag}`);
       return true;
@@ -316,6 +330,7 @@ function client(w = 200, h = 100, visible = true): TestClient {
     priority: 'normal',
     area: w * h,
     lastVisible: 0,
+    active: false,
     layout: { glslPrelude: 'prelude', vec4Count: 1 } as never,
     frame: frameInputs,
     get naturalWidth() {
@@ -1246,5 +1261,264 @@ describe('LumiCells with renderer: shared', () => {
     pl.destroy();
     expect(peekSharedRenderer()?.active).toBe(false);
     expect(pl.host.querySelector('canvas')).toBeNull();
+  });
+});
+
+describe('LumiCells shared: cost reducers', () => {
+  /** Frames to wait after the instances came alive until their start-up activity is over. */
+  const SETTLE = Math.ceil(1100 / 16.67);
+
+  /** The slots (by tag) that drew in each of the next `n` frames. */
+  function drawsPerFrame(n: number): number[][] {
+    const out: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      const start = log.length;
+      frame();
+      out.push(
+        log
+          .slice(start)
+          .filter((l) => l.startsWith('draw '))
+          .map((l) => Number(l.slice(5))),
+      );
+    }
+    return out;
+  }
+
+  function slotsOf(): InstanceType<typeof fake.FakeSlot>[] {
+    return (FakeDevice.instances[0]?.slots ?? []) as InstanceType<typeof fake.FakeSlot>[];
+  }
+
+  function crowd(n: number, opts: ConstructorParameters<typeof LumiCells>[1] = {}): LumiCells[] {
+    const list = Array.from({ length: n }, () => create(opts));
+    frames(4 + Math.ceil(n / FIRST_DRAWS_PER_FRAME) + SETTLE);
+    return list;
+  }
+
+  it('more than CROWD drawing instances: the inactive ones present every 2nd frame, staggered', () => {
+    const list = crowd(CROWD + 4);
+    const per = drawsPerFrame(8);
+    // The largest (the first, all being equal) at the full rate, the others half each frame.
+    const others = list.length - 1;
+    for (const f of per) {
+      expect(f).toContain(0);
+      expect(f.length).toBeGreaterThanOrEqual(1 + Math.floor(others / 2));
+      expect(f.length).toBeLessThanOrEqual(1 + Math.ceil(others / 2));
+    }
+    // Every secondary instance presents on every other frame exactly.
+    for (let tag = 1; tag < list.length; tag++) {
+      const seen = per.map((f) => f.includes(tag));
+      expect(seen.filter(Boolean).length).toBe(4);
+      for (let i = 1; i < seen.length; i++) expect(seen[i]).not.toBe(seen[i - 1]);
+    }
+    const st = list[3]?.getStats();
+    expect(st?.reducers.frameDivisor).toBe(2);
+    expect(st?.shared?.reducers).toMatchObject({ frameDivisor: 2, level: 1, reason: 'crowd' });
+    expect(st?.shared?.reducers.secondary).toBe(list.length - 1);
+    expect(list[0]?.getStats().reducers.frameDivisor).toBe(1);
+  });
+
+  it('a secondary instance keeps its animation time: presented frames carry the skipped ones', () => {
+    const list = crowd(CROWD + 2);
+    const pl = list[5] as LumiCells;
+    let time = 0;
+    let events = 0;
+    pl.on('frame', (e) => {
+      time += e.dt;
+      events++;
+    });
+    frames(60);
+    expect(events).toBe(30);
+    // 60 frames of 16.67 ms passed: so did (within one present) the instance's time.
+    expect(time).toBeGreaterThan(0.98);
+    expect(time).toBeLessThan(1.02);
+  });
+
+  it('a low secondaryMaxFps keeps the animation clock in step (present periods over 100 ms)', () => {
+    // 5 fps on a 60 Hz display: one present every 200 ms, above the 100 ms default step bound.
+    LumiCells.configure({ secondaryMaxFps: 5 });
+    crowd(CROWD + 2);
+    frames(24);
+    expect(slotsOf()[5]?.block).not.toBeNull();
+    const clock = (tag: number) => slotsOf()[tag]?.block?.[OFF_CLOCK] ?? Number.NaN;
+    const p0 = clock(0);
+    const s0 = clock(5);
+    frames(240);
+    const primary = clock(0) - p0;
+    const secondary = clock(5) - s0;
+    expect(primary).toBeGreaterThan(0);
+    // Within one present of the full-rate instance (the controller clock, not the event dt).
+    expect(Math.abs(secondary - primary)).toBeLessThan(0.21 * (primary / 4));
+  });
+
+  it('hover and recent changes keep an instance at the full rate and the full pipeline', () => {
+    const list = crowd(CROWD + 2);
+    const pl = list[4] as LumiCells;
+    const tag = 4;
+    expect(drawsPerFrame(4).filter((f) => f.includes(tag)).length).toBe(2);
+    expect(slotsOf()[tag]?.lite).toBe(true);
+    pl.host.dispatchEvent(new Event('pointerenter'));
+    frame();
+    expect(drawsPerFrame(4).filter((f) => f.includes(tag)).length).toBe(4);
+    expect(slotsOf()[tag]?.lite).toBe(false);
+    expect(pl.getStats().reducers).toEqual({ lite: false, frameDivisor: 1 });
+    // Left: still active for about a second, then back to the lower rate.
+    pl.host.dispatchEvent(new Event('pointerleave'));
+    expect(drawsPerFrame(30).filter((f) => f.includes(tag)).length).toBe(30);
+    frames(SETTLE);
+    expect(drawsPerFrame(4).filter((f) => f.includes(tag)).length).toBe(2);
+    // A pulse (or a lift, an influence, a config transition) does the same.
+    pl.pulse({ x: 10, y: 10 });
+    expect(drawsPerFrame(10).filter((f) => f.includes(tag)).length).toBe(10);
+  });
+
+  it('secondaryMaxFps: 0 turns it off; a number caps every inactive instance', () => {
+    LumiCells.configure({ secondaryMaxFps: 0 });
+    const list = crowd(CROWD + 2);
+    for (const f of drawsPerFrame(4)) expect(f.length).toBe(list.length);
+    expect(list[2]?.getStats().shared?.reducers.reason).toBe('off');
+    // 20 fps on a 60 Hz display: every 3rd frame, even for a few instances.
+    LumiCells.configure({ secondaryMaxFps: 20 });
+    // Page-wide figures are sampled with the stats (about 4 times a second).
+    frames(20);
+    const per = drawsPerFrame(6);
+    expect(per.filter((f) => f.includes(2)).length).toBe(2);
+    expect(list[2]?.getStats().reducers.frameDivisor).toBe(3);
+    expect(list[2]?.getStats().shared?.reducers.reason).toBe('fixed');
+  });
+
+  it('a few instances are left alone: every frame (no crowd, budget kept)', () => {
+    const list = crowd(3);
+    for (const f of drawsPerFrame(6)) expect(f.length).toBe(list.length);
+    expect(list[1]?.getStats().shared?.reducers).toMatchObject({ frameDivisor: 1, reason: 'off' });
+  });
+
+  it('lite: small inactive instances draw lite; lite: false never, lite: true always', () => {
+    const list = crowd(2);
+    // 200 x 100 px canvases: small.
+    expect(slotsOf().map((s) => s.lite)).toEqual([true, true]);
+    expect(list[1]?.getStats().reducers.lite).toBe(true);
+    expect(list[1]?.getStats().shared?.reducers.lite).toBe(2);
+    LumiCells.configure({ lite: false });
+    frames(2);
+    expect(slotsOf().map((s) => s.lite)).toEqual([false, false]);
+    expect(list[1]?.getStats().reducers.lite).toBe(false);
+    LumiCells.configure({ lite: true });
+    list[0]?.host.dispatchEvent(new Event('pointerenter'));
+    frames(2);
+    // Hovered: the full pipeline whatever the setting.
+    expect(slotsOf().map((s) => s.lite)).toEqual([false, true]);
+  });
+
+  it('lite goes by activity: the largest instance keeps the full rate but draws lite', () => {
+    const list = crowd(CROWD + 4);
+    // Page-wide figures are sampled with the stats (about 4 times a second).
+    frames(20);
+    // The largest (the first, all being equal) presents every frame, the others every 2nd one.
+    expect(list[0]?.getStats().reducers).toEqual({ lite: true, frameDivisor: 1 });
+    expect(list[1]?.getStats().reducers).toEqual({ lite: true, frameDivisor: 2 });
+    expect(list[0]?.getStats().shared?.reducers).toMatchObject({
+      secondary: list.length - 1,
+      lite: list.length,
+    });
+  });
+
+  /** Copies cost virtual time: `msPerMpx` per copied megapixel (a software 2D canvas). */
+  function slowCopies(msPerMpx: number): void {
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    copyCost = (_src, args) => {
+      clock += ((args[2] ?? 0) * (args[3] ?? 0) * msPerMpx) / 1e6;
+    };
+  }
+
+  it('expensive copies raise the secondary level until a frame copies a quarter of a frame', () => {
+    slowCopies(40);
+    const list = crowd(6);
+    frames(200);
+    const s = list[1]?.getStats().shared;
+    expect(s?.copyMsPerMpx).toBeCloseTo(40, 3);
+    // 6 x 0.02 Mpx at 40 ms/Mpx is 4.8 ms of copies per frame, a quarter of the frame is 4.2:
+    // every other frame for the five secondary ones fits.
+    expect(s?.reducers).toMatchObject({
+      reason: 'copy',
+      level: 1,
+      frameDivisor: 2,
+      copyBudget: null,
+    });
+    expect(s?.scale).toBe(1);
+  });
+
+  it('copies too slow even at the lowest rate lower the atlas budget', () => {
+    slowCopies(400);
+    const list = crowd(6);
+    frames(400);
+    const s = list[1]?.getStats().shared;
+    expect(s?.reducers.level).toBe(3);
+    expect(s?.reducers.copyBudget).not.toBeNull();
+    expect(s?.scale).toBeLessThan(1);
+    // Never below a quarter of what the members need at full resolution.
+    expect(s?.reducers.copyBudget ?? 0).toBeGreaterThanOrEqual(0.25 * 6 * 200 * 100 * 1e-6 - 1e-9);
+    // Stable: the copy cost measured again at the new scale does not undo the cap.
+    frames(600);
+    const t = list[1]?.getStats().shared;
+    expect(t?.scale).toBe(s?.scale);
+    expect(t?.reducers.copyBudget).toBe(s?.reducers.copyBudget);
+  });
+
+  it('a per-call copy cost (worse per pixel on smaller regions) still settles', () => {
+    // 1.5 ms per drawImage whatever its size.
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    copyCost = () => {
+      clock += 1.5;
+    };
+    const list = crowd(6);
+    frames(500);
+    const a = list[1]?.getStats().shared;
+    frames(600);
+    const b = list[1]?.getStats().shared;
+    expect(b?.reducers.level).toBe(a?.reducers.level);
+    expect(b?.scale).toBe(a?.scale);
+    expect(b?.reducers.copyBudget).toBe(a?.reducers.copyBudget);
+  });
+});
+
+describe('display refresh calibration (hold)', () => {
+  beforeEach(() => {
+    resetRuntimeForTesting(true);
+  });
+
+  it('the first draws of the page wait for a few quiet frames, then the refresh is known', () => {
+    const pl = create();
+    let n = 0;
+    while (!log.some((l) => l.startsWith('draw')) && n < 40) {
+      frame();
+      n++;
+    }
+    // The context is created at once (its frame is busy); the frames after it are quiet until
+    // CADENCE_MIN_SAMPLES clean deltas are in (at most HOLD_MAX_FRAMES).
+    expect(FakeDevice.instances).toHaveLength(1);
+    expect(n).toBeGreaterThanOrEqual(CADENCE_MIN_SAMPLES + 2);
+    expect(n).toBeLessThanOrEqual(HOLD_MAX_FRAMES + 3);
+    expect(displayIntervalMs()).toBe(16.67);
+    frames(4);
+    expect(pl.getStats().state).toBe('live');
+    expect(pl.getStats().vsyncMs).toBe(16.67);
+  });
+
+  it('a recalibration (resume, display change) holds every instance for a few frames', () => {
+    const list = [create(), create()];
+    frames(30);
+    expect(list.every((pl) => pl.getStats().state === 'live')).toBe(true);
+    requestDisplayCalibration();
+    const start = log.length;
+    frame();
+    frame();
+    // Held: nothing drawn, nothing copied; the canvases keep their frame.
+    expect(log.slice(start)).toEqual([]);
+    frames(HOLD_MAX_FRAMES + 2);
+    const after = log.length;
+    frame();
+    expect(log.slice(after).filter((l) => l.startsWith('draw')).length).toBe(2);
   });
 });

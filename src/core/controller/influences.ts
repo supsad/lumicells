@@ -112,6 +112,12 @@ export class InfluenceRegistry {
   private nextId = 1;
   private gpu = 0;
   private overflowWarned = false;
+  /**
+   * Something visible changed since the owner last cleared it: an entry was added, updated,
+   * moved, shown, hidden or disposed, or one is fading (the controller's activity, see
+   * Controller.takeActivity).
+   */
+  touched = false;
   /** Called once per registry when more influences are alive than GPU slots. */
   onOverflow: ((alive: number) => void) | null = null;
 
@@ -139,25 +145,33 @@ export class InfluenceRegistry {
     const e = new Influence(this.nextId++);
     this.apply(e, init);
     this.list.push(e);
+    this.touched = true;
     return e;
   }
 
   update(e: Influence, patch: InfluenceInit): void {
     if (e.removed) return;
     this.apply(e, patch);
+    this.touched = true;
   }
 
   /** Moves an entry without touching anything else (hot path for trackers; no allocation). */
   setShape(e: Influence, space: number, x: number, y: number, w: number, h: number): void {
+    if (e.space === space && e.x === x && e.y === y && Object.is(e.w, w) && Object.is(e.h, h)) {
+      return;
+    }
     e.space = space;
     e.x = x;
     e.y = y;
     e.w = w;
     e.h = h;
+    this.touched = true;
   }
 
   setHidden(e: Influence, hidden: boolean): void {
+    if (e.hidden === hidden) return;
     e.hidden = hidden;
+    this.touched = true;
   }
 
   /**
@@ -168,6 +182,7 @@ export class InfluenceRegistry {
   dispose(e: Influence): void {
     if (e.removed) return;
     e.disposing = true;
+    this.touched = true;
     if (e.slot) return;
     e.removed = true;
     const i = this.list.indexOf(e);
@@ -247,8 +262,10 @@ export class InfluenceRegistry {
       const e = list[i] as Influence;
       if (!e.slot) continue;
       if (e.wanted) {
+        if (e.presence < 1) this.touched = true;
         e.presence = e.fadeIn > 0 ? Math.min(1, e.presence + dtMs / e.fadeIn) : 1;
       } else {
+        this.touched = true;
         e.presence = e.fadeOut > 0 ? e.presence - dtMs / e.fadeOut : 0;
         if (e.presence <= 0) {
           e.presence = 0;

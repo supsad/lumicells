@@ -5,13 +5,21 @@
  * on 120 Hz panels, low-power modes, main-thread jank), so:
  * - the refresh interval is estimated from a rolling window of rAF deltas snapped to known rates;
  * - the metric is the GPU timer (budget 0.75 x vsync) when available, else the share of missed
- *   vsyncs, and only when our own CPU work is small (otherwise it is jank, not GPU load);
+ *   vsyncs, and only when the main thread is far from busy (under half a vsync: the caller feeds
+ *   the whole frame's work and how late the frame started; otherwise it is jank, not GPU load);
  * - the refresh estimate is sticky (fastest rate seen), so a GPU that halves the frame rate for
  *   good still counts as missing vsyncs instead of looking like a 30 Hz display. It rises again
  *   only on clear evidence that the display/OS sets the slower pace: most of a full window at
  *   one slower rate while our own cost is small (GPU timer), or while locked (no GPU timer);
  *   resetVsync() (display change, resume from a hidden tab) forgets it;
- * - two consecutive steps down that do not reduce misses mean the OS/display caps the rate:
+ * - a GPU that is slow from the very first frame paces the cadence itself (three vsyncs of a
+ *   165 Hz display arrive every 18 ms, which snaps to 60 Hz), so the cadence alone would never
+ *   show a miss: the display refresh measured on frames without GL work (runtime/display) is a
+ *   hint the estimate never goes above (setDisplayHint). Evidence that the display or the OS sets
+ *   a slower pace (a rise, below, or a lock without a GPU timer) rejects the hint until a new
+ *   calibration (a new epoch: every completed calibration brings one, even at the same rate);
+ * - two consecutive steps down that reduce neither the misses nor the GPU time mean the
+ *   OS/display caps the rate, or the GPU cost does not scale with pixels (per-draw overhead):
  *   revert and lock (one step alone may simply not be enough for a heavy load). The lock
  *   expires after a few minutes (and on resetVsync) so later GPU overload is still handled;
  * - a step up that brings misses back is reverted and that level is blacklisted, with an
@@ -115,6 +123,15 @@ export class PerfController {
   private streakFrom = 0;
   /** Fastest refresh interval seen (sticky), ms. */
   private bestVsync = Number.POSITIVE_INFINITY;
+  /** Calibrated display refresh interval (setDisplayHint), ms; Infinity: none or rejected. */
+  private hint = Number.POSITIVE_INFINITY;
+  /** Epoch of the hint in use, and of the last one rejected (-1: none). */
+  private hintEpoch = -1;
+  private rejectedEpoch = -1;
+  /** GPU time when the last step down was taken (null: no GPU timer then). */
+  private gpuBefore: number | null = null;
+  /** Mean frame time when the last step down was taken, ms. */
+  private frameBefore = 0;
   private readonly change: PerfChange = { quality: 'high', scale: 1, reason: 'slow' };
 
   get quality(): RenderQuality {
@@ -148,6 +165,35 @@ export class PerfController {
       this.resetWindow();
     }
     return q !== this.quality || s !== this.scale;
+  }
+
+  /**
+   * The display refresh interval measured on frames without GL work (runtime/display), ms, or
+   * null. `epoch` identifies the measurement: a hint that was rejected (the display or the OS
+   * proved to set a slower pace) stays rejected until a new measurement comes (runtime/display
+   * bumps the epoch on every completed calibration, a recalibration at the same rate included).
+   */
+  setDisplayHint(ms: number | null, epoch: number): void {
+    if (ms === null || !(ms > 0) || epoch === this.rejectedEpoch) {
+      if (ms === null) this.hint = Number.POSITIVE_INFINITY;
+      return;
+    }
+    if (epoch === this.hintEpoch && ms === this.hint) return;
+    this.hintEpoch = epoch;
+    this.hint = ms;
+    if (ms < this.vsyncMs) this.vsyncMs = ms;
+  }
+
+  /** The display hint in use (Infinity: none). */
+  get displayHint(): number {
+    return this.hint;
+  }
+
+  /** The hint proved wrong (a slower pace set by the display or the OS): until a new one. */
+  private rejectHint(): void {
+    if (this.hint === Number.POSITIVE_INFINITY) return;
+    this.rejectedEpoch = this.hintEpoch;
+    this.hint = Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -218,7 +264,7 @@ export class PerfController {
       if (vs >= 0) {
         const est = VSYNC_CANDIDATES[vs] as number;
         if (n >= 30 && est < this.bestVsync) this.bestVsync = est;
-        this.vsyncMs = Math.min(est, this.bestVsync);
+        this.vsyncMs = Math.min(est, this.bestVsync, this.hint);
       }
       if (n === PERF_WINDOW && maxI >= 0 && maxC >= RISE_SHARE * n) this.maybeRise(maxI);
     }
@@ -253,25 +299,39 @@ export class PerfController {
 
     if (this.verify === VERIFY_DOWN && now - this.verifyAt >= VERIFY_AFTER) {
       this.verify = VERIFY_NONE;
-      const improved = this.missRatio < 0.1 || this.missRatio < this.missBefore - 0.05;
-      if (gpu !== null || improved) {
+      // Fewer misses, faster frames (three vsyncs down to two is a gain even though both miss)
+      // or, with a GPU timer, less GPU time (the cadence may be held by something else); a step
+      // that cut none of them is no gain.
+      const gpuBefore = this.gpuBefore;
+      const improved =
+        this.missRatio < 0.1 ||
+        this.missRatio < this.missBefore - 0.05 ||
+        this.frameMs < 0.9 * this.frameBefore ||
+        (gpu !== null && gpuBefore !== null && gpu < 0.9 * gpuBefore);
+      if (improved) {
         this.noGain = 0;
       } else {
         if (this.noGain++ === 0) this.streakFrom = this.verifyFrom;
         if (this.noGain >= 2) {
-          // Fewer pixels did not help: something else (display cap, OS throttling) sets the pace.
-          // Re-learn the refresh rate from here on, and probe again after LOCK_MS.
+          // Fewer pixels did not help: probe again after LOCK_MS. Without a GPU timer that is
+          // evidence about the pace (a display cap, OS throttling): re-learn the refresh rate
+          // from here on. With one, the GPU time did not shrink with the pixels (per-draw
+          // overhead), which says nothing about the display: the refresh estimate and the hint
+          // stay.
           this.locked = true;
           this.lockedUntil = now + LOCK_MS;
           this.noGain = 0;
-          this.bestVsync = Number.POSITIVE_INFINITY;
+          if (gpu === null || gpuBefore === null) {
+            this.bestVsync = Number.POSITIVE_INFINITY;
+            this.rejectHint();
+          }
           return this.apply(this.streakFrom, now, 'locked');
         }
       }
     }
 
     const slow =
-      gpu !== null ? gpu > 0.75 * vsync : this.missRatio > 0.25 && this.cpuMs < 0.3 * vsync;
+      gpu !== null ? gpu > 0.75 * vsync : this.missRatio > 0.25 && this.cpuMs < 0.5 * vsync;
     const good = this.missRatio < 0.02 && (gpu === null || gpu < 0.5 * vsync);
     this.slowSince = slow ? (this.slowSince < 0 ? now : this.slowSince) : -1;
     this.goodSince = good ? (this.goodSince < 0 ? now : this.goodSince) : -1;
@@ -284,10 +344,13 @@ export class PerfController {
     ) {
       const from = this.level;
       const missBefore = this.missRatio;
+      const frameBefore = this.frameMs;
       const ch = this.apply(from + 1, now, 'slow');
       this.verify = VERIFY_DOWN;
       this.verifyFrom = from;
       this.missBefore = missBefore;
+      this.frameBefore = frameBefore;
+      this.gpuBefore = gpu;
       return ch;
     }
     if (
@@ -312,13 +375,14 @@ export class PerfController {
    */
   private maybeRise(i: number): void {
     const slower = VSYNC_CANDIDATES[i] as number;
-    if (!(slower > this.bestVsync * 1.1)) return;
+    if (!(slower > Math.min(this.bestVsync, this.hint) * 1.1)) return;
     const gpu = this.gpuMs;
     const small =
       gpu !== null
         ? gpu < 0.5 * slower && this.cpuMs < 0.5 * slower
         : this.locked && this.cpuMs < 0.3 * slower;
     if (!small) return;
+    this.rejectHint();
     this.bestVsync = slower;
     this.vsyncMs = slower;
     this.missRatio = 0;

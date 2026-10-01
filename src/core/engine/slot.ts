@@ -34,7 +34,7 @@ import { StampTarget } from './passes/stamp';
 import { coversFramebuffer, createRegion, scissorRegion } from './region';
 import { CellTargets, paramsFloatCount } from './resources';
 import { createSurfaceFrame, type Surface } from './surface';
-import type { FrameInputs, RenderQuality } from './types';
+import { type FrameInputs, MAX_LIFE_STEPS, type RenderQuality } from './types';
 
 const LUT_WIDTH = 256;
 const LUT_ROWS = 2;
@@ -186,7 +186,7 @@ export class RenderSlot {
     if (f.lifeReset) this.lifeRun(p, LIFE_MODE_RESET, f);
     else {
       // Each step gets its own seed (the run counter is mixed in), so fresh births every step.
-      const steps = Math.min(Math.max(f.lifeSteps | 0, 0), 2);
+      const steps = Math.min(Math.max(f.lifeSteps | 0, 0), MAX_LIFE_STEPS);
       for (let i = 0; i < steps; i++) this.lifeRun(p, LIFE_MODE_STEP, f);
     }
 
@@ -197,13 +197,14 @@ export class RenderSlot {
     }
     p.field.run(fieldFb, W, H, lifeCur.tex);
     // The glow passes run only when the composite shows their result: not with both strengths
-    // at 0, and not in the field / halo / cells debug views.
+    // at 0, and not in the field / halo / cells debug views. `f.lite`: the lite pipeline (2 glow
+    // passes instead of 5, see BloomPass), chosen by the slot's owner.
     const dbg = f.debugView | 0;
     const glowOn =
       (dbg === 0 || dbg === 3 || dbg === 4) && (f.bloomStrength !== 0 || f.hazeStrength !== 0);
     if (glowOn) {
       p.bloom.setSigmas(f.bloomSigma, f.hazeSigma);
-      p.bloom.run(W, H, res.qw, res.qh, bloom, bloomTmp, haze, hazeTmp, glow, dbg);
+      p.bloom.run(W, H, res.qw, res.qh, bloom, bloomTmp, haze, hazeTmp, glow, dbg, f.lite === true);
     }
     p.stamp.update(this.stamp, f.frame[OFF_GRID + 2] ?? f.pitchPx);
 

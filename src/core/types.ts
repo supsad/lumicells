@@ -145,6 +145,33 @@ export interface ConfigureOptions {
    * instances re-evaluate against the new value (with the usual dwell).
    */
   promoteArea?: number;
+  /**
+   * Frame-rate cap of the inactive shared instances (`renderer: 'shared'`, or `auto` ones on
+   * the shared renderer). An instance is active while the pointer is over its host, for about a
+   * second after a pulse, a lift, an influence that moved or changed, a config transition or a
+   * modulated value. Active ones, and the largest drawing shared instance whatever its state,
+   * always run at the full rate. The others present every n-th display frame, spread evenly over the
+   * frames (half of them on even frames, half on odd ones at n = 2); their animation time runs
+   * on, they only show fewer frames. A number caps them at that rate (snapped to a whole divisor
+   * of the display refresh); `0` turns it off. `'auto'` (default): only when needed, i.e. more
+   * than 8 shared instances drawing (at most 60 fps, and at most half the refresh), or the page
+   * missing its frame budget or copies being expensive (down to about 30, then 15 fps; a step
+   * that would not lower the rate is skipped, and on a 30 Hz display the last one is 10 fps),
+   * and back up once the budget allows (see `Stats.shared.reducers`).
+   */
+  secondaryMaxFps?: number | 'auto';
+  /**
+   * Lite pipeline of the shared instances: the bloom and haze blurs run inside one glow pass
+   * (2-D kernels at cell resolution) instead of separable passes of their own, 2 glow passes
+   * instead of 5, with a very close look. It goes by activity only: an inactive instance (see
+   * `secondaryMaxFps`) may draw lite even when it is the largest one and runs at the full rate.
+   * `'auto'` (default): inactive instances whose canvas is under about 0.15 megapixels, or all
+   * inactive ones while more than 12 shared instances draw; `true`: every inactive shared
+   * instance; `false`: never.
+   * An instance with a context of its own uses it only at the adaptive `'low'` tier (unless
+   * `false`).
+   */
+  lite?: boolean | 'auto';
 }
 
 export interface LumiCellsOptions {
@@ -303,6 +330,51 @@ export interface ModulatorHandle extends Handle {
 
 export type QualityTier = 'high' | 'medium' | 'low';
 
+/** Cost reducers acting on one instance (`Stats.reducers`). */
+export interface InstanceReducers {
+  /** Draws with the lite pipeline (see `LumiCells.configure({ lite })`). */
+  lite: boolean;
+  /**
+   * Presents every n-th display frame (1: every frame): the shared renderer's secondary rate
+   * (see `LumiCells.configure({ secondaryMaxFps })`) or `render.maxFps`, whichever is lower.
+   */
+  frameDivisor: number;
+}
+
+/**
+ * Why the inactive shared instances present fewer frames (`SharedReducers.reason`):
+ * - `off`    they do not (nothing needs it, or `secondaryMaxFps: 0`);
+ * - `fixed`  `secondaryMaxFps` is a number;
+ * - `crowd`  more than 8 shared instances draw;
+ * - `budget` the page misses its frame budget (main-thread or GPU time);
+ * - `copy`   copying the shared frames into the instances' canvases is expensive.
+ */
+export type SharedReducerReason = 'off' | 'fixed' | 'crowd' | 'budget' | 'copy';
+
+/** The shared renderer's cost reducers, page-wide (`SharedRendererStats.reducers`). */
+export interface SharedReducers {
+  /** Frame divisor of the inactive instances (1: every instance presents every frame). */
+  frameDivisor: number;
+  /**
+   * 0 none, 1 crowded (at most 60 fps and half the refresh), 2 about 30 fps, 3 about 15 fps
+   * (`secondaryMaxFps: 'auto'`; 10 fps on a 30 Hz display). A level at the same rate as the one
+   * below is never reported: at 60 Hz and below, 30 fps is level 1 and the next step is 3.
+   */
+  level: number;
+  reason: SharedReducerReason;
+  /** Instances presenting at the lower rate now. */
+  secondary: number;
+  /** Instances drawing with the lite pipeline now. */
+  lite: number;
+  /** Display refresh interval the reducers plan with, ms (calibrated when it could be measured). */
+  intervalMs: number;
+  /**
+   * The copy cost lowered the shared atlas budget to this many megapixels (null: it did not,
+   * see `copyMsPerMpx`).
+   */
+  copyBudget: number | null;
+}
+
 /**
  * The shared renderer as a whole (`Stats.shared` of every shared instance): the one device all
  * shared instances draw on. Frame figures are smoothed over about ten frames.
@@ -345,6 +417,8 @@ export interface SharedRendererStats {
    * frame instead of one per instance.
    */
   copyStaged: boolean;
+  /** The per-instance cost reducers page-wide (lower frame rate, lite pipeline). */
+  reducers: SharedReducers;
 }
 
 export interface Stats {
@@ -384,6 +458,8 @@ export interface Stats {
   presentMs: number | null;
   /** The shared renderer's device (null for `own`). */
   shared: SharedRendererStats | null;
+  /** Cost reducers acting on this instance now (always current). */
+  reducers: InstanceReducers;
 }
 
 export type DebugView = 'final' | 'field' | 'halo' | 'bloom' | 'haze' | 'cells';

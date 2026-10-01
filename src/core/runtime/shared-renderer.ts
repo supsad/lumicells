@@ -46,6 +46,23 @@
  * instance, idle seats are kept: past that the lowest ranked (longest away) park early, so a
  * fast scroll through a long list does not hold a slot for every card it passed.
  *
+ * Cost reducers (decided once per frame in beginFrame, before any shared instance updates):
+ * - secondary rate: instances that are not active (SharedClient.active: pointer over the host,
+ *   a recent pulse, lift, influence or config change) and not the largest drawing one present
+ *   on every n-th frame only, phase-staggered so each frame carries about 1/n of them (the
+ *   least loaded phase is picked when one joins). They do not submit on other frames: no
+ *   update, no draw, no copy, and their animation time runs on (the facade accumulates it).
+ *   n follows `secondaryMaxFps`: a fixed cap, or 'auto' levels from crowding (more than CROWD
+ *   drawing instances), the page's frame budget (FrameLoad, fed with the ticker's main-thread
+ *   time and the device's GPU time) and the copy cost;
+ * - lite pipeline: inactive instances that are small (LITE_AREA_PX) or crowded (LITE_CROWD)
+ *   draw with FrameInputs.lite (2 glow passes instead of 5, see BloomPass), the largest one
+ *   included: it keeps the full rate, not necessarily the full pipeline;
+ * - copy cost: once copyMsPerMpx is measured, a frame's copies should take at most COPY_SHARE of
+ *   the frame: the secondary level rises until they do (up to about 15 fps) and, when even that
+ *   is not enough, the pixel budget of the atlas is lowered (never below COPY_BUDGET_FLOOR of
+ *   the pixels the members need), once per measurement.
+ *
  * Context loss: every instance keeps the last frame in its 2D canvas and is told (`detached`).
  * On restore, or on a fresh canvas when the browser does not restore the context within
  * RESTORE_TIMEOUT_MS, the device and every slot are rebuilt (`attached` with `restored`). A
@@ -61,15 +78,25 @@ import type { RenderSlot } from '../engine/slot';
 import { RegionSurface } from '../engine/surface';
 import type { EngineError, FrameInputs } from '../engine/types';
 import { bucketSize, needsRealloc } from '../gl/target';
-import { onFrameEnd, subscribeTicker } from '../ticker';
-import type { SharedRendererStats } from '../types';
+import { frameWorkMs, noteGpuWork, onFrameEnd, subscribeTicker } from '../ticker';
+import type { SharedReducerReason, SharedRendererStats } from '../types';
 import { ATLAS_STEP, type AtlasItem, AtlasPlanner, createAtlasItem } from './atlas';
 import { type BudgetMember, compareRank } from './context-budget';
+import { displayEpoch, displayIntervalMs } from './display';
+import {
+  baseLevel,
+  FrameLoad,
+  fpsDivisor,
+  levelBelow,
+  levelDivisor,
+  MAX_LEVEL,
+} from './frame-load';
 import {
   claimContextCreation,
   noteFirstDraw,
   releaseSharedContext,
   reserveSharedContext,
+  runtimeSettings,
   sharedBudgetPx,
   withdrawContextClaim,
 } from './scheduler';
@@ -105,6 +132,20 @@ export const CHEAP_COPY_MS = 0.05;
 /** The staged path is taken only when its estimate is below this share of the direct one. */
 const STAGE_MARGIN = 0.75;
 
+/** More drawing instances than this: the inactive ones present at a lower rate ('auto'). */
+export const CROWD = 8;
+/** More drawing instances than this: every inactive one draws lite ('auto'). */
+export const LITE_CROWD = 12;
+/** Inactive instances whose canvas is smaller draw lite ('auto'); they leave it above LITE_EXIT_PX. */
+export const LITE_AREA_PX = 0.15e6;
+const LITE_EXIT_PX = 0.18e6;
+/** Share of a frame the copy series may take before the copy cost lowers the rate or budget. */
+export const COPY_SHARE = 0.25;
+/** The copy cost never lowers the atlas budget below this share of what the members need. */
+export const COPY_BUDGET_FLOOR = 0.25;
+/** Largest frame divisor (and number of phases). */
+export const MAX_DIVISOR = 60;
+
 /** Copy path probe states (see the header): timing direct copies, timing staged ones, decided. */
 const PROBE_DIRECT = 0;
 const PROBE_STAGED = 1;
@@ -128,6 +169,12 @@ export interface SharedClient extends BudgetMember {
    */
   readonly expectedWidth: number;
   readonly expectedHeight: number;
+  /**
+   * Presents at the full rate (see the header): the pointer is over its host, or a pulse, lift,
+   * influence, config transition or modulated value changed it lately. Read once per frame for
+   * every drawing instance, before any of them updates.
+   */
+  readonly active: boolean;
   /** Applies the uniform resolution factor of the shared pixel budget. */
   setShareScale(scale: number): void;
   /** Too many idle seats: give this one back (park). */
@@ -175,6 +222,18 @@ export class SharedSeat {
   copyMs = 0;
   /** Pixels its last copy moved (0: not copied this frame). */
   copyPx = 0;
+  /**
+   * Presents on every `divisor`-th frame (1: every frame), on those whose ticker serial modulo
+   * `divisor` is `phase` (see SharedRenderer.policy).
+   */
+  divisor = 1;
+  phase = 0;
+  /** Draws with the lite pipeline (FrameInputs.lite). */
+  lite = false;
+  /** This frame: the client is active (SharedClient.active, read once per frame). */
+  active = true;
+  /** This frame: presents at the full rate (active, or the largest drawing instance). */
+  primary = true;
 
   constructor(
     private readonly owner: SharedRenderer,
@@ -201,9 +260,17 @@ export class SharedSeat {
     this.owner.setIdle(this, on);
   }
 
-  /** Called before the instance updates its controller: the budget scale is decided once per frame. */
+  /**
+   * Called before the instance updates its controller: the budget scale and the reducers
+   * (divisor, phase, lite) are decided once per frame.
+   */
   beginFrame(now: number): void {
     this.owner.beginFrame(now);
+  }
+
+  /** Whether the instance presents in the frame with ticker serial `serial`. */
+  isDue(serial: number): boolean {
+    return this.divisor <= 1 || serial % this.divisor === this.phase;
   }
 
   /** The instance updated its FrameInputs: draw and copy them in this frame's present phase. */
@@ -239,6 +306,11 @@ export class SharedSeat {
   }
 }
 
+/** Megapixels a frame copies when the secondary instances present every `divisor`-th frame. */
+function copyMpx(primaryPx: number, secondaryPx: number, divisor: number): number {
+  return (primaryPx + secondaryPx / divisor) / 1e6;
+}
+
 function byRank(x: SharedClient, y: SharedClient): number {
   return compareRank(y, x) || x.order - y.order;
 }
@@ -256,6 +328,15 @@ export class SharedRenderer {
     regions: 0,
     scale: 1,
     copyStaged: false,
+    reducers: {
+      frameDivisor: 1,
+      level: 0,
+      reason: 'off',
+      secondary: 0,
+      lite: 0,
+      intervalMs: 16.67,
+      copyBudget: null,
+    },
   };
   /** Canvas resizes so far (each reallocates the atlas; tests and benches read it). */
   resizes = 0;
@@ -314,6 +395,19 @@ export class SharedRenderer {
   private stagedMsPerCopy = 0;
   private staging: HTMLCanvasElement | null = null;
   private stagingCtx: CanvasRenderingContext2D | null = null;
+  /** The page's frame budget (see frame-load.ts). */
+  readonly load = new FrameLoad();
+  private lastBeginAt = Number.NaN;
+  /** Secondary instances per phase (balances the phases, see assignDivisor). */
+  private readonly phaseLoad = new Int32Array(MAX_DIVISOR);
+  /** Divisor of the secondary instances and the 'auto' level in the last policy pass. */
+  private divisor = 1;
+  private level = 0;
+  /** Copy cost reaction (see the header): the level it asks for and the atlas budget cap. */
+  private copyLevel = 0;
+  private copyBudgetPx = Number.POSITIVE_INFINITY;
+  /** copyMsPerMpx the copy reaction last acted on (it stays while a re-calibration runs). */
+  private copyCost: number | null = null;
   private readonly tick = { present: (now: number) => this.present(now) };
   /** Adds a visible queued client to the budget plan (bound once: no closure per plan). */
   private readonly planQueued = (c: SharedClient): void => {
@@ -342,6 +436,7 @@ export class SharedRenderer {
   release(seat: SharedSeat): void {
     if (seat.released) return;
     seat.released = true;
+    this.assignDivisor(seat, 1);
     const i = this.seats.indexOf(seat);
     if (i >= 0) this.seats.splice(i, 1);
     if (seat.rendering) {
@@ -618,6 +713,8 @@ export class SharedRenderer {
     s.gpuMs = null;
     s.regions = 0;
     s.copyStaged = false;
+    this.phaseLoad.fill(0);
+    this.divisor = 1;
     releaseSharedContext();
   }
 
@@ -771,7 +868,8 @@ export class SharedRenderer {
     if (now === this.planAt) return;
     this.planAt = now;
     if (!this.device || this.lost) return;
-    const budget = sharedBudgetPx();
+    this.policy(now);
+    const budget = Math.min(sharedBudgetPx(), this.copyBudgetPx);
     let n = 0;
     let area = 0;
     let sumW = 0;
@@ -814,6 +912,204 @@ export class SharedRenderer {
     }
     this.queue.forEach(this.planQueued);
     if (this.planner.planScale(items, budget, this.maxSide)) this.applyScale();
+  }
+
+  /**
+   * The reducers of this frame (see the header): feeds the frame budget, then sets every
+   * drawing seat's divisor, phase and pipeline. O(seats), no allocation.
+   */
+  private policy(now: number): void {
+    const settings = runtimeSettings();
+    const seats = this.seats;
+    // Drawing seats, the largest of them (full rate) and the active ones.
+    let drawing = 0;
+    let largest: SharedSeat | null = null;
+    let largestArea = -1;
+    for (let i = 0; i < seats.length; i++) {
+      const s = seats[i] as SharedSeat;
+      if (!s.rendering || !s.slot) continue;
+      drawing++;
+      const area = s.client.naturalWidth * s.client.naturalHeight;
+      if (area > largestArea) {
+        largestArea = area;
+        largest = s;
+      }
+    }
+    let primaries = 0;
+    let primaryPx = 0;
+    let secondaryPx = 0;
+    let naturalPx = 0;
+    for (let i = 0; i < seats.length; i++) {
+      const s = seats[i] as SharedSeat;
+      if (!s.rendering || !s.slot) continue;
+      s.active = s.client.active;
+      s.primary = s === largest || s.active;
+      naturalPx += s.client.naturalWidth * s.client.naturalHeight;
+      const f = s.client.frame;
+      const px = f.canvasWidth * f.canvasHeight;
+      if (s.primary) {
+        primaries++;
+        primaryPx += px;
+      } else {
+        secondaryPx += px;
+      }
+    }
+    const secondaries = drawing - primaries;
+
+    // Levels: the frame budget, crowding and the copy cost.
+    const fixed = settings.secondaryMaxFps;
+    const auto = fixed === 'auto';
+    const load = this.load;
+    const crowd = auto && drawing > CROWD ? 1 : 0;
+    const floor = auto ? Math.max(crowd, this.copyLevel) : 0;
+    // What relaxing one step (to the next higher rate, see levelBelow) would add back to the
+    // per-frame cost.
+    const I0 = load.intervalMs;
+    const cur = primaries + secondaries / levelDivisor(this.level, I0);
+    const lower = primaries + secondaries / levelDivisor(levelBelow(this.level, I0), I0);
+    const relax = cur > 0 ? lower / cur : 1;
+    const delta = now - this.lastBeginAt;
+    this.lastBeginAt = now;
+    load.setDisplayHint(displayIntervalMs(), displayEpoch());
+    load.sample(delta, frameWorkMs(), this.stats.gpuMs, now, floor, relax);
+    const I = load.intervalMs;
+    const level = auto ? load.effective(floor) : 0;
+    this.level = level;
+    const divisor = Math.min(
+      MAX_DIVISOR,
+      auto ? levelDivisor(level, I) : fpsDivisor(fixed as number, I),
+    );
+    this.copyPolicy(I, primaryPx, secondaryPx, naturalPx, auto, divisor);
+
+    if (divisor !== this.divisor) {
+      // Every secondary seat takes a phase of the new divisor (in order: an even spread).
+      this.divisor = divisor;
+      this.phaseLoad.fill(0);
+      for (let i = 0; i < seats.length; i++) {
+        const s = seats[i] as SharedSeat;
+        s.divisor = 1;
+        s.phase = 0;
+      }
+    }
+    const lite = settings.lite;
+    const crowdedLite = lite === 'auto' && drawing > LITE_CROWD;
+    let nSecondary = 0;
+    let nLite = 0;
+    for (let i = 0; i < seats.length; i++) {
+      const s = seats[i] as SharedSeat;
+      if (!s.rendering || !s.slot) {
+        this.assignDivisor(s, 1);
+        s.lite = false;
+        continue;
+      }
+      this.assignDivisor(s, s.primary ? 1 : divisor);
+      if (s.divisor > 1) nSecondary++;
+      // Active instances (pointer, recent changes) keep the full pipeline; the largest one
+      // presents at the full rate but follows the size rule like the others.
+      if (lite === false || s.active) {
+        s.lite = false;
+      } else if (lite === true || crowdedLite) {
+        s.lite = true;
+      } else {
+        const f = s.client.frame;
+        const px = f.canvasWidth * f.canvasHeight;
+        s.lite = px < (s.lite ? LITE_EXIT_PX : LITE_AREA_PX);
+      }
+      if (s.lite) nLite++;
+    }
+    const r = this.stats.reducers;
+    r.frameDivisor = divisor;
+    r.level = level;
+    r.secondary = nSecondary;
+    r.lite = nLite;
+    r.intervalMs = I;
+    r.copyBudget = Number.isFinite(this.copyBudgetPx) ? this.copyBudgetPx / 1e6 : null;
+    r.reason = this.reason(auto, divisor, level, crowd);
+  }
+
+  private reason(
+    auto: boolean,
+    divisor: number,
+    level: number,
+    crowd: number,
+  ): SharedReducerReason {
+    if (divisor <= 1) return 'off';
+    if (!auto) return 'fixed';
+    if (this.load.level >= level && this.load.level > crowd) return 'budget';
+    if (this.copyLevel >= level && this.copyLevel > crowd) return 'copy';
+    return 'crowd';
+  }
+
+  /** Gives `s` the divisor `d`, on the least loaded phase (see the header). */
+  private assignDivisor(s: SharedSeat, d: number): void {
+    if (s.divisor === d) return;
+    const pl = this.phaseLoad;
+    if (s.divisor > 1) pl[s.phase] = Math.max(0, (pl[s.phase] as number) - 1);
+    s.divisor = d;
+    s.phase = 0;
+    if (d <= 1) return;
+    let best = 0;
+    let min = Number.POSITIVE_INFINITY;
+    for (let p = 0; p < d; p++) {
+      const l = pl[p] as number;
+      if (l < min) {
+        min = l;
+        best = p;
+      }
+    }
+    s.phase = best;
+    pl[best] = min + 1;
+  }
+
+  /**
+   * Copy cost reaction (see the header). `primaryPx` / `secondaryPx`: pixels the full-rate and
+   * the secondary instances copy when they present (at the current budget scale), `naturalPx`
+   * what they all need at full resolution; `divisor`: the secondary divisor in use.
+   */
+  private copyPolicy(
+    I: number,
+    primaryPx: number,
+    secondaryPx: number,
+    naturalPx: number,
+    auto: boolean,
+    divisor: number,
+  ): void {
+    const measured = this.stats.copyMsPerMpx;
+    const fresh = measured !== null && measured !== this.copyCost;
+    if (fresh) this.copyCost = measured;
+    const c = this.copyCost;
+    if (c === null || !(c > 0)) return;
+    // Megapixels a frame's copies may move.
+    const afford = (COPY_SHARE * I) / c;
+    if (auto) {
+      // The lowest level whose rate fits, with some slack before stepping back down.
+      let want = 0;
+      while (want < MAX_LEVEL && copyMpx(primaryPx, secondaryPx, levelDivisor(want, I)) > afford) {
+        want++;
+      }
+      if (
+        want < this.copyLevel &&
+        copyMpx(primaryPx, secondaryPx, levelDivisor(want, I)) > 0.7 * afford
+      ) {
+        want = this.copyLevel;
+      }
+      // The lowest level at that rate (a level sharing its divisor with the one below adds nothing).
+      this.copyLevel = baseLevel(want, I);
+    }
+    // The budget cap moves once per measurement (a new cap re-arms it at the new scale): down
+    // when even the lowest rate copies too much, back up only with a clear margin.
+    if (!fresh) return;
+    const need = copyMpx(primaryPx, secondaryPx, auto ? levelDivisor(MAX_LEVEL, I) : divisor);
+    const configured = sharedBudgetPx();
+    if (need > afford) {
+      // Copy volume scales with the budget: cut it by what the copies overshoot.
+      const total = Math.min(configured, primaryPx + secondaryPx);
+      const floor = COPY_BUDGET_FLOOR * Math.min(configured, naturalPx);
+      this.copyBudgetPx = Math.min(this.copyBudgetPx, Math.max(floor, total * (afford / need)));
+    } else if (Number.isFinite(this.copyBudgetPx) && need < 0.5 * afford) {
+      this.copyBudgetPx *= Math.min(4, (0.8 * afford) / need);
+      if (this.copyBudgetPx >= configured) this.copyBudgetPx = Number.POSITIVE_INFINITY;
+    }
   }
 
   /**
@@ -862,6 +1158,7 @@ export class SharedRenderer {
       }
       if (!device.poll()) return; // compiling, or failed (fail() released every seat)
       if (this.layoutDirty || this.regionsStale(n)) this.relayout(device);
+      noteGpuWork();
       this.draw(device, n, now);
       // Released while drawing (its last seat failed): nothing left to copy or to lose.
       if (this.device !== device) return;
@@ -1040,9 +1337,11 @@ export class SharedRenderer {
     const it = s.item;
     if (s.released || !slot || !surface || it.x < 0) return true;
     surface.moveTo(it.x, it.y);
+    const frame = s.client.frame;
+    frame.lite = s.lite;
     const t0 = performance.now();
     try {
-      s.drawn = slot.draw(s.client.frame, surface, null);
+      s.drawn = slot.draw(frame, surface, null);
     } catch (err) {
       s.drawn = false;
       if (device.isContextLost()) return false;

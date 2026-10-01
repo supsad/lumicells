@@ -3,13 +3,14 @@
  * context. What is checked is the command stream: programs compiled once per device, every slot
  * binding its own buffers and textures before its passes (and only when another slot drew in
  * between), the region / scissor / viewport of each surface, the shared region-pixel GLSL, and
- * per-slot automaton seeds.
+ * per-slot automaton seeds, and the lite pipeline (fewer glow passes, the same blur).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { Controller } from '../src/core/controller/controller';
 import { mulberry32 } from '../src/core/controller/math';
 import { GpuDevice } from '../src/core/engine/device';
 import { Engine } from '../src/core/engine/engine';
+import { gaussianTaps, liteHazeSigma, MAX_TAPS } from '../src/core/engine/passes/bloom';
 import {
   BIND_FRAME,
   BIND_PARAMS,
@@ -572,5 +573,114 @@ describe('Engine (device + one slot + own surface)', () => {
     expect(engine.error).toBeInstanceOf(EngineError);
     expect(engine.render(frame(c))).toBe(false);
     engine.dispose();
+  });
+});
+
+describe('lite pipeline', () => {
+  it('runs 2 glow passes instead of 5, with the combine program switched by u_lite', () => {
+    const fake = fakeGL({ width: 1024, height: 512 });
+    const c = controller(1, [200, 120]);
+    const device = linkedDevice(fake, c.layout.glslPrelude);
+    const slot = slotFor(device, c);
+    const surface = new RegionSurface(device, 0, 0);
+    const draw = (lite: boolean) =>
+      record(fake, () => {
+        const f = frame(c);
+        f.lite = lite;
+        f.lifeSteps = 0;
+        slot.draw(f, surface);
+      });
+    draw(false); // first frame: allocations, life reset, stamp bake
+    const full = draw(false);
+    const lite = draw(true);
+    const again = draw(true);
+    const back = draw(false);
+    expect(named(full, 'drawArrays').length - named(lite, 'drawArrays').length).toBe(3);
+    expect(named(back, 'drawArrays').length).toBe(named(full, 'drawArrays').length);
+    // u_lite is uploaded only when it changes.
+    const flag = (calls: Call[]) => uniforms(calls, 'u_lite').map((x) => x[2]);
+    expect(flag(lite)).toEqual([1]);
+    expect(flag(again)).toEqual([]);
+    expect(flag(back)).toEqual([0]);
+  });
+
+  it('the 2-D kernels: folded taps blur both axes at once exactly like two 1-D passes', () => {
+    // A lit cell on a 32 x 32 grid, the bloom kernel of the default radius.
+    const N = 32;
+    const img = new Float64Array(N * N);
+    img[16 * N + 15] = 1;
+    img[9 * N + 20] = 0.5;
+    const taps = new Float32Array(MAX_TAPS * 2);
+    const count = gaussianTaps(1.3, taps);
+    const at = (x: number, y: number) => {
+      // Bilinear with clamping to texel centers, like texBilinear.
+      const cx = Math.min(Math.max(x, 0), N - 1);
+      const cy = Math.min(Math.max(y, 0), N - 1);
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const fx = cx - x0;
+      const fy = cy - y0;
+      const x1 = Math.min(x0 + 1, N - 1);
+      const y1 = Math.min(y0 + 1, N - 1);
+      const v = (i: number, j: number) => img[j * N + i] as number;
+      return (
+        (v(x0, y0) * (1 - fx) + v(x1, y0) * fx) * (1 - fy) +
+        (v(x0, y1) * (1 - fx) + v(x1, y1) * fx) * fy
+      );
+    };
+    const tap = (k: number): [number, number] => {
+      const i = (k + 1) >> 1;
+      const o = taps[i * 2] as number;
+      return [k & 1 ? o : -o, taps[i * 2 + 1] as number];
+    };
+    const n = 2 * count - 1;
+    // Two passes: x into a temporary grid, then y over it.
+    const tmp = new Float64Array(N * N);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        let acc = 0;
+        for (let k = 0; k < n; k++) {
+          const [o, w] = tap(k);
+          acc += at(x + o, y) * w;
+        }
+        tmp[y * N + x] = acc;
+      }
+    }
+    let maxErr = 0;
+    let sum = 0;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        let twoPass = 0;
+        for (let k = 0; k < n; k++) {
+          const [o, w] = tap(k);
+          const yy = Math.min(Math.max(y + o, 0), N - 1);
+          const y0 = Math.floor(yy);
+          const f = yy - y0;
+          const y1 = Math.min(y0 + 1, N - 1);
+          twoPass += ((tmp[y0 * N + x] as number) * (1 - f) + (tmp[y1 * N + x] as number) * f) * w;
+        }
+        // One pass, as the lite combine does it.
+        let onePass = 0;
+        for (let j = 0; j < n; j++) {
+          const [oy, wy] = tap(j);
+          for (let i = 0; i < n; i++) {
+            const [ox, wx] = tap(i);
+            onePass += at(x + ox, y + oy) * wx * wy;
+          }
+        }
+        maxErr = Math.max(maxErr, Math.abs(onePass - twoPass));
+        sum += onePass;
+      }
+    }
+    expect(maxErr).toBeLessThan(1e-6);
+    expect(sum).toBeCloseTo(1.5, 4);
+  });
+
+  it('widens the lite haze kernel by the difference between B-spline and bilinear sampling', () => {
+    // Variance: (sigma/4)^2 + 1/3 (blur, then B-spline) == lite^2 + 1/6 (bilinear, then blur).
+    for (const sigma of [2, 4, 12]) {
+      const q = sigma / 4;
+      expect(liteHazeSigma(sigma) ** 2 + 1 / 6).toBeCloseTo(q * q + 1 / 3, 9);
+    }
   });
 });

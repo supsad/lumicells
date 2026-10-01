@@ -35,6 +35,7 @@ import {
   resolveMaxContexts,
   sanitizeMaxContexts,
 } from './context-budget';
+import { resetDisplayForTesting } from './display';
 
 /** An instance as the scheduler sees it. Callbacks run synchronously inside the scheduler. */
 export interface GpuClient extends BudgetMember {
@@ -75,6 +76,10 @@ export interface RuntimeSettings {
   renderer: RendererMode;
   /** `auto`: canvas megapixels from which an instance prefers a context of its own. */
   promoteArea: number;
+  /** Frame-rate cap of inactive shared instances: fps, 'auto' (when needed) or 0 (off). */
+  secondaryMaxFps: number | 'auto';
+  /** Lite pipeline for shared instances: 'auto' (small or crowded), true (all inactive), false. */
+  lite: boolean | 'auto';
 }
 
 /**
@@ -90,6 +95,8 @@ const DEFAULTS: Readonly<RuntimeSettings> = {
   sharedBudget: 'auto',
   renderer: 'auto',
   promoteArea: DEFAULT_PROMOTE_AREA,
+  secondaryMaxFps: 'auto',
+  lite: 'auto',
 };
 
 /** Default shared atlas budget on desktop (fine pointer), megapixels. */
@@ -249,6 +256,11 @@ export function configureRuntime(opts: ConfigureOptions): void {
     const v = Number(opts.promoteArea);
     if (Number.isFinite(v) && v > 0) settings.promoteArea = v;
   }
+  if (opts.secondaryMaxFps !== undefined) {
+    const v = opts.secondaryMaxFps === 'auto' ? 'auto' : Number(opts.secondaryMaxFps);
+    if (v === 'auto' || (Number.isFinite(v) && v >= 0)) settings.secondaryMaxFps = v;
+  }
+  if (opts.lite === 'auto' || opts.lite === true || opts.lite === false) settings.lite = opts.lite;
   if (opts.maxContexts !== undefined) {
     const v = opts.maxContexts === 'auto' ? 'auto' : sanitizeMaxContexts(opts.maxContexts);
     if (v !== null) {
@@ -383,8 +395,13 @@ export function claimBudgetWarning(): boolean {
   return true;
 }
 
-/** Tests only: back to the initial state (settings, budget, queue, warning). */
-export function resetRuntimeForTesting(): void {
+/**
+ * Tests only: back to the initial state (settings, budget, queue, warning, display calibration).
+ * `calibrationHold`: whether a display calibration may hold GL work for a few frames (off by
+ * default: most tests count frames to the first draw).
+ */
+export function resetRuntimeForTesting(calibrationHold = false): void {
+  resetDisplayForTesting(calibrationHold);
   Object.assign(settings, DEFAULTS);
   budget = null;
   queue.clear();

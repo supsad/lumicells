@@ -234,3 +234,141 @@ describe('adaptive quality recovers from stale conclusions', () => {
     expect(p.cadenceMs).toBe(16.67);
   });
 });
+
+describe('a GPU slow from the first frame (display refresh hint)', () => {
+  /** 165 Hz display. */
+  const VS = 6.06;
+  /** When a frame whose GPU work takes `work` ms arrives: at the vsync after it (plus slack). */
+  const paced = (work: number) => Math.max(1, Math.ceil((work + 0.5) / VS)) * VS;
+  /** A fill-bound GPU: 12.3 ms at full resolution, scaling with the pixels of each level. */
+  const fill = (level: number) => {
+    const s = QUALITY_LEVELS[level]?.scale ?? 1;
+    return 12.3 * s * s;
+  };
+
+  it('without the hint, three vsyncs per frame read as 60 Hz and nothing steps down', () => {
+    const p = new PerfController();
+    const { changes } = drive(p, 12, (l) => paced(fill(l)), { gpu: fill });
+    // The blind spot the hint closes: 18.2 ms frames snap to 16.67 and 12.3 ms of GPU "fits".
+    expect(p.vsyncMs).toBe(16.67);
+    expect(changes.length).toBe(0);
+  });
+
+  it('with the calibrated refresh the GPU timer path steps down until the frames fit', () => {
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    const { changes } = drive(p, 20, (l) => paced(fill(l)), { gpu: fill });
+    expect(p.vsyncMs).toBe(VS);
+    expect(changes.length).toBeGreaterThanOrEqual(3);
+    expect(changes.every((c) => c.reason === 'slow')).toBe(true);
+    expect(fill(p.level)).toBeLessThan(0.75 * VS);
+    expect(p.locked).toBe(false);
+  });
+
+  it('without a GPU timer the misses against the calibrated refresh step it down too', () => {
+    // Real frames jitter around the vsync boundaries (here +-12.5 %), and the lower tiers save
+    // GPU time too (halo, bevel, glow taps): progress shows as fewer misses before a step makes
+    // every frame fit.
+    const TIER = { high: 1, medium: 0.85, low: 0.7 };
+    const cost = (level: number, i: number) => {
+      const q = QUALITY_LEVELS[level] ?? { quality: 'high', scale: 1 };
+      const jitter = 1 + 0.25 * (((i * 0.6180339887) % 1) - 0.5);
+      return 12.3 * q.scale * q.scale * TIER[q.quality] * jitter;
+    };
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    const { changes } = drive(p, 30, (l, i) => paced(cost(l, i)));
+    expect(changes.slice(0, 4).map((c) => c.reason)).toEqual(['slow', 'slow', 'slow', 'slow']);
+    // Frames fit from level 4 on (a step back up is tried, misses again, and is reverted).
+    expect(p.level).toBe(4);
+    expect(p.missRatio).toBeLessThan(0.25);
+    expect(p.locked).toBe(false);
+  });
+
+  it('main-thread jank does not step down, with or without a GPU timer', () => {
+    // Frames take two vsyncs because the main thread is busy 8 ms (the caller feeds the whole
+    // frame's work); the GPU idles.
+    const a = new PerfController();
+    a.setDisplayHint(VS, 1);
+    expect(drive(a, 15, () => 2 * VS, { cpu: 8, gpu: () => 1 }).changes).toEqual([]);
+    const b = new PerfController();
+    b.setDisplayHint(VS, 1);
+    expect(drive(b, 15, () => 2 * VS, { cpu: 8 }).changes).toEqual([]);
+    expect(b.missRatio).toBeGreaterThan(0.9);
+  });
+
+  it('an OS cap rejects the hint (GPU timer): the slower rate is adopted, nothing steps down', () => {
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    // Battery saver: rAF at 60 Hz whatever the display, with a small GPU cost.
+    const r = drive(p, 5, () => 16.67, { gpu: () => 1.5 });
+    expect(r.changes).toEqual([]);
+    expect(p.vsyncMs).toBe(16.67);
+    expect(p.displayHint).toBe(Number.POSITIVE_INFINITY);
+    // The same measurement again stays rejected; a new calibration is taken.
+    p.setDisplayHint(VS, 1);
+    expect(p.displayHint).toBe(Number.POSITIVE_INFINITY);
+    p.setDisplayHint(VS, 2);
+    expect(p.displayHint).toBe(VS);
+  });
+
+  it('an OS cap without a GPU timer locks after two fruitless steps and rejects the hint', () => {
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    const r = drive(p, 20, () => 16.67);
+    expect(r.changes.map((c) => c.reason)).toEqual(['slow', 'slow', 'locked']);
+    expect(p.level).toBe(0);
+    expect(p.displayHint).toBe(Number.POSITIVE_INFINITY);
+    expect(p.vsyncMs).toBe(16.67);
+    expect(p.missRatio).toBe(0);
+  });
+
+  it('a GPU time that does not shrink with the pixels (per-draw overhead) is not chased down', () => {
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    // 6 ms of GPU whatever the resolution: lower levels cost quality for nothing.
+    const r = drive(p, 20, () => 2 * VS, { gpu: () => 6 });
+    expect(r.changes.map((c) => c.reason)).toEqual(['slow', 'slow', 'locked']);
+    expect(p.level).toBe(0);
+    expect(p.locked).toBe(true);
+  });
+
+  it('a lock on per-draw GPU cost keeps the hint: a later fill-bound load still steps down', () => {
+    const p = new PerfController();
+    // The facade publishes the hint every frame.
+    const feed = (t0: number, seconds: number, gpu: (l: number) => number) => {
+      const changes: PerfChange[] = [];
+      let now = t0;
+      while (now < t0 + seconds * 1000) {
+        p.setDisplayHint(VS, 1);
+        const g = gpu(p.level);
+        const d = paced(g);
+        now += d;
+        const ch = p.sample(d, 1, g, now);
+        if (ch) changes.push({ ...ch });
+      }
+      return { changes, now };
+    };
+    const r1 = feed(0, 20, () => 6);
+    expect(r1.changes.map((c) => c.reason)).toEqual(['slow', 'slow', 'locked']);
+    // GPU time that does not scale with pixels says nothing about the display.
+    expect(p.displayHint).toBe(VS);
+    expect(p.vsyncMs).toBe(VS);
+    // After the lock: a fill-bound 7.5 ms at full resolution (two vsyncs a frame).
+    const fill75 = (level: number) => 7.5 * (QUALITY_LEVELS[level]?.scale ?? 1) ** 2;
+    feed(r1.now + LOCK_MS, 60, fill75);
+    expect(p.vsyncMs).toBe(VS);
+    expect(p.level).toBeGreaterThan(0);
+    expect(fill75(p.level)).toBeLessThan(0.75 * VS);
+  });
+
+  it('a hint rejected by a lock comes back with the next calibration, even at the same rate', () => {
+    const p = new PerfController();
+    p.setDisplayHint(VS, 1);
+    drive(p, 20, () => 16.67);
+    expect(p.displayHint).toBe(Number.POSITIVE_INFINITY);
+    // runtime/display bumps the epoch on every completed calibration (see runtime-display).
+    p.setDisplayHint(VS, 2);
+    expect(p.displayHint).toBe(VS);
+  });
+});

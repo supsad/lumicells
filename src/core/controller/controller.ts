@@ -320,6 +320,8 @@ export class Controller {
   private init: InitState | null = null;
   private posterFor: LumiCellsConfig | null = null;
   private posterText = '';
+  /** A change of this instance's own (see takeActivity) since the owner last took it. */
+  private activity = true;
 
   // Resolved entry ids of the parameters read every frame.
   private readonly ids: ParamIds;
@@ -563,6 +565,7 @@ export class Controller {
     p.duration = req.duration ?? clamp((1.2 * halfDiagCells) / p.speed, 0.8, 4);
     p.minor = false;
     this.pulses.add(p);
+    this.activity = true;
   }
 
   /**
@@ -577,6 +580,7 @@ export class Controller {
     this.forced[o + 2] = req.y;
     this.forced[o + 3] = Math.max(1, Math.min(32, Math.floor(req.count ?? 1)));
     this.forced[o + 4] = req.radius ?? Number.NaN;
+    this.activity = true;
   }
 
   /** Cell (relative to the center cell) under a point, written into `out` [ci, cj]. */
@@ -725,6 +729,36 @@ export class Controller {
     this.frame.lifeReset = true;
   }
 
+  /**
+   * Whether something changed this instance on its own since the last call, and forgets it:
+   * a pulse, a forced lift, an influence that was added, moved, changed, shown, hidden, disposed
+   * or is fading, a config change, a running transition (tweens, palette) or a modulated value
+   * that moved. The ambient animation (the clock, random lifts and their landing ripples) does
+   * not count. The shared renderer keeps such instances at the full frame rate for a while.
+   */
+  takeActivity(): boolean {
+    const on =
+      this.activity ||
+      this.influences.touched ||
+      this.store.animating ||
+      this.lut.transitioning ||
+      this.forcedCount > 0;
+    this.activity = false;
+    this.influences.touched = false;
+    return on;
+  }
+
+  /** takeActivity() without forgetting. */
+  get activityPending(): boolean {
+    return (
+      this.activity ||
+      this.influences.touched ||
+      this.store.animating ||
+      this.lut.transitioning ||
+      this.forcedCount > 0
+    );
+  }
+
   /** The engine drew the last FrameInputs: one-shot flags are consumed. */
   commitFrame(): void {
     const f = this.frame;
@@ -745,16 +779,23 @@ export class Controller {
   // -------------------------------------------------------------------------------------------
   // Frame
 
-  /** Advances everything by `dt` seconds and fills the preallocated FrameInputs. */
-  update(dt: number, _now = 0): FrameInputs {
+  /**
+   * Advances everything by `dt` seconds and fills the preallocated FrameInputs. `maxDt`: the
+   * longest step taken (a stall must not fast-forward the animation); a caller that presents
+   * every few display frames passes the interval it presents at (or more), so a lower frame rate
+   * never slows the animation down.
+   */
+  update(dt: number, _now = 0, maxDt = 0.1): FrameInputs {
     const f = this.frame;
     const fr = f.frame;
     if (this.destroyed) return f;
-    const step = dt > 0 ? (dt < 0.1 ? dt : 0.1) : 0;
+    const cap = maxDt > 0.1 ? maxDt : 0.1;
+    const step = dt > 0 ? (dt < cap ? dt : cap) : 0;
     const s = this.store;
     const ids = this.ids;
 
-    s.update(step);
+    // A modulated value or a tween that moved is a change of this instance's own.
+    if (s.update(step)) this.activity = true;
     if (s.dirty) {
       f.paramsDirty = true;
       s.dirty = false;
@@ -798,7 +839,7 @@ export class Controller {
     const c = this.clock;
     c.advance(step, r);
 
-    // Life: every due step runs (0..2 per frame), each with its own seed.
+    // Life: every due step runs (see Clock.advance for the cap), each with its own seed.
     f.lifeSteps = c.lifeSteps;
     f.lifeSeed = (f.lifeSeed + c.lifeSteps) >>> 0;
     f.lifeRule = s.num(ids.lifeRule);
@@ -901,6 +942,7 @@ export class Controller {
     const changed = diffConfigs(this.config, next);
     if (changed.length === 0) return changed;
     this.config = next;
+    this.activity = true;
     this.init = null;
     const dur = Math.max(0, opts.transition ?? next.transition);
     let lut = false;

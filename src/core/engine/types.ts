@@ -23,7 +23,7 @@ export interface FrameInputs {
   /** 256 x 2 RGBA8 sRGB: row 0 base palette, row 1 hot tint. */
   lut: Uint8Array;
   lutDirty: boolean;
-  /** Automaton steps due this frame (0..2); each runs with its own seed. */
+  /** Automaton steps due this frame (0..MAX_LIFE_STEPS); each runs with its own seed. */
   lifeSteps: number;
   lifeReset: boolean;
   lifeSeed: number;
@@ -45,6 +45,13 @@ export interface FrameInputs {
   bloomStrength?: number;
   hazeStrength?: number;
   quality: RenderQuality;
+  /**
+   * Lite pipeline: the bloom and haze blurs run in the glow combine pass itself (2-D kernels at
+   * cell resolution) instead of separable passes of their own: 2 glow passes instead of 5, a
+   * very close look. Set by whoever owns the slot (the shared renderer for small or crowded
+   * members, the facade for own instances at the 'low' tier). Omitted = full pipeline.
+   */
+  lite?: boolean;
   /** Overflow == 0: opaque output. */
   opaque: boolean;
   /** 0 final, 1 field, 2 halo, 3 bloom, 4 haze, 5 cells (no glow). */
@@ -52,6 +59,12 @@ export interface FrameInputs {
 }
 
 /** Floats per lift instance. */
+/**
+ * Most automaton steps one frame runs. A frame presented every few display frames (a shared
+ * instance at a reduced rate, maxFps) carries the steps of the frames it skipped, up to this.
+ */
+export const MAX_LIFE_STEPS = 16;
+
 export const LIFT_STRIDE = 12;
 /** Source cell, texel coords including pad (same convention as f_socket). */
 export const LIFT_CELL_X = 0;

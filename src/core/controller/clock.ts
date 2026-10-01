@@ -6,6 +6,7 @@
  */
 
 import { EPOCH_WRAP } from '../engine/frame-block';
+import { MAX_LIFE_STEPS } from '../engine/types';
 import { TAU, wrap } from './math';
 
 export { EPOCH_WRAP };
@@ -14,6 +15,8 @@ export const NOISE_PERIOD = 1024;
 export const CLOCK_PERIOD = 4096;
 /** The palette fold tri() in the field pass repeats every 2: the drift phase wraps there. */
 export const DRIFT_PERIOD = 2;
+/** Life steps are capped at two per frame of this rate the frame's time spans. */
+const LIFE_FRAME_HZ = 60;
 
 /** Per-frame rates (units per second, already multiplied by the global speed). */
 export interface ClockRates {
@@ -66,7 +69,7 @@ export class Clock {
   /** Unwrapped scaled seconds (CPU-only envelopes). */
   elapsed = 0;
   lifeAcc = 0;
-  /** Life steps due this frame (0..2). */
+  /** Life steps due this frame (0..MAX_LIFE_STEPS). */
   lifeSteps = 0;
 
   advance(dt: number, r: ClockRates): void {
@@ -88,8 +91,11 @@ export class Clock {
     this.lifeSteps = 0;
     if (r.lifeRate > 0) {
       this.lifeAcc += s * r.lifeRate;
-      // At most two automaton steps per frame; a long stall must not fast-forward the sim.
-      while (this.lifeAcc >= 1 && this.lifeSteps < 2) {
+      // At most two automaton steps per 60 Hz frame the step spans (a frame presented every
+      // few display frames carries the steps of the ones it skipped), within MAX_LIFE_STEPS:
+      // a long stall must not fast-forward the sim.
+      const cap = Math.min(MAX_LIFE_STEPS, Math.max(2, 2 * Math.ceil(dt * LIFE_FRAME_HZ - 1e-3)));
+      while (this.lifeAcc >= 1 && this.lifeSteps < cap) {
         this.lifeAcc -= 1;
         this.lifeSteps++;
       }
