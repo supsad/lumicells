@@ -67,9 +67,21 @@ vi.mock('../src/core/lumi-cells', async () => {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
       this.renderer = options?.renderer ?? runtimeSettings().renderer;
+      this.look = options?.look ?? 'own';
+      this.lookOffset = options?.lookOffset ?? 0;
     }
     get rendererMode() {
       return this.renderer;
+    }
+    look: string;
+    lookOffset: number;
+    looks: Array<[string, number]> = [];
+    setLook(l: string, offset?: number) {
+      const o = offset ?? this.lookOffset;
+      if (l === this.look && o === this.lookOffset) return;
+      this.looks.push([l, o]);
+      this.look = l;
+      this.lookOffset = o;
     }
     setPriority(p: string) {
       this.priorities.push(p);
@@ -131,11 +143,21 @@ vi.mock('../src/core/lumi-cells', async () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean; priority?: string; renderer?: string };
+  options: {
+    config: any;
+    autoStart: boolean;
+    priority?: string;
+    renderer?: string;
+    look?: string;
+    lookOffset?: number;
+  };
   priority: string;
   priorities: string[];
   renderer: string;
   renderers: string[];
+  look: string;
+  lookOffset: number;
+  looks: Array<[string, number]>;
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -362,6 +384,36 @@ describe('<LumiCells>', () => {
     render(createElement(LumiCells, {}));
     expect(inst.renderers).toEqual(['own', 'auto', 'shared', 'auto']);
     expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('passes look and lookOffset at construction and switches them later without a new instance', () => {
+    render(createElement(LumiCells, { look: 'shared', lookOffset: 0.2 }));
+    const inst = live()[0] as Fake;
+    expect(inst.options.look).toBe('shared');
+    expect(inst.options.lookOffset).toBe(0.2);
+    // The mount effect does not switch what the constructor already chose.
+    expect(inst.looks).toEqual([]);
+    render(createElement(LumiCells, { look: 'own', lookOffset: 0.2 }));
+    expect(inst.look).toBe('own');
+    render(createElement(LumiCells, { look: 'shared', lookOffset: 0.4 }));
+    expect([inst.look, inst.lookOffset]).toEqual(['shared', 0.4]);
+    // Removing the props goes back to the defaults: an own look, no window shift.
+    render(createElement(LumiCells, {}));
+    expect(inst.looks).toEqual([
+      ['own', 0.2],
+      ['shared', 0.4],
+      ['own', 0],
+    ]);
+    expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('without the look prop the instance gets no look option and is never switched', () => {
+    render(createElement(LumiCells, { preset: 'orb' }));
+    const inst = live()[0] as Fake;
+    expect(inst.options.look).toBeUndefined();
+    expect(inst.look).toBe('own');
+    render(createElement(LumiCells, { preset: 'orb', paused: true }));
+    expect(inst.looks).toEqual([]);
   });
 
   it("without the renderer prop the page default decides: 'auto', or LumiCells.configure()", () => {

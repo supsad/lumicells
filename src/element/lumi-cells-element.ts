@@ -2,8 +2,8 @@
  * <lumi-cells>: the Web Component wrapper around the LumiCells facade.
  *
  * Properties are the source of truth; the scalar attributes (preset, src, interactive, overflow,
- * paused, transition, priority, renderer) feed the same state and only the boolean ones reflect
- * back. The module is
+ * paused, transition, priority, renderer, look, look-offset) feed the same state and only the
+ * boolean ones reflect back. The module is
  * importable in Node (SSR bundlers evaluate it): the HTMLElement base is guarded and nothing
  * here touches the DOM until an element is constructed.
  */
@@ -15,6 +15,7 @@ import type {
   InfluenceHandle,
   InfluenceOptions,
   InstancePriority,
+  LookMode,
   LumiCellsEvents,
   RendererMode,
   Stats,
@@ -52,6 +53,8 @@ export interface LumiCellsElementEventMap {
   'lc-contextrestored': CustomEvent<null>;
   /** The renderer changed (`auto` promotion, demotion or budget move, or an explicit switch). */
   'lc-renderer': CustomEvent<LumiCellsEvents['renderer']>;
+  /** The look changed: the background joined a shared look group or left one (`look="shared"`). */
+  'lc-look': CustomEvent<LumiCellsEvents['look']>;
 }
 
 declare global {
@@ -150,6 +153,8 @@ const UPGRADE_PROPS = [
   'transition',
   'priority',
   'renderer',
+  'look',
+  'lookOffset',
 ] as const;
 
 const FORWARDED_EVENTS = [
@@ -176,6 +181,18 @@ function parsePriority(value: unknown): InstancePriority {
   return v === 'high' || v === 'low' ? v : 'normal';
 }
 
+/** A look mode: `shared`, or `own` for anything else. */
+function parseLook(value: unknown): LookMode {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  return v === 'shared' ? 'shared' : 'own';
+}
+
+/** A lookOffset value (0 for anything that is not a number). */
+function parseLookOffset(value: unknown): number {
+  const n = typeof value === 'string' ? (value.trim() === '' ? 0 : Number(value)) : value;
+  return typeof n === 'number' && Number.isFinite(n) ? Math.min(0.5, Math.max(0, n)) : 0;
+}
+
 /** A renderer mode, or null (the page default) for anything else. */
 function parseRenderer(value: unknown): RendererMode | null {
   const v = typeof value === 'string' ? value.trim().toLowerCase() : value;
@@ -198,6 +215,8 @@ export class LumiCellsElement extends Base {
     'transition',
     'priority',
     'renderer',
+    'look',
+    'look-offset',
     'id',
   ];
 
@@ -215,6 +234,8 @@ export class LumiCellsElement extends Base {
   #priority: InstancePriority = 'normal';
   /** Null: the page default (`LumiCells.configure({ renderer })`). */
   #renderer: RendererMode | null = null;
+  #look: LookMode = 'own';
+  #lookOffset = 0;
 
   #instance: LumiCells | null = null;
   #unsubs: Array<() => void> = [];
@@ -350,6 +371,35 @@ export class LumiCellsElement extends Base {
     this.#instance?.setRenderer(this.#renderer ?? runtimeSettings().renderer);
   }
 
+  /**
+   * `shared`: share one picture with every background whose config draws the same (rendered once
+   * per frame, a crop of it in each card) while this one draws nothing of its own (no pointer
+   * light or hover lift, pulse, bound element, modulator...): see `LumiCellsOptions.look`.
+   * Anything else, or removing the attribute, means `own` (an animation of its own). Switches the
+   * running instance (see `LumiCells.setLook`); what it shows is `instance.getStats().look` (event
+   * `lc-look`).
+   */
+  get look(): LookMode {
+    return this.#look;
+  }
+  set look(value: LookMode | string | null) {
+    this.#look = parseLook(value);
+    this.#instance?.setLook(this.#look, this.#lookOffset);
+  }
+
+  /**
+   * `look="shared"`: shifts this card's window into the shared picture by up to this share of its
+   * size (0 to 0.5, seeded per instance; attribute `look-offset`), so cards side by side are not in
+   * sync. Default 0.
+   */
+  get lookOffset(): number {
+    return this.#lookOffset;
+  }
+  set lookOffset(value: number | string | null) {
+    this.#lookOffset = parseLookOffset(value);
+    this.#instance?.setLook(this.#look, this.#lookOffset);
+  }
+
   /** The live LumiCells instance while the element is connected. */
   get instance(): LumiCells | null {
     return this.#instance;
@@ -410,6 +460,12 @@ export class LumiCellsElement extends Base {
         break;
       case 'renderer':
         this.renderer = value;
+        break;
+      case 'look':
+        this.look = value;
+        break;
+      case 'look-offset':
+        this.lookOffset = value;
         break;
       case 'id':
         if (this.#instance) {
@@ -496,6 +552,8 @@ export class LumiCellsElement extends Base {
       autoStart: false,
       priority: this.#priority,
       renderer: this.#renderer ?? undefined,
+      look: this.#look,
+      lookOffset: this.#lookOffset,
     });
     this.#instance = instance;
     this.#fallbackNotified = false;
@@ -515,6 +573,7 @@ export class LumiCellsElement extends Base {
       instance.on('contextlost', () => this.#emit('lc-contextlost', null)),
       instance.on('contextrestored', () => this.#emit('lc-contextrestored', null)),
       instance.on('renderer', (e) => this.#emit('lc-renderer', e)),
+      instance.on('look', (e) => this.#emit('lc-look', e)),
     ];
     // The facade may have decided on the poster-only path during construction.
     if (!instance.supported && !this.#fallbackNotified) {

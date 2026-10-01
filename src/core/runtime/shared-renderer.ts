@@ -63,6 +63,17 @@
  *   is not enough, the pixel budget of the atlas is lowered (never below COPY_BUDGET_FLOOR of
  *   the pixels the members need), once per measurement.
  *
+ * Shared look (`look: 'shared'`, see look.ts): cards with an identical config that draw nothing of
+ * their own share one picture. A LookGroup is the client of a seat of its own (slot and region),
+ * drawn in every frame in which one of its members presents; the members' seats hold no slot: in
+ * the copy series each copies a crop of the group's region into its 2D canvas. The members decide
+ * when they join or leave (joinLook / leaveLook); a seat that leaves (or was granted as a look
+ * candidate and does not join) gets its slot when it first submits a frame of its own: a spare
+ * one when there is (the slot of a card that joined a group keeps its targets for a while, see
+ * SPARE_SLOTS), so a hover sweep over interactive cards does not allocate targets per card. A
+ * group counts as one instance for the budget plan, the atlas and the lite pipeline (its members
+ * show its pipeline); the frame rate goes per member, since what each member costs is its copy.
+ *
  * Context loss: every instance keeps the last frame in its 2D canvas and is told (`detached`).
  * On restore, or on a fresh canvas when the browser does not restore the context within
  * RESTORE_TIMEOUT_MS, the device and every slot are rebuilt (`attached` with `restored`). A
@@ -91,6 +102,7 @@ import {
   levelDivisor,
   MAX_LEVEL,
 } from './frame-load';
+import { LookGroup, type LookSpec } from './look';
 import {
   claimContextCreation,
   noteFirstDraw,
@@ -103,6 +115,8 @@ import {
 
 /** Seats granted per frame (a slot is a few small GL objects; its targets come with its first draw). */
 export const GRANTS_PER_FRAME = 8;
+/** Seats granted per frame to look candidates, on top (no slot until they draw a picture of their own). */
+export const LOOK_GRANTS_PER_FRAME = 64;
 /** First draws per frame: each allocates the slot's cell targets (synchronous framebuffer checks). */
 export const FIRST_DRAWS_PER_FRAME = 4;
 /** A lost shared context the browser has not restored by then is rebuilt on a fresh canvas. */
@@ -131,6 +145,16 @@ export const PROBE_FRAMES = 4;
 export const CHEAP_COPY_MS = 0.05;
 /** The staged path is taken only when its estimate is below this share of the direct one. */
 const STAGE_MARGIN = 0.75;
+
+/**
+ * Slots of cards that joined a look group, kept with their targets for the next card that leaves
+ * one (see takeSpare): a hover sweep over interactive cards then allocates no new targets. At
+ * most this many, holding at most SPARE_CELLS cells (about 50 bytes of targets per cell).
+ */
+export const SPARE_SLOTS = 64;
+export const SPARE_CELLS = 256 * 1024;
+/** A spare slot nobody took for this long is freed, ms. */
+export const SPARE_SLOT_MS = 10_000;
 
 /** More drawing instances than this: the inactive ones present at a lower rate ('auto'). */
 export const CROWD = 8;
@@ -187,14 +211,24 @@ export interface SharedClient extends BudgetMember {
   failed(error: EngineError): void;
   /**
    * The present phase of a frame the instance submitted is over: `drawn` the slot drew it (its
-   * one-shot inputs are consumed), `shown` it was copied into the 2D canvas.
+   * one-shot inputs are consumed; for a look member: its group's slot), `shown` it was copied into
+   * the 2D canvas.
    */
   presented(drawn: boolean, shown: boolean, now: number): void;
+  /**
+   * `look: 'shared'` and nothing of its own to draw right now: it will most likely join a look
+   * group (see look.ts), so a grant creates no slot and the budget plan does not count it.
+   */
+  readonly lookCandidate?: boolean;
 }
 
 /** One instance's place on the shared device, handed to it in `attached`. */
 export class SharedSeat {
-  /** Null while the context is lost. */
+  /**
+   * Null while the context is lost, for a look member (it draws nothing of its own), and for a
+   * seat that has not submitted a frame of its own yet since it was granted as a look candidate
+   * or left its group.
+   */
   slot: RenderSlot | null = null;
   surface: RegionSurface | null = null;
   /** Its region in the atlas (x < 0: none). */
@@ -234,10 +268,29 @@ export class SharedSeat {
   active = true;
   /** This frame: presents at the full rate (active, or the largest drawing instance). */
   primary = true;
+  /** The look group this seat copies its frames from (see look.ts), or null. */
+  member: LookGroup | null = null;
+  /** What the member shares with (live, kept up to date by the instance) while it is a member. */
+  spec: LookSpec | null = null;
+  /** The member's crop of its group's frame, device px (LookGroup.cropOf, before every copy). */
+  cropX = 0;
+  cropY = 0;
+  cropW = 0;
+  cropH = 0;
+  /** Cells between the member's center cell and its group's (LookGroup.cropOf). */
+  cellDX = 0;
+  cellDY = 0;
+  /** This frame's copy source rectangle in the atlas (see SharedRenderer.copy). */
+  srcX = 0;
+  srcY = 0;
+  srcW = 0;
+  srcH = 0;
 
   constructor(
     private readonly owner: SharedRenderer,
     readonly client: SharedClient,
+    /** The look group this seat draws (a group's own seat), or null for an instance's seat. */
+    readonly group: LookGroup | null = null,
   ) {
     this.item = createAtlasItem(client.order);
   }
@@ -278,9 +331,28 @@ export class SharedSeat {
     this.owner.submit(this);
   }
 
-  /** Gives the seat back (park, destroy, renderer switch). */
+  /** Gives the seat back (park, destroy, renderer switch); a member leaves its group. */
   release(): void {
     this.owner.release(this);
+  }
+
+  /**
+   * Joins the best fitting look group for `key` (see look.ts), or starts one that continues the
+   * picture of `spec.controller`; a member moves (the caller took over its group's state first).
+   * False when no group can be had now (lost context, a slot that could not be created).
+   */
+  joinLook(key: string, spec: LookSpec): boolean {
+    return this.owner.joinLook(this, key, spec);
+  }
+
+  /** Leaves its look group: its next submitted frame draws in a region of its own. */
+  leaveLook(): void {
+    this.owner.leaveLook(this);
+  }
+
+  /** The shared device exists and its context is not lost. */
+  get alive(): boolean {
+    return this.owner.alive;
   }
 
   /** Simulates a loss of the shared context (and the restore about 0.5 s later). */
@@ -311,6 +383,15 @@ function copyMpx(primaryPx: number, secondaryPx: number, divisor: number): numbe
   return (primaryPx + secondaryPx / divisor) / 1e6;
 }
 
+/**
+ * Draws and copies a frame of its own, or copies its look group's: paced by the reducers. A seat
+ * about to draw on its own (its slot comes with its first frame) is paced from the start, so a
+ * card leaving its group keeps its rate and pipeline.
+ */
+function presents(s: SharedSeat): boolean {
+  return s.rendering && !s.group;
+}
+
 function byRank(x: SharedClient, y: SharedClient): number {
   return compareRank(y, x) || x.order - y.order;
 }
@@ -337,6 +418,8 @@ export class SharedRenderer {
       intervalMs: 16.67,
       copyBudget: null,
     },
+    groups: 0,
+    draws: 0,
   };
   /** Canvas resizes so far (each reallocates the atlas; tests and benches read it). */
   resizes = 0;
@@ -345,6 +428,14 @@ export class SharedRenderer {
   private canvasCtl: AbortController | null = null;
   private readonly seats: SharedSeat[] = [];
   private readonly queue = new Set<SharedClient>();
+  /** Look groups by config key (several per key: one per size class, see look.ts). */
+  private readonly looks = new Map<string, LookGroup[]>();
+  /** Spare slots, oldest first, when each was put back and their cells (see SPARE_SLOTS). */
+  private readonly spares: RenderSlot[] = [];
+  private readonly spareAt: number[] = [];
+  private spareCells = 0;
+  /** Seats of look groups among `seats`. */
+  private groupSeats = 0;
   /** Seats that submitted a frame since the last present phase (first `dueCount` entries). */
   private readonly due: (SharedSeat | null)[] = [];
   private dueCount = 0;
@@ -411,7 +502,7 @@ export class SharedRenderer {
   private readonly tick = { present: (now: number) => this.present(now) };
   /** Adds a visible queued client to the budget plan (bound once: no closure per plan). */
   private readonly planQueued = (c: SharedClient): void => {
-    if (c.visible) this.addPlanItem(c);
+    if (c.visible && !c.lookCandidate) this.addPlanItem(c);
   };
 
   // -------------------------------------------------------------------------------------------
@@ -436,6 +527,9 @@ export class SharedRenderer {
   release(seat: SharedSeat): void {
     if (seat.released) return;
     seat.released = true;
+    const group = seat.member;
+    if (group) this.dropMember(seat);
+    if (seat.group) this.groupSeats--;
     this.assignDivisor(seat, 1);
     const i = this.seats.indexOf(seat);
     if (i >= 0) this.seats.splice(i, 1);
@@ -453,7 +547,10 @@ export class SharedRenderer {
     seat.surface = null;
     seat.target = null;
     seat.ctx = null;
-    this.stats.members = this.seats.length;
+    seat.spec = null;
+    this.stats.members = this.seats.length - this.groupSeats;
+    this.stats.groups = this.groupSeats;
+    if (group) this.afterMemberLeft(group);
     this.syncPresent();
     this.maybeRelease();
   }
@@ -463,6 +560,8 @@ export class SharedRenderer {
     seat.rendering = on;
     this.renderingCount += on ? 1 : -1;
     this.layoutDirty = true;
+    const g = seat.member;
+    if (g?.seat) this.setRendering(g.seat, g.rendering);
     this.syncPresent();
   }
 
@@ -500,8 +599,262 @@ export class SharedRenderer {
 
   submit(seat: SharedSeat): void {
     // Bounded by the seats: a present phase that does not come cannot pile frames up.
-    if (seat.released || !seat.slot || this.dueCount >= this.seats.length) return;
+    if (seat.released || this.dueCount >= this.seats.length) return;
+    // A seat that draws a picture of its own gets its slot with its first frame (see the header).
+    if (!seat.slot && !seat.member && !this.ensureSlot(seat)) return;
     this.due[this.dueCount++] = seat;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Shared look (see look.ts)
+
+  joinLook(seat: SharedSeat, key: string, spec: LookSpec): boolean {
+    if (seat.released || seat.group || !this.device || this.lost) return false;
+    const current = seat.member;
+    const maxDim = this.maxSide;
+    const list = this.looks.get(key);
+    let best: LookGroup | null = null;
+    if (list) {
+      for (const g of list) {
+        if (g === current || !g.fits(spec, maxDim)) continue;
+        if (
+          !best ||
+          g.hostArea < best.hostArea ||
+          (g.hostArea === best.hostArea && g.members.length > best.members.length)
+        ) {
+          best = g;
+        }
+      }
+      if (!best) {
+        for (const g of list) {
+          if (g !== current && g.grow(spec, maxDim)) {
+            best = g;
+            break;
+          }
+        }
+      }
+    }
+    if (current) {
+      this.dropMember(seat);
+      this.afterMemberLeft(current);
+    }
+    seat.spec = spec;
+    const fresh = !best;
+    if (!best) best = this.createGroup(key, spec);
+    if (!best?.seat) {
+      seat.spec = null;
+      return false;
+    }
+    // The seat's own slot and region go: the group draws for it. A slot that drew keeps its
+    // targets for the next card that leaves a group (a hovered card leaves and rejoins often).
+    if (seat.slot) {
+      if (seat.everDrawn) this.putSpare(seat.slot);
+      else seat.slot.dispose();
+      seat.slot = null;
+      seat.surface = null;
+      this.layoutDirty = true;
+    }
+    seat.everDrawn = false;
+    seat.item.x = -1;
+    seat.item.y = -1;
+    this.assignDivisor(seat, 1);
+    seat.member = best;
+    best.members.push(seat);
+    // A new group continues the picture of the card that starts it.
+    if (fresh) best.adoptFrom(seat);
+    best.cropOf(seat);
+    this.setRendering(best.seat, best.rendering);
+    return true;
+  }
+
+  leaveLook(seat: SharedSeat): void {
+    const g = seat.member;
+    if (!g || seat.released) return;
+    this.dropMember(seat);
+    seat.spec = null;
+    seat.everDrawn = false;
+    this.layoutDirty = true;
+    this.afterMemberLeft(g);
+  }
+
+  /** The renderer is up: a device exists and its context is not lost. */
+  get alive(): boolean {
+    return this.device !== null && !this.lost;
+  }
+
+  /** Look groups (each draws one region). */
+  get groupCount(): number {
+    return this.groupSeats;
+  }
+
+  private dropMember(seat: SharedSeat): void {
+    const g = seat.member;
+    if (!g) return;
+    seat.member = null;
+    const i = g.members.indexOf(seat);
+    if (i >= 0) g.members.splice(i, 1);
+  }
+
+  /** A member left `g`: the group follows its members' drawing state, or goes with the last. */
+  private afterMemberLeft(g: LookGroup): void {
+    const gs = g.seat;
+    if (!gs || gs.released) return;
+    if (g.members.length > 0) {
+      this.setRendering(gs, g.rendering);
+      return;
+    }
+    const list = this.looks.get(g.key);
+    if (list) {
+      const i = list.indexOf(g);
+      if (i >= 0) list.splice(i, 1);
+      if (list.length === 0) this.looks.delete(g.key);
+    }
+    this.release(gs);
+    g.destroy();
+  }
+
+  /** A group for `key` laid out for `spec`, on a seat (slot and region) of its own; null on failure. */
+  private createGroup(key: string, spec: LookSpec): LookGroup | null {
+    const device = this.device;
+    if (!device || this.lost) return null;
+    const g = new LookGroup(key, spec, this.maxSide, device.softwareFallback);
+    const seat = new SharedSeat(this, g, g);
+    try {
+      seat.slot = device.createSlot({
+        paramsPrelude: g.layout.glslPrelude,
+        paramsVec4Count: g.layout.vec4Count,
+      });
+    } catch {
+      g.destroy();
+      if (device.isContextLost()) this.enterLost();
+      // A resource failure: the card draws on its own instead.
+      return null;
+    }
+    seat.surface = new RegionSurface(device);
+    g.seat = seat;
+    g.setShareScale(this.planner.scale);
+    this.seats.push(seat);
+    this.groupSeats++;
+    let list = this.looks.get(key);
+    if (!list) {
+      list = [];
+      this.looks.set(key, list);
+    }
+    list.push(g);
+    this.stats.groups = this.groupSeats;
+    this.layoutDirty = true;
+    return g;
+  }
+
+  /**
+   * Gives an instance's seat its slot (granted as a look candidate, left its group, or rebuilt
+   * without one). False when it cannot have one now (lost context, or a failure that released it).
+   */
+  private ensureSlot(seat: SharedSeat): boolean {
+    if (seat.slot) return true;
+    const device = this.device;
+    if (!device || this.lost || seat.released || seat.member || seat.group) return false;
+    const spare = this.takeSpare(seat.client.frame);
+    if (spare) {
+      seat.slot = spare;
+      seat.surface = new RegionSurface(device);
+      // Its targets hold the frame: no allocation, so not a rate-limited first draw.
+      const f = seat.client.frame;
+      seat.everDrawn = spare.holds(f.cols, f.rows, f.pad);
+      this.layoutDirty = true;
+      return true;
+    }
+    try {
+      seat.slot = device.createSlot({
+        paramsPrelude: seat.client.layout.glslPrelude,
+        paramsVec4Count: seat.client.layout.vec4Count,
+      });
+    } catch (err) {
+      if (device.isContextLost()) {
+        this.enterLost();
+        return false;
+      }
+      this.release(seat);
+      seat.client.failed(toEngineError(err, 'resource'));
+      return false;
+    }
+    seat.surface = new RegionSurface(device);
+    seat.everDrawn = false;
+    this.layoutDirty = true;
+    return true;
+  }
+
+  /** Keeps `slot` as a spare (the oldest ones go past SPARE_SLOTS or SPARE_CELLS). */
+  private putSpare(slot: RenderSlot): void {
+    const cells = slot.allocatedCells;
+    if (cells > SPARE_CELLS) {
+      slot.dispose();
+      return;
+    }
+    while (
+      this.spares.length > 0 &&
+      (this.spares.length >= SPARE_SLOTS || this.spareCells + cells > SPARE_CELLS)
+    ) {
+      this.dropOldestSpare();
+    }
+    this.spares.push(slot);
+    this.spareCells += cells;
+    // The frame clock (a join happens in a render phase, after this frame's policy pass).
+    const t = this.lastBeginAt;
+    this.spareAt.push(Number.isFinite(t) ? t : performance.now());
+  }
+
+  /**
+   * A spare slot for a seat about to draw `f`: the newest one whose targets hold it, else the
+   * newest one (its targets grow on its first draw), recycled for its new instance. Every slot
+   * of the device uses the page's params layout, so any spare fits any instance.
+   */
+  private takeSpare(f: FrameInputs): RenderSlot | null {
+    const spares = this.spares;
+    if (spares.length === 0) return null;
+    let i = spares.length - 1;
+    for (let j = i; j >= 0; j--) {
+      if ((spares[j] as RenderSlot).holds(f.cols, f.rows, f.pad)) {
+        i = j;
+        break;
+      }
+    }
+    const slot = spares[i] as RenderSlot;
+    this.spareCells -= slot.allocatedCells;
+    const at = this.spareAt;
+    for (let k = i; k < spares.length - 1; k++) {
+      spares[k] = spares[k + 1] as RenderSlot;
+      at[k] = at[k + 1] as number;
+    }
+    spares.pop();
+    at.pop();
+    slot.recycle();
+    return slot;
+  }
+
+  /** Frees the spares unused for SPARE_SLOT_MS (`all`: every one, e.g. the device goes). */
+  private trimSpares(now: number, all: boolean): void {
+    const spares = this.spares;
+    const at = this.spareAt;
+    while (spares.length > 0 && (all || now - (at[0] as number) > SPARE_SLOT_MS)) {
+      this.dropOldestSpare();
+    }
+  }
+
+  private dropOldestSpare(): void {
+    const slot = this.spares.shift();
+    this.spareAt.shift();
+    if (!slot) return;
+    this.spareCells -= slot.allocatedCells;
+    slot.dispose();
+  }
+
+  /** The group's slot failed: every member fails with it (and the group goes with the last). */
+  private failGroup(g: LookGroup, err: EngineError): void {
+    for (const m of g.members.slice()) {
+      this.release(m);
+      m.client.failed(err);
+    }
   }
 
   get maxDrawableSize(): number {
@@ -521,8 +874,9 @@ export class SharedRenderer {
     return this.device !== null;
   }
 
+  /** Instances holding a seat (look groups' own seats not counted). */
   get seatCount(): number {
-    return this.seats.length;
+    return this.seats.length - this.groupSeats;
   }
 
   get pending(): number {
@@ -569,25 +923,33 @@ export class SharedRenderer {
     }
     const list = Array.from(this.queue).sort(byRank);
     let granted = 0;
+    let lookGranted = 0;
     for (const c of list) {
-      if (granted >= GRANTS_PER_FRAME || this.lost || this.failure || !this.device) break;
+      if (this.lost || this.failure || !this.device) break;
+      if (granted >= GRANTS_PER_FRAME && lookGranted >= LOOK_GRANTS_PER_FRAME) break;
       if (!this.queue.has(c)) continue; // withdrawn by a callback earlier in this pass
+      const look = c.lookCandidate === true;
+      if (look ? lookGranted >= LOOK_GRANTS_PER_FRAME : granted >= GRANTS_PER_FRAME) continue;
       this.queue.delete(c);
       this.queueEpoch++;
-      this.attach(c);
-      granted++;
+      this.attach(c, !look);
+      if (look) lookGranted++;
+      else granted++;
     }
     if (this.queue.size === 0) this.unkick();
   }
 
-  private attach(c: SharedClient): void {
+  /** Seats `c`; `withSlot` false: a look candidate, whose slot comes only if it draws on its own. */
+  private attach(c: SharedClient, withSlot = true): void {
     const device = this.device as GpuDevice;
-    let slot: RenderSlot;
+    let slot: RenderSlot | null = null;
     try {
-      slot = device.createSlot({
-        paramsPrelude: c.layout.glslPrelude,
-        paramsVec4Count: c.layout.vec4Count,
-      });
+      if (withSlot) {
+        slot = device.createSlot({
+          paramsPrelude: c.layout.glslPrelude,
+          paramsVec4Count: c.layout.vec4Count,
+        });
+      }
     } catch (err) {
       if (device.isContextLost()) {
         // Served again once the device is rebuilt.
@@ -602,9 +964,9 @@ export class SharedRenderer {
     }
     const seat = new SharedSeat(this, c);
     seat.slot = slot;
-    seat.surface = new RegionSurface(device);
+    seat.surface = slot ? new RegionSurface(device) : null;
     this.seats.push(seat);
-    this.stats.members = this.seats.length;
+    this.stats.members = this.seats.length - this.groupSeats;
     c.setShareScale(this.planner.scale);
     c.attached(seat, false);
   }
@@ -676,6 +1038,7 @@ export class SharedRenderer {
     this.unhookTrim?.();
     this.unhookTrim = null;
     for (const seat of this.seats.slice()) this.release(seat);
+    this.looks.clear();
     this.releaseDevice();
   }
 
@@ -684,6 +1047,7 @@ export class SharedRenderer {
     // Stop listening first: the release below must not come back as a context loss.
     this.canvasCtl?.abort();
     this.canvasCtl = null;
+    this.trimSpares(0, true);
     const dev = this.device;
     this.device = null;
     this.canvas = null;
@@ -712,6 +1076,7 @@ export class SharedRenderer {
     s.atlasHeight = 0;
     s.gpuMs = null;
     s.regions = 0;
+    s.draws = 0;
     s.copyStaged = false;
     this.phaseLoad.fill(0);
     this.divisor = 1;
@@ -774,6 +1139,7 @@ export class SharedRenderer {
     // No device: it was released (e.g. its last seat failed while drawing), nothing is lost.
     if (this.lost || !this.device) return;
     this.lost = true;
+    this.trimSpares(0, true);
     const seats = this.seats.slice();
     for (const s of seats) {
       s.slot?.dispose();
@@ -811,21 +1177,27 @@ export class SharedRenderer {
     const device = this.device as unknown as GpuDevice;
     for (const s of this.seats.slice()) {
       if (s.released) continue;
-      try {
-        s.slot = device.createSlot({
-          paramsPrelude: s.client.layout.glslPrelude,
-          paramsVec4Count: s.client.layout.vec4Count,
-        });
-      } catch (err) {
-        if (device.isContextLost()) {
-          this.enterLost();
-          return;
+      // A look member draws nothing of its own: its group's seat gets the slot.
+      if (!s.member) {
+        try {
+          s.slot = device.createSlot({
+            paramsPrelude: s.client.layout.glslPrelude,
+            paramsVec4Count: s.client.layout.vec4Count,
+          });
+        } catch (err) {
+          if (device.isContextLost()) {
+            this.enterLost();
+            return;
+          }
+          if (s.group) this.failGroup(s.group, toEngineError(err, 'resource'));
+          else {
+            this.release(s);
+            s.client.failed(toEngineError(err, 'resource'));
+          }
+          continue;
         }
-        this.release(s);
-        s.client.failed(toEngineError(err, 'resource'));
-        continue;
+        s.surface = new RegionSurface(device);
       }
-      s.surface = new RegionSurface(device);
       s.everDrawn = false;
       s.client.setShareScale(this.planner.scale);
       s.client.attached(s, true);
@@ -919,16 +1291,25 @@ export class SharedRenderer {
    * drawing seat's divisor, phase and pipeline. O(seats), no allocation.
    */
   private policy(now: number): void {
+    if (this.spares.length > 0) this.trimSpares(now, false);
     const settings = runtimeSettings();
     const seats = this.seats;
-    // Drawing seats, the largest of them (full rate) and the active ones.
+    // Presenting seats (every drawing instance: one with a slot, or a look member), the largest
+    // of them (full rate) and the active ones. A look group's own seat presents nothing.
     let drawing = 0;
+    // Drawing regions (the lite crowding): a look group draws once whatever its members.
+    let liteDrawing = 0;
     let largest: SharedSeat | null = null;
     let largestArea = -1;
     for (let i = 0; i < seats.length; i++) {
       const s = seats[i] as SharedSeat;
-      if (!s.rendering || !s.slot) continue;
+      if (s.group) {
+        if (s.rendering && s.slot) liteDrawing++;
+        continue;
+      }
+      if (!presents(s)) continue;
       drawing++;
+      if (!s.member) liteDrawing++;
       const area = s.client.naturalWidth * s.client.naturalHeight;
       if (area > largestArea) {
         largestArea = area;
@@ -941,12 +1322,15 @@ export class SharedRenderer {
     let naturalPx = 0;
     for (let i = 0; i < seats.length; i++) {
       const s = seats[i] as SharedSeat;
-      if (!s.rendering || !s.slot) continue;
+      if (!presents(s)) continue;
       s.active = s.client.active;
       s.primary = s === largest || s.active;
       naturalPx += s.client.naturalWidth * s.client.naturalHeight;
       const f = s.client.frame;
-      const px = f.canvasWidth * f.canvasHeight;
+      // A look member copies its crop (its natural size until it first did).
+      const px = s.member
+        ? s.cropW * s.cropH || s.client.naturalWidth * s.client.naturalHeight
+        : f.canvasWidth * f.canvasHeight;
       if (s.primary) {
         primaries++;
         primaryPx += px;
@@ -992,18 +1376,32 @@ export class SharedRenderer {
       }
     }
     const lite = settings.lite;
-    const crowdedLite = lite === 'auto' && drawing > LITE_CROWD;
+    const crowdedLite = lite === 'auto' && liteDrawing > LITE_CROWD;
     let nSecondary = 0;
     let nLite = 0;
     for (let i = 0; i < seats.length; i++) {
       const s = seats[i] as SharedSeat;
-      if (!s.rendering || !s.slot) {
+      if (s.group) {
+        // A picture draws whenever a member presents; it is active when any member is.
+        this.assignDivisor(s, 1);
+        s.active = s.rendering && s.client.active;
+      } else if (!presents(s)) {
         this.assignDivisor(s, 1);
         s.lite = false;
         continue;
+      } else {
+        this.assignDivisor(s, s.primary ? 1 : divisor);
+        if (s.divisor > 1) nSecondary++;
+        // A member shows its group's pipeline.
+        if (s.member) {
+          s.lite = false;
+          continue;
+        }
       }
-      this.assignDivisor(s, s.primary ? 1 : divisor);
-      if (s.divisor > 1) nSecondary++;
+      if (!s.rendering || (s.group && !s.slot)) {
+        s.lite = false;
+        continue;
+      }
       // Active instances (pointer, recent changes) keep the full pipeline; the largest one
       // presents at the full rate but follows the size rule like the others.
       if (lite === false || s.active) {
@@ -1284,7 +1682,7 @@ export class SharedRenderer {
       const s = this.seats[i] as SharedSeat;
       if (!s.rendering && s.slot && s.client.visible) add(s.client);
     }
-    for (const c of this.queue) if (c.visible) add(c);
+    for (const c of this.queue) if (c.visible && !c.lookCandidate) add(c);
   }
 
   /**
@@ -1323,6 +1721,9 @@ export class SharedRenderer {
     }
     if (this.device !== device) return; // released while drawing: its timer is gone
     timer?.end();
+    let draws = 0;
+    for (let i = 0; i < n; i++) if ((due[i] as SharedSeat).drawn) draws++;
+    this.stats.draws = draws;
     this.firstDrawsNow = firstDraws;
     if (firstDraws > 0) noteFirstDraw(now);
     const st = this.stats;
@@ -1346,8 +1747,11 @@ export class SharedRenderer {
       s.drawn = false;
       if (device.isContextLost()) return false;
       // A resource failure of this slot alone (e.g. its targets could not be allocated).
-      this.release(s);
-      s.client.failed(toEngineError(err, 'resource'));
+      if (s.group) this.failGroup(s.group, toEngineError(err, 'resource'));
+      else {
+        this.release(s);
+        s.client.failed(toEngineError(err, 'resource'));
+      }
       return true;
     }
     s.drawMs = performance.now() - t0;
@@ -1364,7 +1768,8 @@ export class SharedRenderer {
   private copy(n: number): void {
     const atlas = this.canvas as HTMLCanvasElement;
     const due = this.due;
-    // This frame's copies, and the part of the atlas their regions cover.
+    // This frame's copies, their source rectangles, and the part of the atlas they cover. A look
+    // member copies its crop of its group's region, when the group drew this frame.
     let count = 0;
     let bw = 0;
     let bh = 0;
@@ -1372,11 +1777,28 @@ export class SharedRenderer {
       const s = due[i] as SharedSeat;
       s.copyMs = 0;
       s.copyPx = 0;
-      if (!s.drawn || s.released || !s.target) continue;
-      const f = s.client.frame;
+      const g = s.member;
+      const gs = g?.seat;
+      if (g && gs) {
+        s.drawn = gs.drawn && !gs.released && gs.item.x >= 0;
+        if (!s.drawn) continue;
+        g.cropOf(s);
+        s.srcX = gs.item.x + s.cropX;
+        s.srcY = gs.item.y + s.cropY;
+        s.srcW = s.cropW;
+        s.srcH = s.cropH;
+      } else {
+        if (!s.drawn) continue;
+        const f = s.client.frame;
+        s.srcX = s.item.x;
+        s.srcY = s.item.y;
+        s.srcW = Math.max(1, Math.floor(f.canvasWidth));
+        s.srcH = Math.max(1, Math.floor(f.canvasHeight));
+      }
+      if (s.released || !s.target) continue;
       count++;
-      bw = Math.max(bw, s.item.x + Math.max(1, Math.floor(f.canvasWidth)));
-      bh = Math.max(bh, s.item.y + Math.max(1, Math.floor(f.canvasHeight)));
+      bw = Math.max(bw, s.srcX + s.srcW);
+      bh = Math.max(bh, s.srcY + s.srcH);
     }
     if (count === 0) return;
     let src: HTMLCanvasElement = atlas;
@@ -1402,9 +1824,8 @@ export class SharedRenderer {
       if (!s.drawn || s.released) continue;
       const target = s.target;
       if (!target) continue;
-      const f = s.client.frame;
-      const w = Math.max(1, Math.floor(f.canvasWidth));
-      const h = Math.max(1, Math.floor(f.canvasHeight));
+      const w = s.srcW;
+      const h = s.srcH;
       const t0 = performance.now();
       // A new size clears the canvas and resets its context state.
       if (target.width !== w || target.height !== h) {
@@ -1433,7 +1854,7 @@ export class SharedRenderer {
       }
       const t1 = performance.now();
       // The staging canvas holds the atlas at the same coordinates.
-      ctx.drawImage(src, s.item.x, s.item.y, w, h, 0, 0, w, h);
+      ctx.drawImage(src, s.srcX, s.srcY, w, h, 0, 0, w, h);
       const dt = performance.now() - t1;
       s.shown = true;
       s.copyMs = t1 - t0 + dt;

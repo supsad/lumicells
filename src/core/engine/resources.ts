@@ -90,6 +90,18 @@ export class CellTargets {
     this.gl.deleteTexture(t.tex);
   }
 
+  /** Whether `w x h` cells fit the current allocation (ensure() would not reallocate). */
+  holds(w: number, h: number): boolean {
+    return (
+      this.fieldFb !== null &&
+      this.haze !== null &&
+      !needsRealloc(this.aw, w, CELL_STEP) &&
+      !needsRealloc(this.ah, h, CELL_STEP) &&
+      !needsRealloc(this.aqw, Math.ceil(w / 4), QUARTER_STEP) &&
+      !needsRealloc(this.aqh, Math.ceil(h / 4), QUARTER_STEP)
+    );
+  }
+
   /**
    * Makes the targets fit `w x h` cells. Returns 0 when nothing changed, 1 when only the logical
    * size changed, 2 when textures were reallocated (life state then sits in `orphanLife`).

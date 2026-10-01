@@ -25,6 +25,7 @@ import {
   normalizePatch,
   type ParamPath,
   posterCss,
+  stableStringify,
 } from '../../schema';
 import {
   FRAME_FLOATS,
@@ -160,6 +161,8 @@ interface InitState {
   readonly store: StoreSnapshot;
   /** posterCss(config), computed on first use. */
   poster: string | null;
+  /** lookKeyOf(config), computed on first use. */
+  lookKey: string | null;
 }
 
 /** Inputs kept per layout (least recently used first out). */
@@ -228,6 +231,19 @@ function jsonExact(v: unknown, depth = 0): boolean {
     if (key === '__proto__' || !jsonExact(v[key], depth + 1)) return false;
   }
   return true;
+}
+
+/**
+ * Key of the picture a config draws (`look: 'shared'` groups cards by it): the canonical
+ * serialization of the normalized config without the paths that never change a frame on their
+ * own. `interaction` (pointer, clicks and the defaults of influences and pulses) acts only through
+ * runtime layers, which take a card out of its group anyway; `render.pauseOffscreen` only decides
+ * when an instance draws; `transition` only shapes a config change, which changes the key.
+ */
+export function lookKeyOf(config: Readonly<LumiCellsConfig>): string {
+  const { interaction: _i, transition: _t, render, ...rest } = config;
+  const { pauseOffscreen: _p, ...visual } = render;
+  return stableStringify({ ...rest, render: visual });
 }
 
 /** Store ids of the parameters read every frame, per layout (they depend on the schema only). */
@@ -311,6 +327,8 @@ export class Controller {
    */
   private readonly natGeo: Geometry = createGeometry();
   private natSeparate = false;
+  /** Shorter side 'count' sizing divides, CSS px (0: the host's own; see setCountBasis). */
+  private countBasis = 0;
   private reducedMotion = false;
   private software = false;
   private clientX = 0;
@@ -320,6 +338,8 @@ export class Controller {
   private init: InitState | null = null;
   private posterFor: LumiCellsConfig | null = null;
   private posterText = '';
+  private lookKeyFor: LumiCellsConfig | null = null;
+  private lookKeyText = '';
   /** A change of this instance's own (see takeActivity) since the owner last took it. */
   private activity = true;
 
@@ -360,6 +380,7 @@ export class Controller {
           json: jsonExact(config) ? JSON.stringify(config) : null,
           store: this.store.snapshot(),
           poster: null,
+          lookKey: null,
         };
         states.set(key, state);
         if (states.size > INIT_MAX) states.delete(states.keys().next().value as string);
@@ -442,6 +463,25 @@ export class Controller {
       this.posterFor = cfg;
     }
     return this.posterText;
+  }
+
+  /**
+   * Key of the picture the current config draws (lookKeyOf), computed once per config: the same
+   * string object until the config changes (cards started from one input share it).
+   */
+  get lookKey(): string {
+    const cfg = this.config;
+    if (this.lookKeyFor !== cfg) {
+      const init = this.init;
+      if (init) {
+        init.lookKey ??= lookKeyOf(cfg);
+        this.lookKeyText = init.lookKey;
+      } else {
+        this.lookKeyText = lookKeyOf(cfg);
+      }
+      this.lookKeyFor = cfg;
+    }
+    return this.lookKeyText;
   }
 
   /** Merges a partial config; returns the changed leaf paths (schema order). */
@@ -618,6 +658,59 @@ export class Controller {
     return false;
   }
 
+  /**
+   * Something of this instance's own is in the picture, or on its way into it: a shown or still
+   * fading influence, a pulse other than a landing ripple, a forced lift (queued or in the air), a
+   * modulated value, a running config transition (tweens, palette, sizing) or a debug view. A card
+   * without any draws exactly what an identical card draws (`look: 'shared'`).
+   */
+  get hasLayers(): boolean {
+    return (
+      this.forcedCount > 0 ||
+      this.frame.debugView !== 0 ||
+      this.store.modulated ||
+      this.store.animating ||
+      this.lut.transitioning ||
+      this.sizingMix.cur !== this.sizingMix.tgt ||
+      this.pulses.majorCount > 0 ||
+      this.lifts.forcedAlive > 0 ||
+      this.influences.shownCount > 0
+    );
+  }
+
+  /**
+   * Takes over the picture of `from` (a controller with the same config): every clock phase, the
+   * lifts in the air and their landing ripples, the adaptive tier and the Life seed. This
+   * picture's center cell sits (dx, dy) cells from the center cell of `from`'s: the lifts move by
+   * that much (those outside this grid drop). Influences, other pulses, queued forced lifts,
+   * modulators and tweens of this instance stay. A card leaving its shared look continues the
+   * group's picture this way, and a new group continues the picture of the card that starts it.
+   */
+  adoptLook(from: Controller, dx: number, dy: number): void {
+    if (this.destroyed || from === this) return;
+    this.clock.copyFrom(from.clock);
+    this.lifts.adopt(from.lifts, dx, dy);
+    // Landing ripples live in visible-cell coordinates (0 = the leftmost visible column).
+    const ox = (this.geo.cols - from.geo.cols) / 2 - dx;
+    const oy = (this.geo.rows - from.geo.rows) / 2 - dy;
+    this.pulses.adoptMinor(from.pulses, ox, oy);
+    this.frame.lifeSeed = from.frame.lifeSeed;
+    if (this.perf.adoptLevel(from.perf)) this.updateGeometry();
+  }
+
+  /** Host size (CSS px) and DPR of the last setViewport(). */
+  get hostCssW(): number {
+    return this.geoIn.hostCssW;
+  }
+
+  get hostCssH(): number {
+    return this.geoIn.hostCssH;
+  }
+
+  get dpr(): number {
+    return this.geoIn.dpr;
+  }
+
   /** Cell size in host CSS px (for converting cell-based sizes in DOM code). */
   get cellCss(): number {
     return this.geo.pitchPx / this.geo.sx;
@@ -678,6 +771,23 @@ export class Controller {
 
   get naturalHeight(): number {
     return this.natSeparate ? this.natGeo.canvasH : this.geo.canvasH;
+  }
+
+  /** Geometry at full resolution (without the adaptive and the share scale). */
+  get naturalGeo(): Readonly<Geometry> {
+    return this.natSeparate ? this.natGeo : this.geo;
+  }
+
+  /**
+   * Shorter side, CSS px, that `grid.sizing: 'count'` divides into `grid.count` cells instead of
+   * the host's own (0: the host's). A look group laid out larger than its members (their window
+   * shift margin) keeps the cells of the member that started it this way (runtime/look).
+   */
+  setCountBasis(cssSide: number): void {
+    const v = cssSide > 0 && Number.isFinite(cssSide) ? cssSide : 0;
+    if (v === this.countBasis) return;
+    this.countBasis = v;
+    this.updateGeometry();
   }
 
   /**
@@ -1039,7 +1149,8 @@ export class Controller {
     gi.scale = perf;
     // Sizing blends between "N cells across the shorter side" and "fixed pitch" in log space,
     // so switching the mode mid-session is a smooth zoom rather than a jump.
-    const countPitch = Math.min(gi.hostCssW, gi.hostCssH) / Math.max(1, s.num(ids.count));
+    const side = this.countBasis > 0 ? this.countBasis : Math.min(gi.hostCssW, gi.hostCssH);
+    const countPitch = side / Math.max(1, s.num(ids.count));
     const fixedPitch = Math.max(1, s.num(ids.pitch));
     const m = this.sizingMix.cur;
     gi.cssPitch =

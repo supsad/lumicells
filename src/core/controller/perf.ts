@@ -168,6 +168,19 @@ export class PerfController {
   }
 
   /**
+   * Takes over the adaptive tier of `o` (a card leaving or joining a shared look renders at the
+   * resolution it showed). Returns true when quality or scale changed.
+   */
+  adoptLevel(o: PerfController): boolean {
+    if (this.mode !== 'auto' || o.mode !== 'auto' || this.level === o.level) return false;
+    this.level = o.level;
+    this.locked = o.locked;
+    this.verify = VERIFY_NONE;
+    this.resetWindow();
+    return true;
+  }
+
+  /**
    * The display refresh interval measured on frames without GL work (runtime/display), ms, or
    * null. `epoch` identifies the measurement: a hint that was rejected (the display or the OS
    * proved to set a slower pace) stays rejected until a new measurement comes (runtime/display

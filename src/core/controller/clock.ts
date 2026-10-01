@@ -72,6 +72,26 @@ export class Clock {
   /** Life steps due this frame (0..MAX_LIFE_STEPS). */
   lifeSteps = 0;
 
+  /** Takes over every phase of `o` (a card leaving or joining a shared look, see Controller.adoptLook). */
+  copyFrom(o: Clock): void {
+    this.flow = o.flow;
+    this.sphereRotation = o.sphereRotation;
+    this.sphereBreathe = o.sphereBreathe;
+    this.pulse = o.pulse;
+    this.wave = o.wave;
+    this.vortex = o.vortex;
+    this.rain = o.rain;
+    this.drift = o.drift;
+    this.seconds = o.seconds;
+    this.sparsity = o.sparsity;
+    this.flicker = o.flicker;
+    this.sparkle = o.sparkle;
+    this.ripple = o.ripple;
+    this.elapsed = o.elapsed;
+    this.lifeAcc = o.lifeAcc;
+    this.lifeSteps = 0;
+  }
+
   advance(dt: number, r: ClockRates): void {
     const s = dt * r.speed;
     this.seconds = wrap(this.seconds + s, CLOCK_PERIOD);

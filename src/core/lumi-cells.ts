@@ -44,6 +44,17 @@
  * draw with the lite pipeline (FrameInputs.lite), which an own instance uses only at the 'low'
  * adaptive tier. The display refresh calibration (runtime/display) may hold every instance's GL
  * work for a few frames at page start and after the page comes back from a hidden tab.
+ * Shared look (`look: 'shared'`, runtime/look): a shared instance whose config key matches and that
+ * draws nothing of its own (Controller.hasLayers) joins a look group in its render phase. A member
+ * is paced like any shared instance (render.maxFps, its secondary rate and phase) but does not
+ * update its own controller: on its frames the group's picture is advanced to the frame (once,
+ * by the first member presenting in it) and a crop of the group's region is copied into its 2D
+ * canvas. It leaves in the render phase of the first frame with something of its own (or at once
+ * on setLook('own')), taking over the group's picture state (Controller.adoptLook) so its own
+ * frames continue the picture, and rejoins after LOOK_REJOIN_MS without activity and without a
+ * layer of its own. A seat that
+ * shows nothing of its own picture yet (fresh, or emptied while away) joins at once. 'auto' keeps
+ * a look instance on the shared renderer.
  * destroy() is synchronous, idempotent and total.
  */
 
@@ -79,6 +90,7 @@ import {
   displayIntervalMs,
   requestDisplayCalibration,
 } from './runtime/display';
+import { type LookGroup, type LookSpec, lookOffset, lookShift } from './runtime/look';
 import {
   cancelRequest,
   claimBudgetWarning,
@@ -116,10 +128,13 @@ import type {
   InfluenceHandle,
   InfluenceOptions,
   InfluenceUpdate,
+  InstanceLook,
   InstancePriority,
   InstanceRenderer,
   InstanceState,
   LiftOptions,
+  LookChangeReason,
+  LookMode,
   LumiCellsEvents,
   LumiCellsOptions,
   ModulatablePath,
@@ -127,6 +142,7 @@ import type {
   ModulationSource,
   ModulatorHandle,
   PulseOptions,
+  QualityTier,
   RendererChangeReason,
   RendererMode,
   SharedRendererStats,
@@ -149,6 +165,13 @@ const ACTIVE_MS = 1000;
 /** Longest animation step of one frame, ms (longer gaps are stalls, not frames to catch up). */
 const MAX_STEP_MS = 100;
 /**
+ * A look instance that drew on its own rejoins a group only after this long without activity (see
+ * #isActive) and without a layer of its own (#layersAt): a hovered card does not flip back and
+ * forth as the pointer comes and goes, and a long layer (a debug view, a pulse, a held lift) is
+ * followed by the same calm as a short one.
+ */
+const LOOK_REJOIN_MS = 2000;
+/**
  * Creation zone: one viewport beyond the screen on every side. The engine is created when the
  * host enters it (ahead of scrolling it into view) and parked after it stays out of it. The
  * view margin above (which follows the overflow) counts as inside the zone too.
@@ -163,6 +186,10 @@ const ZONE_MARGIN = '100%';
 
 function isPriority(v: unknown): v is InstancePriority {
   return v === 'high' || v === 'normal' || v === 'low';
+}
+
+function isLookMode(v: unknown): v is LookMode {
+  return v === 'own' || v === 'shared';
 }
 
 /** Instances in 'auto' mode: they re-evaluate when LumiCells.configure() changes promoteArea. */
@@ -269,6 +296,11 @@ export class LumiCells {
   #pointerLeft = false;
   /** Frame timestamp of the last change of the instance's own (see Controller.takeActivity). */
   #activeAt = Number.NEGATIVE_INFINITY;
+  /**
+   * Last frame timestamp in which a `look: 'shared'` instance had a layer of its own
+   * (Controller.hasLayers: a debug view, a pulse, a forced lift, a fading influence...).
+   */
+  #layersAt = Number.NEGATIVE_INFINITY;
   readonly #sharedStats: SharedRendererStats = {
     gpuMs: null,
     drawMs: 0,
@@ -290,7 +322,34 @@ export class LumiCells {
       intervalMs: 16.67,
       copyBudget: null,
     },
+    groups: 0,
+    draws: 0,
   };
+  /** The look asked for (`look` option, setLook()). */
+  #look: LookMode;
+  /** What the instance shows, as listeners last heard it (`Stats.look`, the `look` event). */
+  #lookShown: InstanceLook = 'own';
+  /**
+   * The canvas shows nothing of this instance's own picture (fresh seat, or emptied while away):
+   * joining a group changes nothing on screen, so it may join at once.
+   */
+  #lookFresh = true;
+  /** The controller's look key when the instance joined (a new key object means a new config). */
+  #lookKey: string | null = null;
+  /** What the instance shares with (see LookSpec): kept up to date while it is a member. */
+  readonly #lookSpec: LookSpec;
+  /** The group's quality epoch the instance last reported (its 'quality' event while a member). */
+  #lookQuality = 0;
+  /**
+   * Tier and scale of the last 'quality' event (null: none yet, the own controller's start
+   * values stand): joining or leaving a group at another tier reports the change.
+   */
+  #reportedQuality: QualityTier | null = null;
+  #reportedScale = 1;
+  /** The window shift changed: a member checks whether its group still fits it. */
+  #lookRefit = false;
+  /** 'auto': why a pending switch to the shared renderer happens (see #demoteDue). */
+  #demoteReason: RendererChangeReason = 'demote';
   #unwatchSettings: (() => void) | null = null;
   #hookedCanvas: HTMLCanvasElement | null = null;
   /** Lifetime of the context listeners of #hookedCanvas (aborted when that canvas is dropped). */
@@ -390,6 +449,8 @@ export class LumiCells {
     presentMs: null,
     shared: null,
     reducers: { lite: false, frameDivisor: 1 },
+    look: 'own',
+    groupSize: 1,
   };
 
   constructor(host: HTMLElement, options: LumiCellsOptions = {}) {
@@ -401,6 +462,7 @@ export class LumiCells {
     this.#announced = this.#renderer;
     this.#stats.renderer = this.#renderer;
     this.#stats.rendererMode = mode;
+    this.#look = isLookMode(options.look) ? options.look : 'own';
     const self = this;
     this.#client = {
       order: ++instanceSeq,
@@ -474,6 +536,9 @@ export class LumiCells {
       detached: () => this.#onSharedLost(),
       failed: (err) => this.#onSharedFailed(err),
       presented: (drawn, shown, now) => this.#onPresented(drawn, shown, now),
+      get lookCandidate() {
+        return self.#look === 'shared' && !self.#controller.hasLayers;
+      },
     };
     // Merge order: defaults < preset < config (< the `interactive` shortcut).
     const base: LumiCellsConfigInput = options.preset ? { extends: options.preset } : {};
@@ -487,6 +552,19 @@ export class LumiCells {
       config: input,
       onWarn: (code, message) => this.#emit('warn', { code, message }),
     });
+    this.#lookSpec = {
+      hostW: 0,
+      hostH: 0,
+      dpr: 1,
+      pixelCap: Number.POSITIVE_INFINITY,
+      reducedMotion: false,
+      offset: lookOffset(options.lookOffset),
+      shiftX: 0,
+      shiftY: 0,
+      controller: this.#controller,
+      stateAt: -1,
+    };
+    lookShift(this.#client.order, this.#lookSpec);
     const signal = this.#ctl.signal;
     this.#view = new HostView(host, signal);
     this.#view.onChange = () => this.#tracker.markAllDirty();
@@ -600,6 +678,56 @@ export class LumiCells {
     if (this.#destroyed || !isPriority(priority) || priority === this.#priority) return;
     this.#priority = priority;
     rankChanged();
+  }
+
+  /** The look asked for (`LumiCellsOptions.look`, `setLook()`); what it shows is `getStats().look`. */
+  get look(): LookMode {
+    return this.#look;
+  }
+
+  /** The window shift asked for (`LumiCellsOptions.lookOffset`). */
+  get lookOffset(): number {
+    return this.#lookSpec.offset;
+  }
+
+  /**
+   * Changes the look (see LookMode). `'own'` leaves the group now: the picture continues as the
+   * instance's own (clock and lifted cells taken over, the Life automaton reseeds). `'shared'`
+   * lets the instance join a group of cards that draw the same picture at its next frame (it
+   * must draw nothing of its own); an `auto` instance on a context of its own first moves to the
+   * shared renderer (after its next frame, which stays on screen; the `renderer` event reports it
+   * with reason `'explicit'`). `offset`: a new `lookOffset` (kept when omitted). Emits `look`
+   * when what the instance shows changes.
+   */
+  setLook(look: LookMode, offset?: number): void {
+    if (this.#destroyed || !isLookMode(look)) return;
+    const spec = this.#lookSpec;
+    const off = offset === undefined ? spec.offset : lookOffset(offset);
+    if (look === this.#look && off === spec.offset) return;
+    const changed = look !== this.#look;
+    this.#look = look;
+    if (off !== spec.offset) this.#lookRefit = true;
+    spec.offset = off;
+    const seat = this.#seat;
+    if (look === 'own' && seat?.member) this.#leaveLook(seat, 'explicit');
+    // Asked for: joins at its next frame, without the rejoin delay.
+    if (look === 'shared' && changed) this.#lookFresh = true;
+    if (changed && this.#mode === 'auto') {
+      if (look === 'shared' && this.#renderer === 'own') {
+        this.#clearAutoTimer();
+        this.#setStandby(false);
+        if (this.#unsub && this.#engine && !this.#lost) {
+          // After its next drawn frame, which stays on screen (see #render).
+          this.#demoteDue = true;
+          this.#demoteReason = 'explicit';
+        } else {
+          this.#autoSwitch('shared', 'explicit');
+        }
+      } else {
+        this.#autoCheck();
+      }
+    }
+    this.#publishState();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -752,6 +880,8 @@ export class LumiCells {
 
   getStats(): Stats {
     const s = this.#stats;
+    const group = this.#seat?.member;
+    s.groupSize = group ? group.members.length : 1;
     return {
       ...s,
       shared: s.shared ? { ...s.shared, reducers: { ...s.shared.reducers } } : null,
@@ -835,7 +965,7 @@ export class LumiCells {
     if (this.#destroyed || this.#lost) return;
     const seat = this.#seat;
     if (seat) {
-      if (seat.slot) seat.loseContextForTesting();
+      if (seat.alive) seat.loseContextForTesting();
       return;
     }
     const e = this.#engine;
@@ -1085,7 +1215,7 @@ export class LumiCells {
         this.#mode === 'auto' &&
         this.#renderer === 'shared' &&
         this.#wantsContext() &&
-        autoWants(this.#dwell.score, 'own') === 'own';
+        this.#autoWant(this.#dwell.score, 'own') === 'own';
       if (!want) {
         // Stale (it left the zone or shrank meanwhile): the slot goes straight back.
         releaseContext(this.#client);
@@ -1206,6 +1336,8 @@ export class LumiCells {
     this.#clearParkTimer();
     const seat = this.#seat;
     if (seat) {
+      // A member takes its picture along (a later seat continues it, or rejoins).
+      if (seat.member) this.#takeLook(seat, 'renderer');
       this.#seat = null;
       this.#unwatchSettings?.();
       this.#unwatchSettings = null;
@@ -1337,7 +1469,7 @@ export class LumiCells {
   #chooseAuto(): void {
     const score = this.#autoScore();
     this.#dwell.note(score, performance.now());
-    const next = autoWants(score, this.#renderer);
+    const next = this.#autoWant(score, this.#renderer);
     const first = !this.#decided;
     this.#decided = true;
     if (next === this.#renderer) return;
@@ -1383,7 +1515,7 @@ export class LumiCells {
     }
     // A standby request leans own: it leaves only below the demotion ratio.
     const leaning: InstanceRenderer = this.#standby ? 'own' : this.#renderer;
-    const want = autoWants(score, leaning);
+    const want = this.#autoWant(score, leaning);
     if (want === leaning) {
       this.#clearAutoTimer();
       return;
@@ -1423,6 +1555,11 @@ export class LumiCells {
     }
   }
 
+  /** The renderer an 'auto' instance of this size wants: shared whenever it shares a look. */
+  #autoWant(score: number, current: InstanceRenderer): InstanceRenderer {
+    return this.#look === 'shared' ? 'shared' : autoWants(score, current);
+  }
+
   /** Re-arms the dwell timer (bound once: a drag re-arms it on every resize report). */
   #armAutoTimer(ms: number): void {
     if (this.#autoTimer) clearTimeout(this.#autoTimer);
@@ -1438,6 +1575,7 @@ export class LumiCells {
     if (this.#autoTimer) clearTimeout(this.#autoTimer);
     this.#autoTimer = 0;
     this.#demoteDue = false;
+    this.#demoteReason = 'demote';
   }
 
   /** Queues (or withdraws) a standby request for a context of its own (see #onGranted). */
@@ -1539,6 +1677,7 @@ export class LumiCells {
     this.#holds = true;
     this.#seat = seat;
     this.#parked = false;
+    this.#lookFresh = true;
     this.#unwatchSettings ??= watchSettings(() => this.#onSettingsChanged());
     const overflow = this.#controller.getConfig().render.overflow;
     const alpha = overflow > 0;
@@ -1575,6 +1714,7 @@ export class LumiCells {
       this.#shrinkTarget();
       this.#view.dropStandIn();
       this.#drawnSinceMount = false;
+      this.#lookFresh = true;
       this.#view.showPoster(this.#controller.poster);
     }
     seat.setIdle(idle);
@@ -1621,6 +1761,7 @@ export class LumiCells {
     this.#failed = true;
     this.#seat = null;
     this.#holds = false;
+    this.#setLookShown('own', 'renderer');
     this.#unwatchSettings?.();
     this.#unwatchSettings = null;
     this.#clearParkTimer();
@@ -1928,25 +2069,28 @@ export class LumiCells {
     // instance updates.
     seat?.beginFrame(now);
     const c = this.#controller;
-    const perf = c.perf;
-    const raw = this.#lastNow < 0 ? perf.vsyncMs : now - this.#lastNow;
-    this.#lastNow = now;
     if (c.takeActivity() || this.#pointerLeft) this.#activeAt = now;
     this.#pointerLeft = false;
-    // Feed every rAF (skipped ones too) so the refresh estimate reflects the display. A shared
-    // instance feeds the GPU time of the whole shared device. The main-thread figure for the
-    // jank guard is the whole frame's (every instance and the app's frame callbacks) plus how
-    // late this frame started (main-thread work before it), not just this instance's share.
-    perf.setDisplayHint(displayIntervalMs(), displayEpoch());
-    const gpuMs = engine ? engine.gpuTimeMs : (seat?.stats.gpuMs ?? null);
-    const busyMs = Math.max(this.#lastCpu, frameWorkMs() + frameLateMs());
-    const change = c.samplePerf(raw, busyMs, gpuMs, now);
-    if (change) {
-      this.#emit('quality', {
-        scale: change.scale,
-        quality: change.quality,
-        reason: change.reason,
-      });
+    if (this.#look === 'shared' && c.hasLayers) this.#layersAt = now;
+    // A look member shows its group's picture (it may join, move or leave here first).
+    const group =
+      seat && (seat.member || this.#look === 'shared') ? this.#lookStep(seat, now) : null;
+    // A member renders at its group's adaptive tier: the group learns the frame timing.
+    const perf = group ? group.controller.perf : c.perf;
+    const raw = this.#lastNow < 0 ? perf.vsyncMs : now - this.#lastNow;
+    this.#lastNow = now;
+    if (group) {
+      group.beginFrame(now);
+    } else {
+      // Feed every rAF (skipped ones too) so the refresh estimate reflects the display. A shared
+      // instance feeds the GPU time of the whole shared device. The main-thread figure for the
+      // jank guard is the whole frame's (every instance and the app's frame callbacks) plus how
+      // late this frame started (main-thread work before it), not just this instance's share.
+      perf.setDisplayHint(displayIntervalMs(), displayEpoch());
+      const gpuMs = engine ? engine.gpuTimeMs : (seat?.stats.gpuMs ?? null);
+      const busyMs = Math.max(this.#lastCpu, frameWorkMs() + frameLateMs());
+      const change = c.samplePerf(raw, busyMs, gpuMs, now);
+      if (change) this.#emitQuality(change.scale, change.quality, change.reason);
     }
 
     // maxFps: render every k-th vsync (integer divisor of the refresh rate, even cadence). The
@@ -1979,6 +2123,17 @@ export class LumiCells {
     const dt = Math.min(deltaMs / 1000, maxDt);
 
     this.#flushConfig();
+    if (group) {
+      // The picture of this frame (the first member to present in it updates the group), copied
+      // into this instance's canvas in the present phase.
+      group.update(now, ideal);
+      this.#stats.reducers.lite = group.seat?.lite ?? false;
+      this.#updateMs = 0;
+      this.#sharedDt = dt;
+      this.#sharedIdeal = ideal;
+      (seat as SharedSeat).submit();
+      return;
+    }
     const t0 = performance.now();
     const inputs = c.update(dt, now, maxDt);
     if (engine) {
@@ -2011,28 +2166,210 @@ export class LumiCells {
     this.#finishFrame(performance.now() - t0, dt, ideal, now, engine.gpuTimeMs);
     // 'auto' demotion (see #autoCheck): right after a drawn frame, which stays on screen.
     if (this.#demoteDue && drawn && this.#drawnSinceMount) {
+      const reason = this.#demoteReason;
       this.#demoteDue = false;
-      this.#autoSwitch('shared', 'demote');
+      this.#demoteReason = 'demote';
+      this.#autoSwitch('shared', reason);
     }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Shared look (see runtime/look.ts)
+
+  /**
+   * Render phase of a shared instance with `look: 'shared'` (or a member): joins, keeps, moves or
+   * leaves its group. Returns the group the instance shows this frame, null when it draws on its
+   * own.
+   */
+  #lookStep(seat: SharedSeat, now: number): LookGroup | null {
+    const c = this.#controller;
+    let g = seat.member;
+    if (g) {
+      if (!this.#lookEligible()) {
+        this.#leaveLook(seat, c.lookKey !== g.key ? 'config' : 'layers');
+        return null;
+      }
+      const key = c.lookKey;
+      if (key !== this.#lookKey) {
+        // A new config object: still the same picture? (e.g. only interaction changed)
+        if (key !== g.key) {
+          this.#leaveLook(seat, 'config');
+          return null;
+        }
+        this.#lookKey = key;
+      }
+      if (this.#lookSpecStale()) {
+        // Resized (or another DPR, pixel cap or window shift): another group may fit better.
+        this.#fillLookSpec();
+        if (!g.fits(this.#lookSpec, seat.maxDrawableSize)) {
+          // Moves (the picture goes along: a new group continues it).
+          g.cropOf(seat);
+          c.adoptLook(g.controller, seat.cellDX, seat.cellDY);
+          this.#lookSpec.stateAt = g.updatedAt;
+          if (!seat.joinLook(key, this.#lookSpec) && !seat.member) {
+            this.#ownAfterLook(g);
+            this.#setLookShown('own', 'renderer');
+            return null;
+          }
+          g = seat.member as LookGroup;
+          this.#lookQuality = g.qualityEpoch;
+          this.#syncQuality(g.controller.perf);
+        }
+      }
+      return g;
+    }
+    if (!this.#lookEligible()) return null;
+    // A card that shows a picture of its own waits until it has been calm for a while: no
+    // activity and no layer of its own (which may outlast its one activity mark by far).
+    if (
+      !this.#lookFresh &&
+      (this.#isActive() || now - Math.max(this.#activeAt, this.#layersAt) < LOOK_REJOIN_MS)
+    ) {
+      return null;
+    }
+    this.#fillLookSpec();
+    // A group started by this card continues its picture from the frame it last advanced in.
+    this.#lookSpec.stateAt = this.#lastNow >= 0 ? this.#lastNow - this.#accMs : -1;
+    const key = c.lookKey;
+    if (!seat.joinLook(key, this.#lookSpec)) return null;
+    this.#lookKey = key;
+    this.#lookFresh = false;
+    // Quality events report the group's changes from now on, not the ones before it joined; a
+    // group at another tier than the one last reported is a change of its own.
+    const joined = seat.member as LookGroup;
+    this.#lookQuality = joined.qualityEpoch;
+    this.#syncQuality(joined.controller.perf);
+    this.#setLookShown('group', 'join');
+    return joined;
+  }
+
+  /** May join (or stay in) a group: `look: 'shared'`, measured, nothing of its own to draw. */
+  #lookEligible(): boolean {
+    return (
+      this.#look === 'shared' &&
+      !this.#lost &&
+      this.#controller.measured &&
+      !this.#controller.hasLayers
+    );
+  }
+
+  /** The member's size, DPR, pixel cap or window shift moved since it last told its group. */
+  #lookSpecStale(): boolean {
+    const s = this.#lookSpec;
+    const c = this.#controller;
+    return (
+      this.#lookRefit ||
+      s.hostW !== c.hostCssW ||
+      s.hostH !== c.hostCssH ||
+      s.dpr !== c.dpr ||
+      s.pixelCap !== this.#pixelCap ||
+      s.reducedMotion !== c.isReducedMotion
+    );
+  }
+
+  #fillLookSpec(): void {
+    const s = this.#lookSpec;
+    const c = this.#controller;
+    this.#lookRefit = false;
+    s.hostW = c.hostCssW;
+    s.hostH = c.hostCssH;
+    s.dpr = c.dpr;
+    s.pixelCap = this.#pixelCap;
+    s.reducedMotion = c.isReducedMotion;
+  }
+
+  /**
+   * Leaves the group: the controller takes over the group's picture (clock, lifted cells, tier),
+   * and the next frame is drawn on its own, continuing it.
+   */
+  #leaveLook(seat: SharedSeat, reason: LookChangeReason): void {
+    if (!seat.member) return;
+    this.#takeLook(seat, reason);
+    seat.leaveLook();
+  }
+
+  /** Takes the member's picture state into its own controller (before its seat leaves the group). */
+  #takeLook(seat: SharedSeat, reason: LookChangeReason): void {
+    const g = seat.member;
+    if (!g) return;
+    g.cropOf(seat);
+    this.#controller.adoptLook(g.controller, seat.cellDX, seat.cellDY);
+    this.#ownAfterLook(g);
+    this.#syncQuality(this.#controller.perf);
+    this.#setLookShown('own', reason);
+  }
+
+  /** A 'quality' event; the tier and scale it reports are what #syncQuality compares with. */
+  #emitQuality(scale: number, quality: QualityTier, reason: LumiCellsEvents['quality']['reason']) {
+    this.#reportedQuality = quality;
+    this.#reportedScale = scale;
+    this.#emit('quality', { scale, quality, reason });
+  }
+
+  /**
+   * The instance now renders at `perf`'s tier (it joined, moved or left a look group): a tier or
+   * scale other than the last reported one is reported (reason 'look').
+   */
+  #syncQuality(perf: { readonly quality: QualityTier; readonly scale: number }): void {
+    const own = this.#controller.perf;
+    const quality = this.#reportedQuality ?? own.quality;
+    const scale = this.#reportedQuality ? this.#reportedScale : own.scale;
+    if (perf.quality === quality && perf.scale === scale) return;
+    this.#emitQuality(perf.scale, perf.quality, 'look');
+  }
+
+  /** The instance's own clock starts where `g`'s last frame was (its next dt spans the gap). */
+  #ownAfterLook(g: LookGroup): void {
+    this.#controller.invalidateGpu();
+    // Its own timing window is from before it joined.
+    this.#controller.perf.resetWindow();
+    if (g.updatedAt >= 0) this.#lastNow = g.updatedAt;
+    this.#accMs = 0;
+    this.#skip = 0;
+    this.#lookFresh = false;
+    this.#lookKey = null;
+  }
+
+  /** What the instance shows now (`Stats.look`); listeners hear about changes (deferred). */
+  #setLookShown(look: InstanceLook, reason: LookChangeReason): void {
+    const s = this.#stats;
+    s.look = look;
+    s.groupSize = look === 'group' ? (this.#seat?.member?.members.length ?? 1) : 1;
+    const previous = this.#lookShown;
+    if (previous === look) return;
+    this.#lookShown = look;
+    // Deferred: joins and leaves happen inside frame phases and the renderer's passes.
+    queueMicrotask(() => {
+      if (this.#destroyed) return;
+      const groupSize = look === 'group' ? (this.#seat?.member?.members.length ?? 1) : 1;
+      this.#emit('look', { look, previous, reason, groupSize });
+    });
   }
 
   /** The shared renderer drew (and copied) the frame this instance submitted, or could not. */
   #onPresented(drawn: boolean, shown: boolean, now: number): void {
     const seat = this.#seat;
     if (this.#destroyed || !seat) return;
-    // Drawn: the slot consumed the one-shot inputs (uploads, life reset).
-    if (drawn) this.#controller.commitFrame();
+    const g = seat.member;
+    // Drawn: the slot consumed the one-shot inputs (uploads, life reset). A member's own
+    // controller drew nothing (its group's slot did).
+    if (drawn && !g) this.#controller.commitFrame();
     if (shown) {
       this.#presentEma += (seat.copyMs - this.#presentEma) * 0.1;
       if (!this.#drawnSinceMount) this.#showFirstFrame();
+      if (!g) this.#lookFresh = false;
     }
-    this.#finishFrame(
-      this.#updateMs + seat.drawMs + seat.copyMs,
-      this.#sharedDt,
-      this.#sharedIdeal,
-      now,
-      seat.stats.gpuMs,
-    );
+    let cpu = this.#updateMs + seat.drawMs + seat.copyMs;
+    if (g) {
+      // The group's update and draw, shared by its members.
+      cpu = (g.updateMs + (g.seat?.drawMs ?? 0)) / Math.max(1, g.members.length) + seat.copyMs;
+      if (g.qualityEpoch !== this.#lookQuality) {
+        this.#lookQuality = g.qualityEpoch;
+        const q = g.qualityChange;
+        this.#emitQuality(q.scale, q.quality, q.reason);
+      }
+    }
+    this.#finishFrame(cpu, this.#sharedDt, this.#sharedIdeal, now, seat.stats.gpuMs);
   }
 
   /** The canvas shows a frame for the first time since it was mounted (or rebuilt). */
@@ -2087,8 +2424,11 @@ export class LumiCells {
   #updateStats(gpuMs: number | null): void {
     const c = this.#controller;
     const g = c.geo;
-    const perf = c.perf;
+    const group = this.#seat?.member ?? null;
+    // A member renders at its group's adaptive tier.
+    const perf = group ? group.controller.perf : c.perf;
     const s = this.#stats;
+    s.groupSize = group ? group.members.length : 1;
     s.fps = this.#renderFps;
     s.frameMs = this.#renderFps > 0 ? 1000 / this.#renderFps : 0;
     s.cpuMs = this.#cpuEma;
@@ -2097,14 +2437,25 @@ export class LumiCells {
     s.missRatio = perf.missRatio;
     s.scale = perf.scale;
     s.quality = perf.quality;
-    s.dpr = g.effDpr;
-    s.pixels = g.canvasW * g.canvasH;
-    s.cols = g.cols;
-    s.rows = g.rows;
-    s.lifts = c.lifts.written;
+    const seat = this.#seat;
+    if (group && seat) {
+      // A member's own controller idles: what its canvas shows is its crop of the group's frame.
+      const gg = group.controller.geo;
+      const p = gg.pitchPx > 0 ? gg.pitchPx : 1;
+      s.dpr = gg.effDpr;
+      s.pixels = seat.cropW * seat.cropH;
+      s.cols = Math.round(seat.cropW / p);
+      s.rows = Math.round(seat.cropH / p);
+      s.lifts = group.controller.lifts.written;
+    } else {
+      s.dpr = g.effDpr;
+      s.pixels = g.canvasW * g.canvasH;
+      s.cols = g.cols;
+      s.rows = g.rows;
+      s.lifts = c.lifts.written;
+    }
     s.influences = c.influences.activeCount;
     s.softwareFallback = this.#software;
-    const seat = this.#seat;
     if (seat) {
       const d = this.#sharedStats;
       const src = seat.stats;
@@ -2119,6 +2470,8 @@ export class LumiCells {
       d.regions = src.regions;
       d.scale = src.scale;
       d.copyStaged = src.copyStaged;
+      d.groups = src.groups;
+      d.draws = src.draws;
       Object.assign(d.reducers, src.reducers);
       s.shared = d;
       s.presentMs = this.#presentEma;

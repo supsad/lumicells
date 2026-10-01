@@ -56,9 +56,21 @@ vi.mock('../src/core/lumi-cells', async () => {
       FakeLumiCells.instances.push(this);
       this.priority = options?.priority ?? 'normal';
       this.renderer = options?.renderer ?? runtimeSettings().renderer;
+      this.look = options?.look ?? 'own';
+      this.lookOffset = options?.lookOffset ?? 0;
     }
     get rendererMode() {
       return this.renderer;
+    }
+    look: string;
+    lookOffset: number;
+    looks: Array<[string, number]> = [];
+    setLook(l: string, offset?: number) {
+      const o = offset ?? this.lookOffset;
+      if (l === this.look && o === this.lookOffset) return;
+      this.looks.push([l, o]);
+      this.look = l;
+      this.lookOffset = o;
     }
     setPriority(p: string) {
       this.priorities.push(p);
@@ -122,11 +134,21 @@ vi.mock('../src/core/lumi-cells', async () => {
 
 interface Fake {
   host: HTMLElement;
-  options: { config: any; autoStart: boolean; priority?: string; renderer?: string };
+  options: {
+    config: any;
+    autoStart: boolean;
+    priority?: string;
+    renderer?: string;
+    look?: string;
+    lookOffset?: number;
+  };
   priority: string;
   priorities: string[];
   renderer: string;
   renderers: string[];
+  look: string;
+  lookOffset: number;
+  looks: Array<[string, number]>;
   destroyed: boolean;
   running: boolean;
   replaced: Array<{ config: any; opts: any }>;
@@ -238,6 +260,47 @@ describe('attributes and properties', () => {
     expect(inst.renderers).toEqual(['own', 'shared', 'auto', 'auto', 'shared', 'auto']);
     // Switching never rebuilds the element's instance (runtime layers and bindings stay).
     expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('look and look-offset: attributes and properties switch the instance in place', async () => {
+    const el = mount('<lumi-cells look="shared" look-offset="0.25"></lumi-cells>');
+    await flush();
+    const inst = live()[0] as Fake;
+    expect(inst.options.look).toBe('shared');
+    expect(inst.options.lookOffset).toBe(0.25);
+    expect([el.look, el.lookOffset]).toEqual(['shared', 0.25]);
+    el.setAttribute('look', 'OWN');
+    expect(inst.look).toBe('own');
+    el.look = 'shared';
+    el.setAttribute('look-offset', '2');
+    // Clamped to the largest shift.
+    expect(el.lookOffset).toBe(0.5);
+    el.lookOffset = 'bogus';
+    expect(el.lookOffset).toBe(0);
+    el.look = 'bogus';
+    expect(el.look).toBe('own');
+    el.setAttribute('look', 'shared');
+    el.removeAttribute('look');
+    expect(inst.looks).toEqual([
+      ['own', 0.25],
+      ['shared', 0.25],
+      ['shared', 0.5],
+      ['shared', 0],
+      ['own', 0],
+      ['shared', 0],
+      ['own', 0],
+    ]);
+    expect(FakeClass.instances).toHaveLength(1);
+  });
+
+  it('forwards the look event as lc-look', async () => {
+    const el = mount('<lumi-cells look="shared"></lumi-cells>');
+    await flush();
+    const seen: unknown[] = [];
+    el.addEventListener('lc-look', (e) => seen.push((e as CustomEvent).detail));
+    const detail = { look: 'group', previous: 'own', reason: 'join', groupSize: 3 };
+    (live()[0] as Fake & { emit(t: string, d: unknown): void }).emit('look', detail);
+    expect(seen).toEqual([detail]);
   });
 
   it("without the attribute the page default decides: 'auto', or LumiCells.configure()", async () => {

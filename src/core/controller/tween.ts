@@ -378,6 +378,11 @@ export class ParamStore {
     return this.activeCount > 0;
   }
 
+  /** True while any path is modulated. */
+  get modulated(): boolean {
+    return this.modCount > 0;
+  }
+
   /** Effective scalar: numbers/ints, angles (degrees), enum index, boolean 0/1. */
   num(id: number): number {
     return this.eff[id] as number;

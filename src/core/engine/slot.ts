@@ -68,6 +68,8 @@ export class RenderSlot {
   private lutUploaded = false;
   /** Automaton runs so far (mixed into every run's seed, see lifeRunSeed). */
   private lifeRuns = 0;
+  /** Handed to another instance (recycle()): the next draw restarts the automaton. */
+  private lifeFresh = false;
   private disposed = false;
 
   /** Use GpuDevice.createSlot(), which checks the params prelude. */
@@ -183,8 +185,10 @@ export class RenderSlot {
     } else if (change === 1) {
       this.lifeRun(p, LIFE_MODE_REMAP, f);
     }
-    if (f.lifeReset) this.lifeRun(p, LIFE_MODE_RESET, f);
-    else {
+    if (f.lifeReset || this.lifeFresh) {
+      this.lifeFresh = false;
+      this.lifeRun(p, LIFE_MODE_RESET, f);
+    } else {
       // Each step gets its own seed (the run counter is mixed in), so fresh births every step.
       const steps = Math.min(Math.max(f.lifeSteps | 0, 0), MAX_LIFE_STEPS);
       for (let i = 0; i < steps; i++) this.lifeRun(p, LIFE_MODE_STEP, f);
@@ -333,6 +337,33 @@ export class RenderSlot {
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
     return { w, h, a, b };
+  }
+
+  /**
+   * Whether a frame of `cols x rows` cells (plus `pad` on every side) draws on the current cell
+   * targets, without allocating new ones (and the synchronous framebuffer checks that come with
+   * them).
+   */
+  holds(cols: number, rows: number, pad: number): boolean {
+    return (
+      !this.disposed && this.res.holds(Math.max(1, cols + 2 * pad), Math.max(1, rows + 2 * pad))
+    );
+  }
+
+  /** Cells its targets are allocated for (0 before its first draw). */
+  get allocatedCells(): number {
+    return this.res.aw * this.res.ah;
+  }
+
+  /**
+   * Hands the slot (and its allocated targets) to another instance: the next draw uploads the
+   * params and the LUT, re-bakes the cell stamp and restarts the automaton, as on a new slot.
+   */
+  recycle(): void {
+    this.paramsUploaded = false;
+    this.lutUploaded = false;
+    this.stamp.dirty = true;
+    this.lifeFresh = true;
   }
 
   /** Frees the slot's GL objects (skipped on a lost context, where they are already gone). */

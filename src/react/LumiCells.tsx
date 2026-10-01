@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { LumiCells as LumiCellsCore } from '../core/lumi-cells';
 import { runtimeSettings } from '../core/runtime/scheduler';
-import type { InstancePriority, RendererMode, Stats } from '../core/types';
+import type { InstancePriority, LookMode, RendererMode, Stats } from '../core/types';
 import { resolveConfig } from '../element/resolve';
 import { type LumiCellsConfigInput, type PresetId, posterCss, stableStringify } from '../schema';
 import { LumiCellsContext } from './context';
@@ -46,6 +46,18 @@ export interface LumiCellsProps
    */
   renderer?: RendererMode;
   /**
+   * `'shared'`: share one picture with every background whose config draws the same (rendered
+   * once per frame, a crop of it in each card) while this one draws nothing of its own (no
+   * pointer light or hover lift, pulse, influence, modulator...): see `LumiCellsOptions.look`.
+   * Default `'own'`. Changing it switches the running instance (see `LumiCells.setLook`).
+   */
+  look?: LookMode;
+  /**
+   * `look="shared"`: shifts this card's window into the shared picture by up to this share of its
+   * size (0 to 0.5, seeded per instance), so cards side by side are not in sync. Default 0.
+   */
+  lookOffset?: number;
+  /**
    * Rendered over the static poster when there is no animation: WebGL2 unavailable, a shader
    * failure, or (until it is restored) a lost context. Not for a wait on the context budget
    * (fallback reason `'budget'`): the poster alone covers that.
@@ -77,6 +89,8 @@ export function LumiCells({
   overflow,
   priority,
   renderer,
+  look,
+  lookOffset,
   fallback,
   className,
   style,
@@ -113,6 +127,8 @@ export function LumiCells({
     paused,
     priority,
     renderer,
+    look,
+    lookOffset,
     onReady,
     onError,
     onStats,
@@ -124,6 +140,8 @@ export function LumiCells({
       paused,
       priority,
       renderer,
+      look,
+      lookOffset,
       onReady,
       onError,
       onStats,
@@ -140,6 +158,8 @@ export function LumiCells({
       paused: startPaused,
       priority: initialPriority,
       renderer: initialRenderer,
+      look: initialLook,
+      lookOffset: initialOffset,
     } = latest.current;
     // autoStart is off so no event can fire before the listeners below are attached.
     const inst = new LumiCellsCore(host, {
@@ -147,6 +167,8 @@ export function LumiCells({
       autoStart: false,
       priority: initialPriority,
       renderer: initialRenderer,
+      look: initialLook,
+      lookOffset: initialOffset,
     });
     appliedKey.current = initial.key;
     // 'no-webgl2' and 'compile' are final; 'context-lost' is temporary (the facade rebuilds its
@@ -208,6 +230,10 @@ export function LumiCells({
   useEffect(() => {
     instance?.setRenderer(renderer ?? runtimeSettings().renderer);
   }, [instance, renderer]);
+
+  useEffect(() => {
+    instance?.setLook(look ?? 'own', lookOffset ?? 0);
+  }, [instance, look, lookOffset]);
 
   // Exposes null while there is no instance (Ref<T> types the value as T | null anyway).
   useImperativeHandle(ref, () => instance as LumiCellsCore, [instance]);

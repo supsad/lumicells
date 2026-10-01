@@ -173,6 +173,31 @@ export class LiftScheduler {
     this.written = 0;
   }
 
+  /** Forced lifts (lift() calls, pointer hover) still in the air. */
+  get forcedAlive(): number {
+    let n = 0;
+    for (let i = 0; i < this.count; i++) if (this.rec[i * F + FORCED] === 1) n++;
+    return n;
+  }
+
+  /**
+   * Replaces every lift with those of `from`, moved by (-dx, -dy) cells: the same cells of a
+   * picture whose center cell sits (dx, dy) cells from `from`'s (a card leaving or joining a
+   * shared look, see Controller.adoptLook). Lifts that land outside the grid are dropped by the
+   * next step. Keeps the spawn process going where `from` was.
+   */
+  adopt(from: LiftScheduler, dx: number, dy: number): void {
+    const n = from.count;
+    this.rec.set(from.rec.subarray(0, n * F));
+    for (let i = 0; i < n; i++) {
+      this.rec[i * F + CI] = (this.rec[i * F + CI] as number) - dx;
+      this.rec[i * F + CJ] = (this.rec[i * F + CJ] as number) - dy;
+    }
+    this.count = n;
+    this.written = 0;
+    this.budget = from.budget;
+  }
+
   /** Expected lifetime of one random lift, seconds. */
   static meanLifetime(p: LiftParams): number {
     const lo = Math.min(p.holdMin, p.holdMax);

@@ -67,6 +67,42 @@ export class PulseList {
     this.count = 0;
   }
 
+  /** Pulses other than landing ripples (clicks, pulse() calls) alive. */
+  get majorCount(): number {
+    let n = 0;
+    for (let i = 0; i < this.count; i++) if (this.minor[i] !== 1) n++;
+    return n;
+  }
+
+  /**
+   * Replaces the landing ripples with those of `from` (they belong to its lifts, see
+   * LiftScheduler.adopt), moved by (ox, oy) cells. Other pulses stay.
+   */
+  adoptMinor(from: PulseList, ox: number, oy: number): void {
+    const d = this.data;
+    let w = 0;
+    for (let i = 0; i < this.count; i++) {
+      if (this.minor[i] === 1) continue;
+      if (w !== i) {
+        d.copyWithin(w * 11, i * 11, i * 11 + 11);
+        this.space[w] = this.space[i] as number;
+        this.minor[w] = 0;
+      }
+      w++;
+    }
+    const fd = from.data;
+    for (let i = 0; i < from.count && w < MAX_PULSES; i++) {
+      if (from.minor[i] !== 1 || from.space[i] !== SPACE_CELLS) continue;
+      d.set(fd.subarray(i * 11, i * 11 + 11), w * 11);
+      d[w * 11] = (d[w * 11] as number) + ox;
+      d[w * 11 + 1] = (d[w * 11 + 1] as number) + oy;
+      this.space[w] = SPACE_CELLS;
+      this.minor[w] = 1;
+      w++;
+    }
+    this.count = w;
+  }
+
   get needsClientOrigin(): boolean {
     for (let i = 0; i < this.count; i++) if (this.space[i] === SPACE_CLIENT) return true;
     return false;

@@ -66,6 +66,36 @@ export type RendererMode = 'auto' | InstanceRenderer;
 export type RendererChangeReason = 'promote' | 'demote' | 'budget' | 'explicit';
 
 /**
+ * Which picture an instance shows (`LumiCellsOptions.look`, `setLook()`):
+ * - `own`    (default) an animation of its own: its own clock, random lifts and runtime layers;
+ * - `shared` cards whose config draws the same picture share ONE: it is rendered once per frame
+ *            and every card shows a crop of it (one draw for any number of identical cards, plus
+ *            one copy each). A card shares only while it draws nothing of its own (no influence,
+ *            bound element, pointer light or hover lift, pulse, forced lift, modulator,
+ *            `setEnergy()`, config transition or debug view): it leaves its group the moment it
+ *            gets one, continuing the group's picture with the same clock, cells and lifted cells
+ *            (the pattern of a card smaller than its group, or shifted in it, lays out for the
+ *            card's own size), and rejoins about 2 seconds after the last one is gone (and the
+ *            last activity of its own is over). All cards of a group animate in
+ *            sync (see `lookOffset`). Needs the shared renderer: with `renderer: 'auto'` it keeps
+ *            the instance on the shared renderer, `renderer: 'own'` wins over it.
+ */
+export type LookMode = 'own' | 'shared';
+
+/** What an instance shows now (`Stats.look`): its own animation, or its group's picture. */
+export type InstanceLook = 'own' | 'group';
+
+/**
+ * Why the look of an instance changed (`look` event):
+ * - `join`     it joined a group (`look: 'shared'`, nothing of its own to draw);
+ * - `layers`   it got something of its own to draw (an influence, a pulse, ..., see LookMode);
+ * - `config`   its config changed: it no longer draws its group's picture;
+ * - `explicit` `setLook('own')` (or a wrapper prop or attribute);
+ * - `renderer` it gave its shared slot back: parked, moved to a context of its own, or failed.
+ */
+export type LookChangeReason = 'join' | 'layers' | 'config' | 'explicit' | 'renderer';
+
+/**
  * Lifecycle of an instance's GPU side (`Stats.state`):
  * - `pending`  no context yet: not started, not near the viewport yet, or queued for creation;
  * - `waiting`  (`renderer: 'own'`) near the viewport, but the context budget is full of
@@ -195,6 +225,26 @@ export interface LumiCellsOptions {
    * into a 2D canvas in the host (see InstanceRenderer). `setRenderer()` switches later.
    */
   renderer?: RendererMode;
+  /**
+   * `'shared'`: share one picture with every card whose config draws the same (see LookMode);
+   * `'own'` (default): an animation of its own. `setLook()` changes it later.
+   *
+   * A card shows the part of its group's picture its own canvas covers, never scaled: a group of
+   * equal cards shows exactly what each would draw alone. Cards of different sizes share a picture
+   * only when their cells have the same size (`grid.sizing: 'pitch'`, or `'count'` with the same
+   * shorter side); a card smaller than its group then shows the middle of a picture laid out for
+   * the group's size (with its own cells, where it would draw them alone), and with
+   * `render.overflow` its margin shows the group's cells.
+   */
+  look?: LookMode;
+  /**
+   * `look: 'shared'`: shifts this card's window into its group's picture by up to this share of
+   * its size on each axis (0 to 0.5, whole cells, seeded per instance), so cards side by side do
+   * not show the same cells in sync. The group renders larger to make room. Default 0 (every card
+   * shows the centered window). The cells keep the card's own size (with `grid.sizing: 'count'`
+   * too); the pattern is laid out for the larger picture.
+   */
+  lookOffset?: number;
 }
 
 export interface ConfigUpdateOptions {
@@ -419,6 +469,10 @@ export interface SharedRendererStats {
   copyStaged: boolean;
   /** The per-instance cost reducers page-wide (lower frame rate, lite pipeline). */
   reducers: SharedReducers;
+  /** Look groups (`look: 'shared'`): each is drawn once per frame, in one region of the atlas. */
+  groups: number;
+  /** Regions drawn in the last frame (look groups count once, whatever their members). */
+  draws: number;
 }
 
 export interface Stats {
@@ -460,6 +514,13 @@ export interface Stats {
   shared: SharedRendererStats | null;
   /** Cost reducers acting on this instance now (always current). */
   reducers: InstanceReducers;
+  /**
+   * What the instance shows (always current): `'group'` while it is a member of a look group
+   * (`look: 'shared'`), else `'own'` (also while parked: it rejoins when it comes back).
+   */
+  look: InstanceLook;
+  /** Cards showing the same picture (this one included) while `look` is `'group'`, else 1. */
+  groupSize: number;
 }
 
 export type DebugView = 'final' | 'field' | 'halo' | 'bloom' | 'haze' | 'cells';
@@ -478,7 +539,15 @@ export interface LumiCellsEvents {
    * its own source's paths (listeners can safely ignore their own echoes by `source`).
    */
   config: { config: Readonly<LumiCellsConfig>; changed: ParamPath[]; source: ConfigSource };
-  quality: { scale: number; quality: QualityTier; reason: 'slow' | 'recovered' | 'locked' };
+  /**
+   * Adaptive quality stepped (`'slow'`, `'recovered'`, `'locked'`), or the instance now renders
+   * at another tier because it joined, moved or left a shared look group (`'look'`).
+   */
+  quality: {
+    scale: number;
+    quality: QualityTier;
+    reason: 'slow' | 'recovered' | 'locked' | 'look';
+  };
   /**
    * Non-fatal warnings. Codes include `software-webgl` (CPU rasterizer), `influence-overflow`
    * (more influences than GPU slots) and `context-budget` (once per page: a visible
@@ -509,6 +578,16 @@ export interface LumiCellsEvents {
     renderer: InstanceRenderer;
     previous: InstanceRenderer;
     reason: RendererChangeReason;
+  };
+  /**
+   * The look changed (`Stats.look`): the instance joined a look group (`look: 'shared'`), or left
+   * one (see LookChangeReason). `groupSize`: members of the group it is in now (1 when `'own'`).
+   */
+  look: {
+    look: InstanceLook;
+    previous: InstanceLook;
+    reason: LookChangeReason;
+    groupSize: number;
   };
   contextlost: undefined;
   contextrestored: undefined;

@@ -128,6 +128,16 @@ export class InfluenceRegistry {
     return n;
   }
 
+  /** Entries in the picture or about to be: shown (not hidden or disposing), or still fading. */
+  get shownCount(): number {
+    let n = 0;
+    for (let i = 0; i < this.list.length; i++) {
+      const e = this.list[i] as Influence;
+      if ((!e.hidden && !e.disposing) || (e.slot && e.presence > 0)) n++;
+    }
+    return n;
+  }
+
   /** Entries currently holding a GPU slot. */
   get activeCount(): number {
     return this.gpu;
