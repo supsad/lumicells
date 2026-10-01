@@ -42,16 +42,16 @@ import { build } from 'vite';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Gzip budgets in KiB, about 3% above the measured sizes (October 2026: core 67.6, react 68.8,
- * element 71.7, iife 72.5 KiB with the English preset texts), so ordinary changes pass and a
- * regression fails: the UI metadata leaking back into the runtime adds ~5 KiB, unminified GLSL
- * ~9 KiB.
+ * Gzip budgets in KiB, about 3% above the measured sizes (October 2026, with the shared look:
+ * core 73.8, react 74.9, element 77.8, iife 78.6 KiB), so ordinary changes pass and a regression
+ * fails: the UI metadata leaking back into the runtime adds ~5 KiB, unminified GLSL ~9 KiB.
+ * Raise them only on purpose, for a feature worth its weight (the shared look cost ~5.5 KiB).
  */
 const BUDGET_GZIP = {
-  core: 70 * 1024,
-  react: 71 * 1024,
-  element: 74 * 1024,
-  iife: 74 * 1024,
+  core: 76 * 1024,
+  react: 77 * 1024,
+  element: 80 * 1024,
+  iife: 81 * 1024,
 };
 
 const PROBES = {

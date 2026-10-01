@@ -80,6 +80,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.examples.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "lint": "biome check .",
     "lint:fix": "biome check --write ."
   },
@@ -93,6 +94,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
+    "@playwright/test": "1.63",
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

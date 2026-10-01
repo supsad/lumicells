@@ -35,6 +35,7 @@ jobs:
         run: npx vitest run
 
       - name: Build library
+        id: build-lib
         run: npm run build:lib
 
       - name: Check published types
@@ -42,3 +43,63 @@ jobs:
 
       - name: Build demo site
         run: npx vite build
+
+      # Consumer bundle sizes of the built library against their gzip budgets (scripts/size.mjs).
+      # Last, so a budget overrun never hides a broken demo build; it still runs when an earlier
+      # check failed, as long as the library itself was built.
+      - name: Bundle size
+        if: ${{ !cancelled() && steps.build-lib.outcome == 'success' }}
+        run: npm run size -- --json dist/size-report.json
+
+      - name: Upload bundle size report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: size-report
+          path: dist/size-report.json
+          if-no-files-found: ignore
+
+  # Browser end-to-end tests (playwright.config.ts): the runner has no GPU, so Chromium renders
+  # WebGL with SwiftShader; invariants fail hard, timings only on gross regressions.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+        env:
+          LC_E2E_GPU: swiftshader
+
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            playwright-report/
+            test-results/e2e/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-timings
+          path: |
+            test-results/e2e-perf.json
+            test-results/e2e-results.json
+          retention-days: 30
+          if-no-files-found: ignore

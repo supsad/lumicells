@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LumiCells e2e: lifecycle</title>
+    <link rel="icon" href="data:," />
+    <!--
+      End-to-end fixture (built only for the tests, see serve.mjs): an empty page on which the
+      lifecycle spec mounts and destroys LumiCells instances through window.lifecycle (see
+      lifecycle.ts). The cards are laid out like the stress bench's visible layout: 10 columns of
+      130x80, so 100 of them fit a 1440x900 viewport.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #000032;
+      }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(10, 130px);
+        grid-auto-rows: 80px;
+        gap: 8px;
+        padding: 8px;
+      }
+      .card {
+        position: relative;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #050632;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="grid"></div>
+    <script type="module" src="./lifecycle.ts"></script>
+  </body>
+</html>
