@@ -17,7 +17,9 @@
  * - `mirror`: the same copy technique, but the source is ONE real LumiCells instance: the full
  *   look for N cards at the cost of one context (all cards show the same animation).
  *
- * URL parameters are documented in stress.html. `window.bench` is the automation surface:
+ * URL parameters are documented in stress.html. `window.bench` is the automation surface (see
+ * also the reducer helpers below: configure, setConfigAll, capture / diff / image for comparing
+ * a card's pixels across settings, hover and record for frame sequences around a switch):
  * `measure(ms)` records frame pacing, main-thread and GPU cost, context churn and memory over a
  * window; `snapshot()` returns the instantaneous state; `scrollThrough()` scrolls the whole page
  * down and back up and reports, per step, whether the visible cards are live or on the poster
@@ -33,6 +35,7 @@
 import {
   type ConfigureOptions,
   LumiCells,
+  type LumiCellsConfigInput,
   type LumiCellsEvents,
   onBeforeFrame,
   PRESET_IDS,
@@ -43,6 +46,7 @@ import {
 } from 'lumicells';
 import { installContextProbe } from './probe';
 import { drawCover, type SharedCard, SharedRenderer } from './shared';
+import { installSlowGpu } from './slow-gpu';
 
 // The probe must patch getContext before the first instance (or the support probe) runs.
 const probe = installContextProbe();
@@ -80,6 +84,18 @@ const params = {
   createPerFrame: qs.get('createPerFrame'),
   sharedBudget: qs.get('sharedBudget'),
   promoteArea: qs.get('promoteArea'),
+  secondaryMaxFps: qs.get('secondaryMaxFps'),
+  lite: qs.get('lite'),
+  /** Simulated slow GPU, ms per megapixel drawn (see slow-gpu.ts). */
+  slowGpu: Number(qs.get('slowGpu') ?? 0) || 0,
+  /** Share of the simulated GPU time the instances' timers report (see slow-gpu.ts). */
+  timerShare: Number(qs.get('timerShare') ?? 1),
+  /** No GPU timer for the instances (see slow-gpu.ts). */
+  noTimer: qs.get('noTimer') === '1',
+  /** Busy wait per frame on the main thread, ms (see slow-gpu.ts). */
+  jank: Number(qs.get('jank') ?? 0) || 0,
+  /** layout=visible: card size in CSS px ('WxH'). */
+  card: /^(\d+)x(\d+)$/.exec(qs.get('card') ?? ''),
   /** Delay before the instances are created, ms (lets a profiler attach first). */
   mountDelay: clampInt(qs.get('mountDelay'), 0, 60_000, 0),
 };
@@ -89,13 +105,21 @@ function clampInt(v: string | null, min: number, max: number, fallback: number):
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 }
 
-/** Card CSS size per layout (must match stress.html). */
+/** Card CSS size per layout (must match stress.html; `card=WxH` overrides the visible one). */
 const CARD =
   params.layout === 'visible'
-    ? { w: 130, h: 80 }
+    ? params.card
+      ? { w: Number(params.card[1]), h: Number(params.card[2]) }
+      : { w: 130, h: 80 }
     : params.layout === 'large'
       ? { w: 720, h: 720 }
       : { w: 320, h: 200 };
+if (params.layout === 'visible' && params.card) {
+  const root = document.documentElement.style;
+  root.setProperty('--card-w', `${CARD.w}px`);
+  root.setProperty('--card-h', `${CARD.h}px`);
+  root.setProperty('--cols', String(Math.max(1, Math.floor((innerWidth - 16) / (CARD.w + 8)))));
+}
 const DPR = Math.min(2, window.devicePixelRatio || 1);
 
 // -------------------------------------------------------------------------------------------
@@ -317,6 +341,12 @@ function applyRuntimeParams(): ConfigureOptions {
   else if (budget !== null) opts.sharedBudget = budget;
   const promote = num(params.promoteArea);
   if (promote !== null) opts.promoteArea = promote;
+  const secondary = num(params.secondaryMaxFps);
+  if (params.secondaryMaxFps === 'auto') opts.secondaryMaxFps = 'auto';
+  else if (secondary !== null) opts.secondaryMaxFps = secondary;
+  if (params.lite === 'auto') opts.lite = 'auto';
+  else if (params.lite === 'on') opts.lite = true;
+  else if (params.lite === 'off') opts.lite = false;
   if (Object.keys(opts).length > 0) LumiCells.configure(opts);
   return opts;
 }
@@ -413,6 +443,33 @@ function mountAll(): void {
   }
 }
 
+// Simulated slow GPU / jank (adaptive quality checks): the load follows the pixels drawn.
+const slowGpu = installSlowGpu({
+  msPerMpx: params.slowGpu,
+  jankMs: params.jank,
+  noTimer: params.noTimer,
+  timerShare: params.timerShare,
+  mpx: () => {
+    let px = 0;
+    for (const e of [...entries, ...(heroEntry ? [heroEntry] : [])]) {
+      const st = e.cells.getStats();
+      if (st.state === 'live') px += st.pixels;
+    }
+    return px / 1e6;
+  },
+  expectedMpx: (params.n * CARD.w * CARD.h * DPR * DPR) / 1e6,
+});
+
+// The simulated GPU load starts with the first GPU side (a context or a shared seat): from then on,
+// shader compiles included, nothing runs at the display's pace any more.
+if (slowGpu.state) {
+  const armWhenLive = () => {
+    if (entries.some((e) => e.cells.getStats().state === 'live')) slowGpu.arm();
+    else requestAnimationFrame(armWhenLive);
+  };
+  requestAnimationFrame(armWhenLive);
+}
+
 // The instances are created in a task of their own once the page has painted, so the long task
 // (and long animation frame) of that task measures the mount alone, not module evaluation.
 requestAnimationFrame(() =>
@@ -503,6 +560,8 @@ function snapshot() {
   const renderers: Record<string, number> = {};
   /** Adaptive quality of the live instances: "tier@scale" -> count. */
   const quality: Record<string, number> = {};
+  /** Cost reducers of the live instances: "d<frameDivisor>" plus "+lite" -> count. */
+  const reducers: Record<string, number> = {};
   let readyAllMs: number | null = null;
 
   if (params.mode === 'lumicells') {
@@ -530,6 +589,10 @@ function snapshot() {
       if (state === 'live') {
         const q = `${st.quality}@${st.scale}`;
         quality[q] = (quality[q] ?? 0) + 1;
+        // Optional: the bench also runs against builds without reducers.
+        const red = st.reducers as Stats['reducers'] | undefined;
+        const r = red ? `d${red.frameDivisor}${red.lite ? '+lite' : ''}` : 'n/a';
+        reducers[r] = (reducers[r] ?? 0) + 1;
       }
       if (st.renderer === 'shared') {
         sharedMembers++;
@@ -589,6 +652,7 @@ function snapshot() {
       states,
       renderers,
       quality,
+      reducers,
     },
     hero: heroEntry
       ? {
@@ -1082,6 +1146,192 @@ function mount() {
 }
 
 // -------------------------------------------------------------------------------------------
+// Reducer checks: pixels of one card across settings, frame sequences around a switch
+
+/** Captured card pixels by key (see capture()). */
+const captures = new Map<string, { w: number; h: number; px: Uint8ClampedArray }>();
+
+/** The pixels a card shows now (its 2D canvas when shared, a readback of the WebGL one when own). */
+function cardPixels(index: number): { w: number; h: number; px: Uint8ClampedArray } | null {
+  const e = index < 0 ? heroEntry : entries[index];
+  const canvas = e?.cells.canvas;
+  if (!canvas || canvas.width === 0) return null;
+  const ctx = e.cells.renderer === 'shared' ? canvas.getContext('2d') : null;
+  if (ctx) {
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return { w: img.width, h: img.height, px: img.data };
+  }
+  // Own canvas: drawn into a 2D canvas right after the frame (same task: the buffer is valid).
+  const tmp = document.createElement('canvas');
+  tmp.width = canvas.width;
+  tmp.height = canvas.height;
+  const t = tmp.getContext('2d');
+  if (!t) return null;
+  t.drawImage(canvas, 0, 0);
+  return { w: tmp.width, h: tmp.height, px: t.getImageData(0, 0, tmp.width, tmp.height).data };
+}
+
+/** Pixel difference of two captures: mean and max channel difference, share of pixels off by > 2 and > 8. */
+function pixelDiff(
+  a: { w: number; h: number; px: Uint8ClampedArray },
+  b: { w: number; h: number; px: Uint8ClampedArray },
+) {
+  if (a.w !== b.w || a.h !== b.h) return { sizeMismatch: [a.w, a.h, b.w, b.h] };
+  let sum = 0;
+  let max = 0;
+  let over2 = 0;
+  let over8 = 0;
+  const n = a.w * a.h;
+  for (let i = 0; i < n; i++) {
+    let m = 0;
+    for (let c = 0; c < 3; c++) {
+      const d = Math.abs((a.px[i * 4 + c] as number) - (b.px[i * 4 + c] as number));
+      sum += d;
+      if (d > m) m = d;
+    }
+    if (m > max) max = m;
+    if (m > 2) over2++;
+    if (m > 8) over8++;
+  }
+  return {
+    meanAbs: round(sum / (n * 3), 3),
+    max,
+    over2: round(over2 / n, 4),
+    over8: round(over8 / n, 4),
+  };
+}
+
+/** Records what card `index` shows now under `key`. */
+async function capture(key: string, index = 0) {
+  // Inside a frame, after the ticker's phases (own canvases are read in the same task).
+  await new Promise<void>((r) => requestAnimationFrame(() => queueMicrotask(r)));
+  const c = cardPixels(index);
+  if (c) captures.set(key, { ...c, px: new Uint8ClampedArray(c.px) });
+  return c ? { w: c.w, h: c.h } : null;
+}
+
+function diff(keyA: string, keyB: string) {
+  const a = captures.get(keyA);
+  const b = captures.get(keyB);
+  return a && b ? pixelDiff(a, b) : null;
+}
+
+/** A capture as a PNG data URL (for side-by-side screenshots). */
+function image(key: string, scale = 4): string | null {
+  const c = captures.get(key);
+  if (!c) return null;
+  const src = document.createElement('canvas');
+  src.width = c.w;
+  src.height = c.h;
+  src.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(c.px), c.w, c.h), 0, 0);
+  const out = document.createElement('canvas');
+  out.width = c.w * scale;
+  out.height = c.h * scale;
+  const o = out.getContext('2d');
+  if (!o) return null;
+  o.imageSmoothingEnabled = false;
+  o.drawImage(src, 0, 0, out.width, out.height);
+  return out.toDataURL('image/png');
+}
+
+/** Pointer over card `index` (true) or gone (false), as the browser reports it to the host. */
+function hover(index: number, on: boolean): void {
+  const host = (index < 0 ? heroEntry : entries[index])?.card.host;
+  host?.dispatchEvent(new PointerEvent(on ? 'pointerenter' : 'pointerleave', { bubbles: false }));
+}
+
+/**
+ * Frame sequence of card `index` for `frames` frames: per frame whether it presented a new image,
+ * the mean pixel change since the last presented one, divided by the frames that passed (motion
+ * per frame, comparable across rates), and its reducers. `switches` runs callbacks at given
+ * frames (e.g. hover on / off). A pop is a presented frame whose motion stands out from the
+ * median of the presented frames around it.
+ */
+async function record(opts: {
+  index?: number;
+  frames?: number;
+  switches?: { at: number; hover?: boolean; configure?: ConfigureOptions }[];
+}) {
+  const index = opts.index ?? 0;
+  const total = opts.frames ?? 240;
+  const e = index < 0 ? heroEntry : entries[index];
+  const rows: {
+    f: number;
+    presented: boolean;
+    motion: number;
+    since: number;
+    divisor: number;
+    lite: boolean;
+  }[] = [];
+  let prev: Uint8ClampedArray | null = null;
+  let since = 0;
+  for (let f = 0; f < total; f++) {
+    for (const s of opts.switches ?? []) {
+      if (s.at !== f) continue;
+      if (s.hover !== undefined) hover(index, s.hover);
+      if (s.configure) LumiCells.configure(s.configure);
+    }
+    await new Promise<void>((r) => requestAnimationFrame(() => queueMicrotask(r)));
+    since++;
+    const c = cardPixels(index);
+    if (!c || !e) continue;
+    let sum = 0;
+    let changed = false;
+    if (prev && prev.length === c.px.length) {
+      for (let i = 0; i < c.px.length; i += 4) {
+        const d =
+          Math.abs((c.px[i] as number) - (prev[i] as number)) +
+          Math.abs((c.px[i + 1] as number) - (prev[i + 1] as number)) +
+          Math.abs((c.px[i + 2] as number) - (prev[i + 2] as number));
+        if (d > 0) changed = true;
+        sum += d;
+      }
+    } else {
+      changed = true;
+    }
+    const st = e.cells.getStats();
+    rows.push({
+      f,
+      presented: changed,
+      motion: changed && prev ? round(sum / ((c.px.length / 4) * 3) / since, 4) : 0,
+      since,
+      divisor: st.reducers.frameDivisor,
+      lite: st.reducers.lite,
+    });
+    if (changed) {
+      prev = new Uint8ClampedArray(c.px);
+      since = 0;
+    }
+  }
+  const presented = rows.filter((r) => r.presented && r.motion > 0);
+  const motions = presented.map((r) => r.motion).sort((a, b) => a - b);
+  const median = motions[Math.floor(motions.length / 2)] ?? 0;
+  // Every presented frame's motion relative to the median of its 8 presented neighbours.
+  const pops = presented
+    .map((r, i) => {
+      const around = presented
+        .slice(Math.max(0, i - 4), i + 5)
+        .filter((x) => x !== r)
+        .map((x) => x.motion)
+        .sort((a, b) => a - b);
+      const m = around[Math.floor(around.length / 2)] ?? median;
+      return { f: r.f, motion: r.motion, ratio: m > 0 ? round(r.motion / m, 2) : 0 };
+    })
+    .sort((a, b) => b.ratio - a.ratio)
+    .slice(0, 6);
+  return {
+    frames: rows.length,
+    presented: presented.length,
+    medianMotion: median,
+    worst: pops,
+    timeline: rows
+      .map((r) => `${r.f}:${r.presented ? 'P' : '.'}${r.divisor}${r.lite ? 'L' : ''}`)
+      .join(' '),
+    rows,
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // Automation surface + status line
 
 const bench = {
@@ -1099,6 +1349,37 @@ const bench = {
   mount,
   lossTest,
   resizeHero,
+  capture,
+  diff,
+  image,
+  hover,
+  record,
+  /** The simulated slow GPU (slowGpu=K): its target and measured ms. */
+  get slowGpu() {
+    return slowGpu.state ? { ...slowGpu.state, mpx: slowGpu.state.mpx() } : null;
+  },
+  /** Adaptive quality and refresh figures of instance `index` (-1: the hero). */
+  perf(index = 0) {
+    const e = index < 0 ? heroEntry : entries[index];
+    const s = e?.cells.getStats();
+    return s
+      ? {
+          quality: s.quality,
+          scale: s.scale,
+          vsyncMs: s.vsyncMs,
+          missRatio: s.missRatio,
+          gpuMs: s.gpuMs,
+          fps: s.fps,
+        }
+      : null;
+  },
+  /** LumiCells.configure() passthrough (runtime settings while the bench runs). */
+  configure: (opts: ConfigureOptions) => LumiCells.configure(opts),
+  /** setConfig() on every instance (e.g. freeze the animation with animation.speed 0). */
+  setConfigAll: (patch: LumiCellsConfigInput) => {
+    for (const e of entries) e.cells.setConfig(patch, { transition: 0 });
+    heroEntry?.cells.setConfig(patch, { transition: 0 });
+  },
   /** Renderer switches so far (the 'renderer' events), in order. */
   get rendererEvents() {
     return rendererEvents.slice();

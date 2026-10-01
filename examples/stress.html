@@ -28,6 +28,15 @@
                                      behind the cards; window.bench.resizeHero() resizes it
         promoteArea=N                LumiCells.configure() 'auto' threshold, megapixels
         sharedBudget=auto|N          LumiCells.configure() shared atlas budget, megapixels
+        secondaryMaxFps=auto|N       LumiCells.configure() frame-rate cap of inactive shared
+                                     instances (0 = off)
+        lite=auto|on|off             LumiCells.configure() lite pipeline of shared instances
+        card=WxH                     (layout=visible) card size in CSS px (default 130x80)
+        slowGpu=K                    simulated slow GPU: K ms of GPU work per megapixel drawn
+                                     (a GPU hog plus the instances' GPU timers, see slow-gpu.ts)
+        jank=MS                      busy wait of MS on the main thread every frame
+        timerShare=F                 share of the simulated GPU time their GPU timers report
+        noTimer=1                    hide the GPU timer extension from the instances
         preset=reference             LumiCells preset (lumicells / mirror)
         pauseOffscreen=1             pause offscreen cards (0 keeps them running)
         maxContexts=auto|N           LumiCells.configure() context budget (library default: auto)
@@ -37,7 +46,8 @@
         hud=0                        hide the status line
       The instances are created in a task of their own after the first paint.
       window.bench exposes measure(ms), snapshot(), scrollThrough(), mount(), lossTest(),
-      resizeHero() and rendererEvents for automated runs.
+      resizeHero(), rendererEvents, configure(), setConfigAll(), capture(), diff(), image(),
+      hover() and record() for automated runs.
     -->
     <style>
       :root {
@@ -64,8 +74,8 @@
         justify-content: center;
       }
       body.visible #grid {
-        grid-template-columns: repeat(10, 130px);
-        grid-auto-rows: 80px;
+        grid-template-columns: repeat(var(--cols, 10), var(--card-w, 130px));
+        grid-auto-rows: var(--card-h, 80px);
       }
       body.scroll #grid {
         grid-template-columns: repeat(2, 320px);

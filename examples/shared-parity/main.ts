@@ -27,7 +27,9 @@ const WAIT_FRAMES = Math.max(5, Number(qs.get('frames') ?? 60) || 60);
 
 // The own context and the shared device of a pair are created in the same frame; every pair
 // stays on the page, so the own contexts of all of them fit the budget.
-LumiCells.configure({ createPerFrame: 8, maxContexts: 8 });
+// Parity compares the full pipeline at full rate: the cost reducers (lite glow, secondary frame
+// rate) would otherwise kick in after an instance's first second and differ by design.
+LumiCells.configure({ createPerFrame: 8, maxContexts: 8, lite: false, secondaryMaxFps: 0 });
 
 interface PairSpec {
   name: string;
