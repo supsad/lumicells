@@ -112,62 +112,67 @@ export function warmDraw(ctx: PassContext, prog: LazyProgram, fb: WebGLFramebuff
  * blocks and sampler units (static state that never needs re-uploading).
  */
 export class LazyProgram {
-  private pending: PendingProgram | null;
-  private program: Program | null = null;
+  #pending: PendingProgram | null;
+  #program: Program | null = null;
   /** When the compile was submitted, ms (performance.now). */
   readonly submitted = performance.now();
   /** From submission to the poll that found it linked (-1 before), ms. */
   linkMs = -1;
 
+  readonly #ctx: PassContext;
+  readonly #setup: (p: Program) => void;
+
   constructor(
-    private readonly ctx: PassContext,
+    ctx: PassContext,
     vs: string,
     fs: string,
     label: string,
-    private readonly setup: (p: Program) => void,
+    setup: (p: Program) => void,
   ) {
-    this.pending = createProgramAsync(ctx.gl, vs, fs, label, ctx.caps.parallelCompile);
+    this.#ctx = ctx;
+    this.#setup = setup;
+    this.#pending = createProgramAsync(ctx.gl, vs, fs, label, ctx.caps.parallelCompile);
     ctx.programs?.push(this);
   }
 
   /** Linked by now, set up or not (non-blocking: see PendingProgram.completed). */
   completed(): boolean {
-    return this.program !== null || (this.pending?.completed() ?? false);
+    return this.#program !== null || (this.#pending?.completed() ?? false);
   }
 
   /** True once linked; throws ShaderError on compile/link failure. */
   poll(): boolean {
-    if (this.program) return true;
-    if (!this.pending) return false;
-    const p = this.pending.poll();
+    if (this.#program) return true;
+    if (!this.#pending) return false;
+    const p = this.#pending.poll();
     if (!p) return false;
     this.linkMs = performance.now() - this.submitted;
-    this.pending = null;
-    this.program = p;
-    bindProgram(this.ctx.gl, p.handle);
+    this.#pending = null;
+    this.#program = p;
+    bindProgram(this.#ctx.gl, p.handle);
     p.bindBlock('ParamsBlock', BIND_PARAMS);
     p.bindBlock('FrameBlock', BIND_FRAME);
-    this.setup(p);
+    this.#setup(p);
     return true;
   }
 
   get(): Program {
-    if (!this.program) throw new Error('[lumicells] program used before link');
-    return this.program;
+    if (!this.#program) throw new Error('[lumicells] program used before link');
+    return this.#program;
   }
 
   /** Binds the program and returns it. */
   use(): Program {
     const p = this.get();
-    bindProgram(this.ctx.gl, p.handle);
+    bindProgram(this.#ctx.gl, p.handle);
     return p;
   }
 
   dispose(): void {
-    this.pending?.dispose();
-    this.pending = null;
-    this.program?.dispose();
-    this.program = null;
+    this.#pending?.dispose();
+    this.#pending = null;
+    this.#program?.dispose();
+    this.#program = null;
   }
 }
 

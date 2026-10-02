@@ -164,33 +164,33 @@ export class PaletteLut {
   readonly bytes = new Uint8Array(LUT_SIZE * 2 * 4);
   /** Set when `bytes` changed; cleared by the consumer after upload. */
   dirty = true;
-  private readonly cur = new Float32Array(LUT_SIZE * 3);
-  private readonly tgt = new Float32Array(LUT_SIZE * 3);
-  private readonly srgb = srgbLut();
-  private animating = false;
-  private dur = 0;
+  readonly #cur = new Float32Array(LUT_SIZE * 3);
+  readonly #tgt = new Float32Array(LUT_SIZE * 3);
+  readonly #srgb = srgbLut();
+  #animating = false;
+  #dur = 0;
 
   constructor(palette: readonly string[], interpolation: LutInterpolation) {
     const b = bakedRamp(palette, interpolation);
-    this.tgt.set(b.oklab);
-    this.cur.set(b.oklab);
+    this.#tgt.set(b.oklab);
+    this.#cur.set(b.oklab);
     this.bytes.set(b.bytes);
   }
 
   get transitioning(): boolean {
-    return this.animating;
+    return this.#animating;
   }
 
   /** Re-bakes the target; the ramp moves there over `durationMs` (<= 0: instantly). */
   setTarget(palette: readonly string[], interpolation: LutInterpolation, durationMs: number): void {
     const b = bakedRamp(palette, interpolation);
-    this.tgt.set(b.oklab);
+    this.#tgt.set(b.oklab);
     if (durationMs > 0) {
-      this.dur = durationMs;
-      this.animating = true;
+      this.#dur = durationMs;
+      this.#animating = true;
     } else {
-      this.cur.set(b.oklab);
-      this.animating = false;
+      this.#cur.set(b.oklab);
+      this.#animating = false;
       this.bytes.set(b.bytes);
       this.dirty = true;
     }
@@ -198,11 +198,11 @@ export class PaletteLut {
 
   /** Advances the transition; returns true when the bytes changed. */
   update(dt: number): boolean {
-    if (!this.animating) return false;
-    const k = this.dur > 0 ? 1 - Math.exp((-dt * 5000) / this.dur) : 1;
+    if (!this.#animating) return false;
+    const k = this.#dur > 0 ? 1 - Math.exp((-dt * 5000) / this.#dur) : 1;
     let done = true;
-    const cur = this.cur;
-    const tgt = this.tgt;
+    const cur = this.#cur;
+    const tgt = this.#tgt;
     for (let i = 0; i < cur.length; i++) {
       const t = tgt[i] as number;
       let v = cur[i] as number;
@@ -211,21 +211,21 @@ export class PaletteLut {
       else done = false;
       cur[i] = v;
     }
-    if (done) this.animating = false;
-    this.encode();
+    if (done) this.#animating = false;
+    this.#encode();
     return true;
   }
 
   /** OKLab value of entry `x` (tests, debugging). */
   sampleOklab(x: number, out: Float64Array | number[]): void {
     const o = Math.max(0, Math.min(LUT_SIZE - 1, x | 0)) * 3;
-    out[0] = this.cur[o] as number;
-    out[1] = this.cur[o + 1] as number;
-    out[2] = this.cur[o + 2] as number;
+    out[0] = this.#cur[o] as number;
+    out[1] = this.#cur[o + 1] as number;
+    out[2] = this.#cur[o + 2] as number;
   }
 
-  private encode(): void {
-    encodeRamp(this.cur, this.bytes, this.srgb);
+  #encode(): void {
+    encodeRamp(this.#cur, this.bytes, this.#srgb);
     this.dirty = true;
   }
 }

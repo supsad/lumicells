@@ -57,50 +57,50 @@ export interface RenderSlotOptions {
 
 export class RenderSlot {
   readonly device: GpuDevice;
-  private readonly gl: WebGL2RenderingContext;
+  readonly #gl: WebGL2RenderingContext;
   private readonly res: CellTargets;
   private readonly stamp: StampTarget;
-  private paramsUbo: WebGLBuffer | null = null;
-  private frameUbo: WebGLBuffer | null = null;
+  #paramsUbo: WebGLBuffer | null = null;
+  #frameUbo: WebGLBuffer | null = null;
   private lutTex: WebGLTexture | null = null;
-  private liftBuffer: WebGLBuffer | null = null;
-  private readonly paramsFloats: number;
+  #liftBuffer: WebGLBuffer | null = null;
+  readonly #paramsFloats: number;
   /** FrameBlock upload ranges ([start, end) float pairs), reused every frame. */
-  private readonly ranges = new Int32Array(6);
+  readonly #ranges = new Int32Array(6);
   /** Filled by the surface every frame. */
-  private readonly target = createSurfaceFrame();
-  private readonly scissor = createRegion();
-  private paramsUploaded = false;
-  private lutUploaded = false;
+  readonly #target = createSurfaceFrame();
+  readonly #scissor = createRegion();
+  #paramsUploaded = false;
+  #lutUploaded = false;
   /** Automaton runs so far (mixed into every run's seed, see lifeRunSeed). */
-  private lifeRuns = 0;
+  #lifeRuns = 0;
   /** Handed to another instance (recycle()): the next draw restarts the automaton. */
-  private lifeFresh = false;
-  private disposed = false;
+  #lifeFresh = false;
+  #disposed = false;
   /** Field features the last prepared frame needs (see field-variants.ts). */
-  private needed = 0;
+  #needed = 0;
   /** The field variant the slot drew with last. */
-  private variant: FieldVariant | null = null;
+  #variant: FieldVariant | null = null;
 
   /** Use GpuDevice.createSlot(), which checks the params prelude. */
   constructor(device: GpuDevice, opts: RenderSlotOptions) {
     this.device = device;
     const gl = device.gl;
-    this.gl = gl;
-    this.paramsFloats = paramsFloatCount(device.declaredParamVec4, opts.paramsVec4Count);
+    this.#gl = gl;
+    this.#paramsFloats = paramsFloatCount(device.declaredParamVec4, opts.paramsVec4Count);
     // MRT targets start behind the pad output on Direct3D (see MRT_PAD in passes/shared.ts).
     this.res = new CellTargets(gl, device.caps, device.caps.d3d ? 1 : 0);
     this.stamp = new StampTarget(gl, device.caps.hdrFormat);
     try {
-      this.paramsUbo = gl.createBuffer();
-      this.frameUbo = gl.createBuffer();
-      if (!this.paramsUbo || !this.frameUbo) {
+      this.#paramsUbo = gl.createBuffer();
+      this.#frameUbo = gl.createBuffer();
+      if (!this.#paramsUbo || !this.#frameUbo) {
         throw new Error('[lumicells] cannot create uniform buffers');
       }
       // Generic binding points only: the indexed ones belong to the bound slot (see bind()).
-      gl.bindBuffer(gl.UNIFORM_BUFFER, this.paramsUbo);
-      gl.bufferData(gl.UNIFORM_BUFFER, this.paramsFloats * 4, gl.DYNAMIC_DRAW);
-      gl.bindBuffer(gl.UNIFORM_BUFFER, this.frameUbo);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.#paramsUbo);
+      gl.bufferData(gl.UNIFORM_BUFFER, this.#paramsFloats * 4, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.#frameUbo);
       gl.bufferData(gl.UNIFORM_BUFFER, FRAME_BYTES, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.UNIFORM_BUFFER, null);
       // A new texture binds to the active unit: the scratch one, never a unit another slot uses.
@@ -111,7 +111,7 @@ export class RenderSlot {
         format: { internalFormat: gl.SRGB8_ALPHA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE },
       });
       gl.bindTexture(gl.TEXTURE_2D, null);
-      this.liftBuffer = createLiftBuffer(gl);
+      this.#liftBuffer = createLiftBuffer(gl);
     } catch (err) {
       this.dispose();
       throw err;
@@ -121,21 +121,21 @@ export class RenderSlot {
   }
 
   /** Binds this slot's uniform buffers and textures to the device's fixed bindings. */
-  private bind(): void {
+  #bind(): void {
     const d = this.device;
     if (d.boundSlot === this) return;
     d.boundSlot = this;
-    const gl = this.gl;
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_PARAMS, this.paramsUbo);
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_FRAME, this.frameUbo);
+    const gl = this.#gl;
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_PARAMS, this.#paramsUbo);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_FRAME, this.#frameUbo);
     bindTexture(gl, UNIT_LUT, this.lutTex);
-    this.bindCellTargets();
+    this.#bindCellTargets();
     bindTexture(gl, UNIT_STAMP_A, this.stamp.texA);
     bindTexture(gl, UNIT_STAMP_B, this.stamp.texB);
   }
 
-  private bindCellTargets(): void {
-    const gl = this.gl;
+  #bindCellTargets(): void {
+    const gl = this.#gl;
     const res = this.res;
     bindTexture(gl, UNIT_FIELD_A, res.fieldA);
     bindTexture(gl, UNIT_FIELD_B, res.fieldB);
@@ -157,25 +157,25 @@ export class RenderSlot {
    */
   draw(f: FrameInputs, surface: Surface, timer: GpuTimer | null = null): boolean {
     const p = this.device.passes;
-    if (this.disposed || !p || this.device.isContextLost()) return false;
+    if (this.#disposed || !p || this.device.isContextLost()) return false;
     this.prepare(f);
     // The smallest ready field variant for this frame; until the slot has one, nothing is drawn.
     const device = this.device;
-    let variant = p.field.select(this.needed, this.variant, device.frameCount);
+    let variant = p.field.select(this.#needed, this.#variant, device.frameCount);
     if (!variant) {
       // Requested just now, or linked since the device last polled: one more step.
       device.progress();
-      variant = p.field.select(this.needed, this.variant, device.frameCount);
+      variant = p.field.select(this.#needed, this.#variant, device.frameCount);
       if (!variant) return false;
     }
     // Target allocation and canvas resizes are synchronous calls: not while a warm-up compiles.
-    if (gpuBusy() && this.needsSyncWork(f, surface, p)) return false;
-    this.variant = variant;
-    const target = this.target;
+    if (gpuBusy() && this.#needsSyncWork(f, surface, p)) return false;
+    this.#variant = variant;
+    const target = this.#target;
     if (!surface.begin(f.canvasWidth, f.canvasHeight, target)) return false;
-    const gl = this.gl;
+    const gl = this.#gl;
     const res = this.res;
-    this.bind();
+    this.#bind();
 
     // Cell textures: the visible grid plus the pad on every side.
     const W = Math.max(1, f.cols + 2 * f.pad);
@@ -183,10 +183,10 @@ export class RenderSlot {
     // New textures bind to the active unit while they are created: make that the scratch unit.
     gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
     const change = res.ensure(W, H);
-    if (change !== 0) this.bindCellTargets();
+    if (change !== 0) this.#bindCellTargets();
     p.bloom.setSizes(W, H, res.aw, res.ah, res.qw, res.qh, res.aqw, res.aqh);
 
-    this.upload(f);
+    this.#upload(f);
     timer?.begin();
 
     // Life: keep the automaton across grid changes (center-aligned remap), then step/reset.
@@ -194,7 +194,7 @@ export class RenderSlot {
     const life1 = res.life[1];
     if (!life0 || !life1) throw new Error('[lumicells] life targets missing');
     if (change === 2) {
-      this.lifeRuns = (this.lifeRuns + 1) >>> 0;
+      this.#lifeRuns = (this.#lifeRuns + 1) >>> 0;
       if (res.orphanLife && res.prevW > 0) {
         p.life.run(
           LIFE_MODE_REMAP,
@@ -205,23 +205,23 @@ export class RenderSlot {
           res.prevW,
           res.prevH,
           f,
-          this.lifeRuns,
+          this.#lifeRuns,
         );
       } else {
-        p.life.run(LIFE_MODE_RESET, life1.tex, life0.fb, W, H, W, H, f, this.lifeRuns);
+        p.life.run(LIFE_MODE_RESET, life1.tex, life0.fb, W, H, W, H, f, this.#lifeRuns);
       }
       res.lifeCur = 0;
       res.releaseOrphanLife();
     } else if (change === 1) {
-      this.lifeRun(p, LIFE_MODE_REMAP, f);
+      this.#lifeRun(p, LIFE_MODE_REMAP, f);
     }
-    if (f.lifeReset || this.lifeFresh) {
-      this.lifeFresh = false;
-      this.lifeRun(p, LIFE_MODE_RESET, f);
+    if (f.lifeReset || this.#lifeFresh) {
+      this.#lifeFresh = false;
+      this.#lifeRun(p, LIFE_MODE_RESET, f);
     } else {
       // Each step gets its own seed (the run counter is mixed in), so fresh births every step.
       const steps = Math.min(Math.max(f.lifeSteps | 0, 0), MAX_LIFE_STEPS);
-      for (let i = 0; i < steps; i++) this.lifeRun(p, LIFE_MODE_STEP, f);
+      for (let i = 0; i < steps; i++) this.#lifeRun(p, LIFE_MODE_STEP, f);
     }
 
     const lifeCur = res.life[res.lifeCur];
@@ -247,7 +247,7 @@ export class RenderSlot {
     const region = target.region;
     const clip = !coversFramebuffer(region, target.fbWidth, target.fbHeight);
     if (clip) {
-      const s = this.scissor;
+      const s = this.#scissor;
       scissorRegion(region, target.fbWidth, target.fbHeight, s);
       gl.enable(gl.SCISSOR_TEST);
       gl.scissor(s.x, s.y, s.width, s.height);
@@ -264,8 +264,8 @@ export class RenderSlot {
       f.opaque,
       glowOn,
     );
-    if (f.liftCount > 0 && dbg === 0 && this.liftBuffer) {
-      p.lift.run(this.liftBuffer, f.lifts, f.liftCount, region, W, H, res.aw, res.ah, f.opaque);
+    if (f.liftCount > 0 && dbg === 0 && this.#liftBuffer) {
+      p.lift.run(this.#liftBuffer, f.lifts, f.liftCount, region, W, H, res.aw, res.ah, f.opaque);
     }
     if (clip) gl.disable(gl.SCISSOR_TEST);
     timer?.end();
@@ -279,13 +279,13 @@ export class RenderSlot {
    * Allocation-free.
    */
   prepare(f: FrameInputs): boolean {
-    if (this.disposed) return false;
+    if (this.#disposed) return false;
     const src = this.device.features;
-    this.needed = neededFeatures(f.params, f.frame, src);
+    this.#needed = neededFeatures(f.params, f.frame, src);
     // Plus the features tweens are about to turn on (held until they can be drawn).
     const pending = f.fieldPending ?? 0;
-    this.device.requestField(wantedFeatures(f.params, src, this.needed) | pending);
-    return this.device.passes?.field.covers(this.needed) ?? false;
+    this.device.requestField(wantedFeatures(f.params, src, this.#needed) | pending);
+    return this.device.passes?.field.covers(this.#needed) ?? false;
   }
 
   /**
@@ -299,12 +299,12 @@ export class RenderSlot {
   fieldReady(pending: number): boolean {
     const d = this.device;
     const p = d.passes;
-    if (this.disposed || !p || !this.variant || d.error || d.isContextLost()) return true;
-    return p.field.covers(this.needed | pending);
+    if (this.#disposed || !p || !this.#variant || d.error || d.isContextLost()) return true;
+    return p.field.covers(this.#needed | pending);
   }
 
   /** Whether drawing `f` would allocate targets or resize the surface's canvas. */
-  private needsSyncWork(f: FrameInputs, surface: Surface, p: DevicePasses): boolean {
+  #needsSyncWork(f: FrameInputs, surface: Surface, p: DevicePasses): boolean {
     const W = Math.max(1, f.cols + 2 * f.pad);
     const H = Math.max(1, f.rows + 2 * f.pad);
     return (
@@ -314,12 +314,12 @@ export class RenderSlot {
     );
   }
 
-  private lifeRun(p: DevicePasses, mode: number, f: FrameInputs): void {
+  #lifeRun(p: DevicePasses, mode: number, f: FrameInputs): void {
     const res = this.res;
     const src = res.life[res.lifeCur];
     const dst = res.life[1 - res.lifeCur];
     if (!src || !dst) return;
-    this.lifeRuns = (this.lifeRuns + 1) >>> 0;
+    this.#lifeRuns = (this.#lifeRuns + 1) >>> 0;
     p.life.run(
       mode,
       src.tex,
@@ -329,32 +329,32 @@ export class RenderSlot {
       res.prevW || res.w,
       res.prevH || res.h,
       f,
-      this.lifeRuns,
+      this.#lifeRuns,
     );
     res.lifeCur = 1 - res.lifeCur;
   }
 
-  private upload(f: FrameInputs): void {
-    const gl = this.gl;
-    if ((f.paramsDirty || !this.paramsUploaded) && this.paramsUbo) {
-      gl.bindBuffer(gl.UNIFORM_BUFFER, this.paramsUbo);
+  #upload(f: FrameInputs): void {
+    const gl = this.#gl;
+    if ((f.paramsDirty || !this.#paramsUploaded) && this.#paramsUbo) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.#paramsUbo);
       gl.bufferSubData(
         gl.UNIFORM_BUFFER,
         0,
         f.params,
         0,
-        Math.min(f.params.length, this.paramsFloats),
+        Math.min(f.params.length, this.#paramsFloats),
       );
-      this.paramsUploaded = true;
+      this.#paramsUploaded = true;
       // The cell stamp bakes grid / glow params: re-bake it with the new values.
       this.stamp.dirty = true;
     }
-    if (this.frameUbo) {
+    if (this.#frameUbo) {
       // Only the header and the records the shaders read this frame (up to three ranges).
       const fr = f.frame;
-      const r = this.ranges;
+      const r = this.#ranges;
       const n = frameUploadRanges(fr, r);
-      gl.bindBuffer(gl.UNIFORM_BUFFER, this.frameUbo);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.#frameUbo);
       for (let i = 0; i < n; i++) {
         const start = r[i * 2] as number;
         const end = Math.min(fr.length, r[i * 2 + 1] as number);
@@ -362,7 +362,7 @@ export class RenderSlot {
       }
     }
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
-    if ((f.lutDirty || !this.lutUploaded) && this.lutTex && f.lut.length >= LUT_BYTES) {
+    if ((f.lutDirty || !this.#lutUploaded) && this.lutTex && f.lut.length >= LUT_BYTES) {
       gl.activeTexture(gl.TEXTURE0 + UNIT_LUT);
       gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -377,7 +377,7 @@ export class RenderSlot {
         gl.UNSIGNED_BYTE,
         f.lut,
       );
-      this.lutUploaded = true;
+      this.#lutUploaded = true;
     }
   }
 
@@ -386,9 +386,9 @@ export class RenderSlot {
    * a: fieldA decoded (rgb color, intensity) as floats; b: fieldB bytes. Row 0 = texel row 0.
    */
   readField(): { w: number; h: number; a: Float32Array; b: Uint8Array } | null {
-    const gl = this.gl;
+    const gl = this.#gl;
     const res = this.res;
-    if (this.disposed || !res.fieldFb || this.device.isContextLost()) return null;
+    if (this.#disposed || !res.fieldFb || this.device.isContextLost()) return null;
     const { w, h } = res;
     const a = new Float32Array(w * h * 4);
     const b = new Uint8Array(w * h * 4);
@@ -419,7 +419,7 @@ export class RenderSlot {
    */
   holds(cols: number, rows: number, pad: number): boolean {
     return (
-      !this.disposed && this.res.holds(Math.max(1, cols + 2 * pad), Math.max(1, rows + 2 * pad))
+      !this.#disposed && this.res.holds(Math.max(1, cols + 2 * pad), Math.max(1, rows + 2 * pad))
     );
   }
 
@@ -433,34 +433,34 @@ export class RenderSlot {
    * params and the LUT, re-bakes the cell stamp and restarts the automaton, as on a new slot.
    */
   recycle(): void {
-    this.paramsUploaded = false;
-    this.lutUploaded = false;
+    this.#paramsUploaded = false;
+    this.#lutUploaded = false;
     this.stamp.dirty = true;
-    this.lifeFresh = true;
+    this.#lifeFresh = true;
   }
 
   /** Frees the slot's GL objects (skipped on a lost context, where they are already gone). */
   dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+    if (this.#disposed) return;
+    this.#disposed = true;
     const d = this.device;
-    d.releaseSlot(this, this.liftBuffer);
+    d.releaseSlot(this, this.#liftBuffer);
     if (!d.isContextLost()) {
-      const gl = this.gl;
+      const gl = this.#gl;
       try {
         this.res.dispose();
         this.stamp.free();
-        gl.deleteBuffer(this.paramsUbo);
-        gl.deleteBuffer(this.frameUbo);
-        gl.deleteBuffer(this.liftBuffer);
+        gl.deleteBuffer(this.#paramsUbo);
+        gl.deleteBuffer(this.#frameUbo);
+        gl.deleteBuffer(this.#liftBuffer);
         gl.deleteTexture(this.lutTex);
       } catch (err) {
         console.warn('[lumicells] render slot dispose failed', err);
       }
     }
-    this.paramsUbo = null;
-    this.frameUbo = null;
-    this.liftBuffer = null;
+    this.#paramsUbo = null;
+    this.#frameUbo = null;
+    this.#liftBuffer = null;
     this.lutTex = null;
   }
 }

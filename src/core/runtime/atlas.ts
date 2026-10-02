@@ -64,9 +64,9 @@ function byShelf(a: AtlasItem, b: AtlasItem): number {
  * First-fit shelf packer. Reuses its shelf arrays between calls; `pack` sorts the items in place.
  */
 export class ShelfPacker {
-  private readonly shelfY: number[] = [];
-  private readonly shelfH: number[] = [];
-  private readonly shelfUsed: number[] = [];
+  readonly #shelfY: number[] = [];
+  readonly #shelfH: number[] = [];
+  readonly #shelfUsed: number[] = [];
   /** Widest shelf of the last packing, px. */
   usedWidth = 0;
   /** Total shelf height of the last packing, px. */
@@ -78,9 +78,9 @@ export class ShelfPacker {
    */
   pack(items: AtlasItem[], width: number): boolean {
     items.sort(byShelf);
-    const sy = this.shelfY;
-    const sh = this.shelfH;
-    const su = this.shelfUsed;
+    const sy = this.#shelfY;
+    const sh = this.#shelfH;
+    const su = this.#shelfUsed;
     let shelves = 0;
     let height = 0;
     let used = 0;
@@ -158,7 +158,7 @@ export class AtlasPlanner {
   naturalArea = 0;
   /** False when the last layout could not place every item (only past the drawable limit). */
   fits = true;
-  private readonly packer = new ShelfPacker();
+  readonly #packer = new ShelfPacker();
 
   get scale(): number {
     return scaleForStep(this.step);
@@ -170,8 +170,8 @@ export class AtlasPlanner {
    */
   planScale(items: AtlasItem[], budgetPx: number, maxSide: number): boolean {
     if (items.length === 0) return false;
-    this.packer.pack(items, idealWidth(items, maxSide));
-    const p = this.packer;
+    this.#packer.pack(items, idealWidth(items, maxSide));
+    const p = this.#packer;
     const area = Math.max(1, p.usedWidth) * p.usedHeight;
     this.naturalArea = area;
     const need = stepFor(area, budgetPx, p.usedHeight, maxSide);
@@ -199,7 +199,7 @@ export class AtlasPlanner {
    * past the drawable limit) get x = y = -1 and `fits` turns false.
    */
   layout(items: AtlasItem[], maxSide: number): boolean {
-    const p = this.packer;
+    const p = this.#packer;
     let widest = 1;
     for (let i = 0; i < items.length; i++) {
       const w = (items[i] as AtlasItem).w;

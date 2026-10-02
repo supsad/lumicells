@@ -46,10 +46,14 @@ export interface Surface {
 export class OwnSurface implements Surface {
   readonly framebuffer = null;
 
-  constructor(private readonly device: GpuDevice) {}
+  readonly #device: GpuDevice;
+
+  constructor(device: GpuDevice) {
+    this.#device = device;
+  }
 
   resizes(width: number, height: number): boolean {
-    const canvas = this.device.canvas;
+    const canvas = this.#device.canvas;
     return (
       canvas.width !== Math.max(1, Math.floor(width)) ||
       canvas.height !== Math.max(1, Math.floor(height))
@@ -57,8 +61,8 @@ export class OwnSurface implements Surface {
   }
 
   begin(width: number, height: number, out: SurfaceFrame): boolean {
-    const canvas = this.device.canvas;
-    const gl = this.device.gl;
+    const canvas = this.#device.canvas;
+    const gl = this.#device.gl;
     const cw = Math.max(1, Math.floor(width));
     const ch = Math.max(1, Math.floor(height));
     if (canvas.width !== cw) canvas.width = cw;
@@ -81,11 +85,15 @@ export class OwnSurface implements Surface {
 export class RegionSurface implements Surface {
   readonly framebuffer = null;
 
+  readonly #device: GpuDevice;
+
   constructor(
-    private readonly device: GpuDevice,
+    device: GpuDevice,
     public left = 0,
     public top = 0,
-  ) {}
+  ) {
+    this.#device = device;
+  }
 
   /** The canvas is sized by whoever lays the regions out. */
   resizes(): boolean {
@@ -98,7 +106,7 @@ export class RegionSurface implements Surface {
   }
 
   begin(width: number, height: number, out: SurfaceFrame): boolean {
-    const gl = this.device.gl;
+    const gl = this.#device.gl;
     const fw = gl.drawingBufferWidth;
     const fh = gl.drawingBufferHeight;
     placeRegion(out.region, this.left, this.top, width, height, fh);

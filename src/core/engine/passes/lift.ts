@@ -175,23 +175,26 @@ export function createLiftBuffer(gl: WebGL2RenderingContext): WebGLBuffer {
 }
 
 export class LiftPass {
-  private readonly prog: LazyProgram;
-  private readonly vao: WebGLVertexArrayObject;
+  readonly #prog: LazyProgram;
+  readonly #vao: WebGLVertexArrayObject;
   /** Instance buffer the vertex array currently reads (null: none yet). */
-  private source: WebGLBuffer | null = null;
+  #source: WebGLBuffer | null = null;
   /** Last uploaded uniforms (per program, so they stay valid whichever slot draws next). */
-  private readonly last = new Float32Array(9).fill(Number.NaN);
+  readonly #last = new Float32Array(9).fill(Number.NaN);
 
-  constructor(private readonly ctx: PassContext) {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
     const gl = ctx.gl;
-    this.prog = new LazyProgram(ctx, liftVs(ctx.header), liftFs(ctx.header), 'lift', (p) => {
+    this.#prog = new LazyProgram(ctx, liftVs(ctx.header), liftFs(ctx.header), 'lift', (p) => {
       setSampler(gl, p, 'u_fieldA', UNIT_FIELD_A);
       setSampler(gl, p, 'u_fieldB', UNIT_FIELD_B);
       setSampler(gl, p, 'u_lut', UNIT_LUT);
     });
     const vao = gl.createVertexArray();
     if (!vao) throw new Error('[lumicells] cannot create lift vertex array');
-    this.vao = vao;
+    this.#vao = vao;
     gl.bindVertexArray(vao);
     for (let i = 0; i < 3; i++) {
       gl.enableVertexAttribArray(i);
@@ -201,7 +204,7 @@ export class LiftPass {
   }
 
   poll(): boolean {
-    return this.prog.poll();
+    return this.#prog.poll();
   }
 
   /**
@@ -210,12 +213,12 @@ export class LiftPass {
    * program's vertex input layout and its flat-varying geometry shader on the first draw.
    */
   warm(targets: WarmTargets, buffer: WebGLBuffer): void {
-    const gl = this.ctx.gl;
-    this.prog.use();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer([this.ctx.caps.rgba8]));
+    const gl = this.#ctx.gl;
+    this.#prog.use();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer([this.#ctx.caps.rgba8]));
     gl.viewport(0, 0, 1, 1);
-    gl.bindVertexArray(this.vao);
-    this.attach(buffer);
+    gl.bindVertexArray(this.#vao);
+    this.#attach(buffer);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
@@ -224,19 +227,19 @@ export class LiftPass {
   }
 
   /** Points the vertex array at `buffer` (only when it changed). The VAO must be bound. */
-  private attach(buffer: WebGLBuffer): void {
-    if (this.source === buffer) return;
-    const gl = this.ctx.gl;
+  #attach(buffer: WebGLBuffer): void {
+    if (this.#source === buffer) return;
+    const gl = this.#ctx.gl;
     const stride = LIFT_STRIDE * 4;
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     for (let i = 0; i < 3; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, stride, i * 16);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    this.source = buffer;
+    this.#source = buffer;
   }
 
   /** A slot's buffer is being deleted: never keep pointing at it. */
   release(buffer: WebGLBuffer): void {
-    if (this.source === buffer) this.source = null;
+    if (this.#source === buffer) this.#source = null;
   }
 
   /**
@@ -256,9 +259,9 @@ export class LiftPass {
   ): void {
     const n = Math.min(count, MAX_LIFTS, Math.floor(lifts.length / LIFT_STRIDE));
     if (n <= 0) return;
-    const gl = this.ctx.gl;
-    const p = this.prog.use();
-    const l = this.last;
+    const gl = this.#ctx.gl;
+    const p = this.#prog.use();
+    const l = this.#last;
     if (l[0] !== w || l[1] !== h || l[2] !== allocW || l[3] !== allocH) {
       l[0] = w;
       l[1] = h;
@@ -282,8 +285,8 @@ export class LiftPass {
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, lifts, 0, n * LIFT_STRIDE);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    gl.bindVertexArray(this.vao);
-    this.attach(buffer);
+    gl.bindVertexArray(this.#vao);
+    this.#attach(buffer);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
@@ -292,9 +295,9 @@ export class LiftPass {
   }
 
   dispose(): void {
-    const gl = this.ctx.gl;
-    this.prog.dispose();
-    gl.deleteVertexArray(this.vao);
-    this.source = null;
+    const gl = this.#ctx.gl;
+    this.#prog.dispose();
+    gl.deleteVertexArray(this.#vao);
+    this.#source = null;
   }
 }

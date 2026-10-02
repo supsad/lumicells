@@ -167,13 +167,16 @@ void main() {
 }
 
 export class CompositePass {
-  private readonly prog: LazyProgram;
+  readonly #prog: LazyProgram;
   /** Last uploaded uniforms (per program, so they stay valid whichever slot draws next). */
-  private readonly last = new Float32Array(14).fill(Number.NaN);
+  readonly #last = new Float32Array(14).fill(Number.NaN);
 
-  constructor(private readonly ctx: PassContext) {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
     const gl = ctx.gl;
-    this.prog = new LazyProgram(ctx, FULLSCREEN_VS, compositeFs(ctx.header), 'composite', (p) => {
+    this.#prog = new LazyProgram(ctx, FULLSCREEN_VS, compositeFs(ctx.header), 'composite', (p) => {
       setSampler(gl, p, 'u_fieldA', UNIT_FIELD_A);
       setSampler(gl, p, 'u_fieldB', UNIT_FIELD_B);
       setSampler(gl, p, 'u_glow', UNIT_GLOW);
@@ -184,7 +187,7 @@ export class CompositePass {
   }
 
   poll(): boolean {
-    return this.prog.poll();
+    return this.#prog.poll();
   }
 
   /**
@@ -192,7 +195,7 @@ export class CompositePass {
    * scratch RGBA8 target has the same layout.
    */
   warm(targets: WarmTargets): void {
-    warmDraw(this.ctx, this.prog, targets.framebuffer([this.ctx.caps.rgba8]));
+    warmDraw(this.#ctx, this.#prog, targets.framebuffer([this.#ctx.caps.rgba8]));
   }
 
   /**
@@ -211,9 +214,9 @@ export class CompositePass {
     opaque: boolean,
     glow: boolean,
   ): void {
-    const gl = this.ctx.gl;
-    const p = this.prog.use();
-    const l = this.last;
+    const gl = this.#ctx.gl;
+    const p = this.#prog.use();
+    const l = this.#last;
     if (l[0] !== w || l[1] !== h || l[2] !== allocW || l[3] !== allocH) {
       l[0] = w;
       l[1] = h;
@@ -247,6 +250,6 @@ export class CompositePass {
   }
 
   dispose(): void {
-    this.prog.dispose();
+    this.#prog.dispose();
   }
 }

@@ -70,33 +70,33 @@ export class CellTargets {
   /** Previous current-life texture kept alive across a reallocation until remapped. */
   orphanLife: Target | null = null;
 
+  readonly #gl: WebGL2RenderingContext;
+  readonly #caps: GLCaps;
+
   constructor(
-    private readonly gl: WebGL2RenderingContext,
-    private readonly caps: GLCaps,
+    gl: WebGL2RenderingContext,
+    caps: GLCaps,
     /** First color attachment of the field framebuffer (1 behind the MRT_PAD output). */
     readonly fieldFirst = 0,
-  ) {}
+  ) {
+    this.#gl = gl;
+    this.#caps = caps;
+  }
 
-  private target(
-    w: number,
-    h: number,
-    hdr: boolean,
-    filter: GLenum,
-    format?: TextureFormat,
-  ): Target {
-    const gl = this.gl;
+  #target(w: number, h: number, hdr: boolean, filter: GLenum, format?: TextureFormat): Target {
+    const gl = this.#gl;
     const tex = createTargetTexture(gl, w, h, {
       filter,
-      format: format ?? (hdr ? this.caps.hdrFormat : this.caps.rgba8),
+      format: format ?? (hdr ? this.#caps.hdrFormat : this.#caps.rgba8),
     });
     const fb = createMrtFramebuffer(gl, [tex]);
     return { tex, fb };
   }
 
-  private free(t: Target | null): void {
+  #free(t: Target | null): void {
     if (!t) return;
-    this.gl.deleteFramebuffer(t.fb);
-    this.gl.deleteTexture(t.tex);
+    this.#gl.deleteFramebuffer(t.fb);
+    this.#gl.deleteTexture(t.tex);
   }
 
   /** Whether `w x h` cells fit the current allocation (ensure() would not reallocate). */
@@ -117,7 +117,7 @@ export class CellTargets {
    */
   ensure(w: number, h: number): 0 | 1 | 2 {
     if (w === this.w && h === this.h && this.fieldFb) return 0;
-    const gl = this.gl;
+    const gl = this.#gl;
     this.prevW = this.w;
     this.prevH = this.h;
     const qw = Math.ceil(w / 4);
@@ -133,27 +133,30 @@ export class CellTargets {
       const aw = bucketSize(w, CELL_STEP);
       const ah = bucketSize(h, CELL_STEP);
       // Keep the current life state for remapping; free everything else.
-      this.free(this.orphanLife);
+      this.#free(this.orphanLife);
       this.orphanLife = this.life[this.lifeCur] ?? null;
-      this.free(this.life[1 - this.lifeCur] ?? null);
-      this.freeCellTargets();
-      this.fieldA = createTargetTexture(gl, aw, ah, { format: this.caps.hdrFormat });
-      this.fieldB = createTargetTexture(gl, aw, ah, { format: this.caps.rgba8 });
-      this.bloom = this.target(aw, ah, true, gl.LINEAR);
+      this.#free(this.life[1 - this.lifeCur] ?? null);
+      this.#freeCellTargets();
+      this.fieldA = createTargetTexture(gl, aw, ah, { format: this.#caps.hdrFormat });
+      this.fieldB = createTargetTexture(gl, aw, ah, { format: this.#caps.rgba8 });
+      this.bloom = this.#target(aw, ah, true, gl.LINEAR);
       this.fieldFb = createMrtFramebuffer(
         gl,
         [this.fieldA, this.fieldB, this.bloom.tex],
         this.fieldFirst,
       );
-      this.bloomTmp = this.target(aw, ah, true, gl.LINEAR);
-      this.glow = this.target(aw, ah, true, gl.LINEAR, this.caps.glowFormat);
-      const stageFormat = this.caps.stageFormat;
+      this.bloomTmp = this.#target(aw, ah, true, gl.LINEAR);
+      this.glow = this.#target(aw, ah, true, gl.LINEAR, this.#caps.glowFormat);
+      const stageFormat = this.#caps.stageFormat;
       if (stageFormat) {
-        this.stage = this.target(aw, ah, true, gl.NEAREST, stageFormat);
-        this.restColor = this.target(aw, ah, true, gl.NEAREST, stageFormat);
-        this.restScalar = this.target(aw, ah, true, gl.NEAREST, stageFormat);
+        this.stage = this.#target(aw, ah, true, gl.NEAREST, stageFormat);
+        this.restColor = this.#target(aw, ah, true, gl.NEAREST, stageFormat);
+        this.restScalar = this.#target(aw, ah, true, gl.NEAREST, stageFormat);
       }
-      this.life = [this.target(aw, ah, false, gl.NEAREST), this.target(aw, ah, false, gl.NEAREST)];
+      this.life = [
+        this.#target(aw, ah, false, gl.NEAREST),
+        this.#target(aw, ah, false, gl.NEAREST),
+      ];
       this.lifeCur = 0;
       this.aw = aw;
       this.ah = ah;
@@ -165,10 +168,10 @@ export class CellTargets {
     ) {
       const aqw = bucketSize(qw, QUARTER_STEP);
       const aqh = bucketSize(qh, QUARTER_STEP);
-      this.free(this.haze);
-      this.free(this.hazeTmp);
-      this.haze = this.target(aqw, aqh, true, gl.LINEAR);
-      this.hazeTmp = this.target(aqw, aqh, true, gl.LINEAR);
+      this.#free(this.haze);
+      this.#free(this.hazeTmp);
+      this.haze = this.#target(aqw, aqh, true, gl.LINEAR);
+      this.hazeTmp = this.#target(aqw, aqh, true, gl.LINEAR);
       this.aqw = aqw;
       this.aqh = aqh;
     }
@@ -180,24 +183,24 @@ export class CellTargets {
   }
 
   releaseOrphanLife(): void {
-    this.free(this.orphanLife);
+    this.#free(this.orphanLife);
     this.orphanLife = null;
   }
 
-  private freeCellTargets(): void {
-    const gl = this.gl;
+  #freeCellTargets(): void {
+    const gl = this.#gl;
     gl.deleteFramebuffer(this.fieldFb);
     gl.deleteTexture(this.fieldA);
     gl.deleteTexture(this.fieldB);
     this.fieldFb = null;
     this.fieldA = null;
     this.fieldB = null;
-    this.free(this.bloom);
-    this.free(this.bloomTmp);
-    this.free(this.glow);
-    this.free(this.stage);
-    this.free(this.restColor);
-    this.free(this.restScalar);
+    this.#free(this.bloom);
+    this.#free(this.bloomTmp);
+    this.#free(this.glow);
+    this.#free(this.stage);
+    this.#free(this.restColor);
+    this.#free(this.restScalar);
     this.bloom = null;
     this.bloomTmp = null;
     this.glow = null;
@@ -207,12 +210,12 @@ export class CellTargets {
   }
 
   dispose(): void {
-    this.freeCellTargets();
-    for (const t of this.life) this.free(t);
+    this.#freeCellTargets();
+    for (const t of this.life) this.#free(t);
     this.life = [];
     this.releaseOrphanLife();
-    this.free(this.haze);
-    this.free(this.hazeTmp);
+    this.#free(this.haze);
+    this.#free(this.hazeTmp);
     this.haze = null;
     this.hazeTmp = null;
     this.w = this.h = this.aw = this.ah = 0;

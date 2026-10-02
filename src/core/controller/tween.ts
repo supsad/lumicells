@@ -154,27 +154,27 @@ export class ParamStore {
   readonly params: Float32Array;
   /** Set whenever a ParamsBlock slot is written; cleared by the consumer. */
   dirty = true;
-  private readonly entries: readonly ParamEntry[];
-  private readonly ids: ReadonlyMap<string, number>;
-  private readonly cur: Float64Array;
-  private readonly tgt: Float64Array;
+  readonly #entries: readonly ParamEntry[];
+  readonly #ids: ReadonlyMap<string, number>;
+  readonly #cur: Float64Array;
+  readonly #tgt: Float64Array;
   /** Per entry: effective scalar (numbers, angles in degrees, enum index, bool 0/1). */
-  private readonly eff: Float64Array;
+  readonly #eff: Float64Array;
   /** Per entry: enum index (current) and previous index (crossfade source). */
-  private readonly index: Int32Array;
-  private readonly prev: Int32Array;
+  readonly #index: Int32Array;
+  readonly #prev: Int32Array;
   /** Per entry: tween duration, ms, and whether it is tweening (1) right now. */
-  private readonly dur: Float64Array;
-  private readonly on: Uint8Array;
+  readonly #dur: Float64Array;
+  readonly #on: Uint8Array;
   /** Per entry: its tween is held where it is (1, see hold()). */
-  private readonly held: Uint8Array;
+  readonly #held: Uint8Array;
   /** Per entry: its modulators (a sparse array: absent without any). */
-  private readonly mods: (Modulator[] | undefined)[] = [];
-  private readonly active: Int32Array;
-  private activeCount = 0;
-  private modIds: Int32Array;
-  private modCount = 0;
-  private readonly rgb = new Float64Array(3);
+  readonly #mods: (Modulator[] | undefined)[] = [];
+  readonly #active: Int32Array;
+  #activeCount = 0;
+  #modIds: Int32Array;
+  #modCount = 0;
+  readonly #rgb = new Float64Array(3);
 
   /**
    * `from`: a snapshot taken from a store reset from the same `config` (see StoreSnapshot); the
@@ -186,34 +186,34 @@ export class ParamStore {
     from?: StoreSnapshot,
   ) {
     const t = templateOf(layout);
-    this.entries = t.entries;
-    this.ids = t.ids;
+    this.#entries = t.entries;
+    this.#ids = t.ids;
     const n = t.entries.length;
     this.params = new Float32Array(layout.floatCount);
-    this.cur = new Float64Array(t.comps);
-    this.tgt = new Float64Array(t.comps);
-    this.eff = new Float64Array(n);
-    this.index = new Int32Array(n);
-    this.prev = new Int32Array(n);
-    this.dur = new Float64Array(n);
-    this.on = new Uint8Array(n);
-    this.held = new Uint8Array(n);
-    this.active = new Int32Array(n);
-    this.modIds = new Int32Array(8);
-    if (from) this.restore(from);
+    this.#cur = new Float64Array(t.comps);
+    this.#tgt = new Float64Array(t.comps);
+    this.#eff = new Float64Array(n);
+    this.#index = new Int32Array(n);
+    this.#prev = new Int32Array(n);
+    this.#dur = new Float64Array(n);
+    this.#on = new Uint8Array(n);
+    this.#held = new Uint8Array(n);
+    this.#active = new Int32Array(n);
+    this.#modIds = new Int32Array(8);
+    if (from) this.#restore(from);
     else this.reset(config);
   }
 
   /** Entry id for a path (resolve once, then read with `num(id)` every frame). */
   id(path: ParamPath): number {
-    const id = this.ids.get(path);
+    const id = this.#ids.get(path);
     if (id === undefined) throw new Error(`[lumicells] unknown parameter '${path}'`);
     return id;
   }
 
   entry(path: string): ParamEntry | undefined {
-    const id = this.ids.get(path);
-    return id === undefined ? undefined : this.entries[id];
+    const id = this.#ids.get(path);
+    return id === undefined ? undefined : this.#entries[id];
   }
 
   /**
@@ -223,33 +223,33 @@ export class ParamStore {
   snapshot(): StoreSnapshot {
     return {
       params: this.params.slice(),
-      cur: this.cur.slice(),
-      eff: this.eff.slice(),
-      index: this.index.slice(),
-      prev: this.prev.slice(),
+      cur: this.#cur.slice(),
+      eff: this.#eff.slice(),
+      index: this.#index.slice(),
+      prev: this.#prev.slice(),
     };
   }
 
   /** Starts from a snapshot (what reset() from the snapshot's config would have left). */
-  private restore(s: StoreSnapshot): void {
+  #restore(s: StoreSnapshot): void {
     this.params.set(s.params);
-    this.cur.set(s.cur);
-    this.tgt.set(s.cur);
-    this.eff.set(s.eff);
-    this.index.set(s.index);
-    this.prev.set(s.prev);
-    this.activeCount = 0;
+    this.#cur.set(s.cur);
+    this.#tgt.set(s.cur);
+    this.#eff.set(s.eff);
+    this.#index.set(s.index);
+    this.#prev.set(s.prev);
+    this.#activeCount = 0;
     this.dirty = true;
   }
 
   /** Snaps every value to `config` (no tweens) and rewrites the whole ParamsBlock. */
   reset(config: LumiCellsConfig): void {
-    this.activeCount = 0;
-    for (const e of this.entries) {
-      this.on[e.id] = 0;
-      this.snapTo(e, getPath(config, e.path));
-      if (e.kind === K_XFADE) this.prev[e.id] = this.index[e.id] as number;
-      this.refresh(e);
+    this.#activeCount = 0;
+    for (const e of this.#entries) {
+      this.#on[e.id] = 0;
+      this.#snapTo(e, getPath(config, e.path));
+      if (e.kind === K_XFADE) this.#prev[e.id] = this.#index[e.id] as number;
+      this.#refresh(e);
     }
     this.dirty = true;
   }
@@ -263,65 +263,67 @@ export class ParamStore {
     const id = e.id;
     if (!e.tweenable || !(durationMs > 0)) {
       if (e.kind === K_XFADE) {
-        const idx = this.enumIndex(e, value);
-        this.index[id] = idx;
-        this.prev[id] = idx;
-        this.cur[e.off] = 1;
-        this.tgt[e.off] = 1;
+        const idx = this.#enumIndex(e, value);
+        this.#index[id] = idx;
+        this.#prev[id] = idx;
+        this.#cur[e.off] = 1;
+        this.#tgt[e.off] = 1;
       } else {
-        this.snapTo(e, value);
+        this.#snapTo(e, value);
       }
-      if (this.on[id]) this.deactivate(e);
-      this.refresh(e);
+      if (this.#on[id]) this.#deactivate(e);
+      this.#refresh(e);
       return;
     }
     const o = e.off;
     switch (e.kind) {
       case K_NUM:
-        this.tgt[o] = value as number;
+        this.#tgt[o] = value as number;
         break;
       case K_ANGLE: {
         // Unwrapped target nearest to the current value: the tween takes the short way round.
         const v = value as number;
-        this.tgt[o] = e.fullCircle ? (this.cur[o] ?? 0) + shortestArcDeg(this.cur[o] ?? 0, v) : v;
+        this.#tgt[o] = e.fullCircle
+          ? (this.#cur[o] ?? 0) + shortestArcDeg(this.#cur[o] ?? 0, v)
+          : v;
         break;
       }
       case K_VEC2: {
         const v = value as readonly number[];
-        this.tgt[o] = v[0] ?? 0;
-        this.tgt[o + 1] = v[1] ?? 0;
+        this.#tgt[o] = v[0] ?? 0;
+        this.#tgt[o + 1] = v[1] ?? 0;
         break;
       }
       case K_COLOR:
-        hexToOklabInto(value as string, this.tgt, o);
+        hexToOklabInto(value as string, this.#tgt, o);
         break;
       case K_XFADE: {
-        const idx = this.enumIndex(e, value);
-        const curIdx = this.index[id] as number;
+        const idx = this.#enumIndex(e, value);
+        const curIdx = this.#index[id] as number;
         if (idx === curIdx) return;
-        const mix = this.cur[o] ?? 1;
-        if (idx === this.prev[id] && mix < 1) {
+        const mix = this.#cur[o] ?? 1;
+        if (idx === this.#prev[id] && mix < 1) {
           // Reversal mid-transition: swap the slots and mirror the mix so the blend on screen
           // stays exactly where it is and fades back from there.
-          this.prev[id] = curIdx;
-          this.index[id] = idx;
-          this.cur[o] = 1 - mix;
+          this.#prev[id] = curIdx;
+          this.#index[id] = idx;
+          this.#cur[o] = 1 - mix;
         } else {
           // A third value: crossfade from whatever dominates the screen right now (two slots
           // cannot hold a three-way blend).
-          if (mix >= 0.5) this.prev[id] = curIdx;
-          this.index[id] = idx;
-          this.cur[o] = 0;
+          if (mix >= 0.5) this.#prev[id] = curIdx;
+          this.#index[id] = idx;
+          this.#cur[o] = 0;
         }
-        this.tgt[o] = 1;
-        this.refresh(e);
+        this.#tgt[o] = 1;
+        this.#refresh(e);
         break;
       }
     }
-    this.dur[id] = durationMs;
-    if (!this.on[id]) {
-      this.on[id] = 1;
-      this.active[this.activeCount++] = id;
+    this.#dur[id] = durationMs;
+    if (!this.#on[id]) {
+      this.#on[id] = 1;
+      this.#active[this.#activeCount++] = id;
     }
   }
 
@@ -329,29 +331,31 @@ export class ParamStore {
   update(dt: number): boolean {
     const before = this.dirty;
     this.dirty = false;
-    const entries = this.entries;
+    const entries = this.#entries;
     let w = 0;
-    for (let i = 0; i < this.activeCount; i++) {
-      const id = this.active[i] as number;
-      if (this.held[id]) {
+    for (let i = 0; i < this.#activeCount; i++) {
+      const id = this.#active[i] as number;
+      if (this.#held[id]) {
         // Held: still tweening (animating stays true), not moving.
-        this.active[w++] = id;
+        this.#active[w++] = id;
         continue;
       }
       const e = entries[id] as ParamEntry;
-      const done = this.step(e, dt);
-      if (!this.mods[id]) this.refresh(e);
-      if (done) this.on[id] = 0;
-      else this.active[w++] = id;
+      const done = this.#step(e, dt);
+      if (!this.#mods[id]) this.#refresh(e);
+      if (done) this.#on[id] = 0;
+      else this.#active[w++] = id;
     }
-    this.activeCount = w;
-    for (let i = 0; i < this.modCount; i++) {
-      const id = this.modIds[i] as number;
+    this.#activeCount = w;
+    for (let i = 0; i < this.#modCount; i++) {
+      const id = this.#modIds[i] as number;
       const e = entries[id] as ParamEntry;
-      const mods = this.mods[id];
+      const mods = this.#mods[id];
       if (!mods) continue;
       // Same as composeModulators(), inlined: no double crosses a call boundary per frame.
-      let v = (e.kind === K_NUM || e.kind === K_ANGLE ? this.cur[e.off] : this.index[id]) as number;
+      let v = (
+        e.kind === K_NUM || e.kind === K_ANGLE ? this.#cur[e.off] : this.#index[id]
+      ) as number;
       for (let j = 0; j < mods.length; j++) {
         const m = mods[j] as Modulator;
         if (m.disposed) continue;
@@ -364,15 +368,15 @@ export class ParamStore {
         else v += sv;
       }
       v = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v < e.lo ? e.lo : v > e.hi ? e.hi : v;
-      if (v !== this.eff[id]) {
-        this.eff[id] = v;
+      if (v !== this.#eff[id]) {
+        this.#eff[id] = v;
         const sl = e.slot;
         if (sl && e.kind === K_NUM) {
           // Hot path written inline (every modulated number, every frame).
           this.params[sl.offset] = v;
           this.dirty = true;
         } else {
-          this.writeSlot(e);
+          this.#writeSlot(e);
         }
       }
     }
@@ -383,54 +387,54 @@ export class ParamStore {
 
   /** True while any tween is running (modulators are not counted). */
   get animating(): boolean {
-    return this.activeCount > 0;
+    return this.#activeCount > 0;
   }
 
   /** True while any path is modulated. */
   get modulated(): boolean {
-    return this.modCount > 0;
+    return this.#modCount > 0;
   }
 
   /** Effective scalar: numbers/ints, angles (degrees), enum index, boolean 0/1. */
   num(id: number): number {
-    return this.eff[id] as number;
+    return this.#eff[id] as number;
   }
 
   /** Tweened component `c` of a vec2 (or color OKLab) entry. */
   comp(id: number, c: number): number {
-    const e = this.entries[id] as ParamEntry;
-    return this.cur[e.off + c] ?? 0;
+    const e = this.#entries[id] as ParamEntry;
+    return this.#cur[e.off + c] ?? 0;
   }
 
   /** Crossfade state of a `crossfade` enum: previous index and mix (1 = current only). */
   crossfadePrev(id: number): number {
-    return this.prev[id] as number;
+    return this.#prev[id] as number;
   }
 
   crossfadeMix(id: number): number {
-    const e = this.entries[id] as ParamEntry;
-    return e.kind === K_XFADE ? (this.cur[e.off] ?? 1) : 1;
+    const e = this.#entries[id] as ParamEntry;
+    return e.kind === K_XFADE ? (this.#cur[e.off] ?? 1) : 1;
   }
 
   /** Tweening or modulated right now (its effective value may change this frame). */
   isLive(id: number): boolean {
-    return this.on[id] === 1 || this.mods[id] !== undefined;
+    return this.#on[id] === 1 || this.#mods[id] !== undefined;
   }
 
   /** Has modulators of its own. */
   hasModulators(id: number): boolean {
-    return this.mods[id] !== undefined;
+    return this.#mods[id] !== undefined;
   }
 
   /** Tweening right now (held or not; modulators are not counted). */
   isTweening(id: number): boolean {
-    return this.on[id] === 1;
+    return this.#on[id] === 1;
   }
 
   /** Where the tween of a number (or angle) entry goes: its first tweened component. */
   target(id: number): number {
-    const e = this.entries[id] as ParamEntry;
-    return e.n > 0 ? (this.tgt[e.off] as number) : (this.eff[id] as number);
+    const e = this.#entries[id] as ParamEntry;
+    return e.n > 0 ? (this.#tgt[e.off] as number) : (this.#eff[id] as number);
   }
 
   /**
@@ -439,17 +443,17 @@ export class ParamStore {
    * while the renderer cannot draw what the tween is about to turn on (see Controller).
    */
   hold(id: number, on: boolean): void {
-    this.held[id] = on ? 1 : 0;
+    this.#held[id] = on ? 1 : 0;
   }
 
   getEffective(path: string): number {
-    const id = this.ids.get(path);
-    return id === undefined ? Number.NaN : (this.eff[id] as number);
+    const id = this.#ids.get(path);
+    return id === undefined ? Number.NaN : (this.#eff[id] as number);
   }
 
   isModulated(path: string): boolean {
-    const id = this.ids.get(path);
-    return id !== undefined && this.mods[id] !== undefined;
+    const id = this.#ids.get(path);
+    return id !== undefined && this.#mods[id] !== undefined;
   }
 
   /** Adds a modulator on a numeric path. Returns null for non-numeric paths. */
@@ -457,16 +461,16 @@ export class ParamStore {
     const e = this.entry(path);
     if (!e || (e.kind !== K_NUM && e.kind !== K_ANGLE)) return null;
     const m = new Modulator(source, blend, smoothingMs);
-    let list = this.mods[e.id];
+    let list = this.#mods[e.id];
     if (!list) {
       list = [];
-      this.mods[e.id] = list;
-      if (this.modCount >= this.modIds.length) {
-        const grown = new Int32Array(this.modIds.length * 2);
-        grown.set(this.modIds);
-        this.modIds = grown;
+      this.#mods[e.id] = list;
+      if (this.#modCount >= this.#modIds.length) {
+        const grown = new Int32Array(this.#modIds.length * 2);
+        grown.set(this.#modIds);
+        this.#modIds = grown;
       }
-      this.modIds[this.modCount++] = e.id;
+      this.#modIds[this.#modCount++] = e.id;
     }
     list.push(m);
     return m;
@@ -475,110 +479,110 @@ export class ParamStore {
   removeModulator(path: string, m: Modulator): void {
     m.disposed = true;
     const e = this.entry(path);
-    const list = e ? this.mods[e.id] : undefined;
+    const list = e ? this.#mods[e.id] : undefined;
     if (!e || !list) return;
     const i = list.indexOf(m);
     if (i >= 0) list.splice(i, 1);
     if (list.length > 0) return;
-    this.mods[e.id] = undefined;
+    this.#mods[e.id] = undefined;
     let w = 0;
-    for (let i = 0; i < this.modCount; i++) {
-      const id = this.modIds[i] as number;
-      if (id !== e.id) this.modIds[w++] = id;
+    for (let i = 0; i < this.#modCount; i++) {
+      const id = this.#modIds[i] as number;
+      if (id !== e.id) this.#modIds[w++] = id;
     }
-    this.modCount = w;
+    this.#modCount = w;
     // Back to the plain tweened value.
-    this.refresh(e);
+    this.#refresh(e);
   }
 
   // -------------------------------------------------------------------------------------------
 
-  private enumIndex(e: ParamEntry, value: unknown): number {
+  #enumIndex(e: ParamEntry, value: unknown): number {
     if (typeof value === 'number') return value;
     const values = (e.field as { values?: readonly string[] }).values ?? [];
     const i = values.indexOf(value as string);
     return i < 0 ? 0 : i;
   }
 
-  private deactivate(e: ParamEntry): void {
-    this.on[e.id] = 0;
+  #deactivate(e: ParamEntry): void {
+    this.#on[e.id] = 0;
     let w = 0;
-    for (let i = 0; i < this.activeCount; i++) {
-      const id = this.active[i] as number;
-      if (id !== e.id) this.active[w++] = id;
+    for (let i = 0; i < this.#activeCount; i++) {
+      const id = this.#active[i] as number;
+      if (id !== e.id) this.#active[w++] = id;
     }
-    this.activeCount = w;
+    this.#activeCount = w;
   }
 
-  private snapTo(e: ParamEntry, value: unknown): void {
+  #snapTo(e: ParamEntry, value: unknown): void {
     const o = e.off;
     switch (e.kind) {
       case K_NUM:
       case K_ANGLE: {
         const v = typeof value === 'number' ? value : 0;
-        this.cur[o] = v;
-        this.tgt[o] = v;
+        this.#cur[o] = v;
+        this.#tgt[o] = v;
         break;
       }
       case K_VEC2: {
         const v = (value as readonly number[] | undefined) ?? [0, 0];
-        this.cur[o] = v[0] ?? 0;
-        this.cur[o + 1] = v[1] ?? 0;
-        this.tgt[o] = this.cur[o] as number;
-        this.tgt[o + 1] = this.cur[o + 1] as number;
+        this.#cur[o] = v[0] ?? 0;
+        this.#cur[o + 1] = v[1] ?? 0;
+        this.#tgt[o] = this.#cur[o] as number;
+        this.#tgt[o + 1] = this.#cur[o + 1] as number;
         break;
       }
       case K_COLOR:
-        hexToOklabInto(typeof value === 'string' ? value : '#000000', this.cur, o);
-        this.tgt[o] = this.cur[o] as number;
-        this.tgt[o + 1] = this.cur[o + 1] as number;
-        this.tgt[o + 2] = this.cur[o + 2] as number;
+        hexToOklabInto(typeof value === 'string' ? value : '#000000', this.#cur, o);
+        this.#tgt[o] = this.#cur[o] as number;
+        this.#tgt[o + 1] = this.#cur[o + 1] as number;
+        this.#tgt[o + 2] = this.#cur[o + 2] as number;
         break;
       case K_XFADE:
-        this.index[e.id] = this.enumIndex(e, value);
-        this.cur[o] = 1;
-        this.tgt[o] = 1;
+        this.#index[e.id] = this.#enumIndex(e, value);
+        this.#cur[o] = 1;
+        this.#tgt[o] = 1;
         break;
       case K_ENUM:
-        this.index[e.id] = this.enumIndex(e, value);
+        this.#index[e.id] = this.#enumIndex(e, value);
         break;
       case K_BOOL:
-        this.index[e.id] = value ? 1 : 0;
+        this.#index[e.id] = value ? 1 : 0;
         break;
     }
   }
 
   /** One exponential step of every component; returns true when all snapped. */
-  private step(e: ParamEntry, dt: number): boolean {
+  #step(e: ParamEntry, dt: number): boolean {
     // k computed here, not by the caller: a double argument would be boxed on every call.
-    const dur = this.dur[e.id] as number;
+    const dur = this.#dur[e.id] as number;
     const k = dur > 0 ? 1 - Math.exp((-dt * 5000) / dur) : 1;
     let done = true;
     const end = e.off + e.n;
     for (let j = e.off; j < end; j++) {
-      const t = this.tgt[j] as number;
-      let v = this.cur[j] as number;
+      const t = this.#tgt[j] as number;
+      let v = this.#cur[j] as number;
       v += (t - v) * k;
       if (Math.abs(t - v) <= e.eps) v = t;
       else done = false;
-      this.cur[j] = v;
+      this.#cur[j] = v;
     }
     if (done && e.fullCircle) {
-      const v = e.lo + wrap((this.cur[e.off] as number) - e.lo, e.hi - e.lo);
-      this.cur[e.off] = v;
-      this.tgt[e.off] = v;
+      const v = e.lo + wrap((this.#cur[e.off] as number) - e.lo, e.hi - e.lo);
+      this.#cur[e.off] = v;
+      this.#tgt[e.off] = v;
     }
     return done;
   }
 
   /** Recomputes the effective value from the tweened one (no modulators) and writes the slot. */
-  private refresh(e: ParamEntry): void {
+  #refresh(e: ParamEntry): void {
     const id = e.id;
-    const modulated = this.mods[id] !== undefined;
+    const modulated = this.#mods[id] !== undefined;
     switch (e.kind) {
       case K_NUM: {
-        const v = this.cur[e.off] as number;
-        this.eff[id] = v;
+        const v = this.#cur[e.off] as number;
+        this.#eff[id] = v;
         const sl = e.slot;
         if (sl && !modulated) {
           this.params[sl.offset] = v;
@@ -587,28 +591,28 @@ export class ParamStore {
         return;
       }
       case K_ANGLE: {
-        const v = this.cur[e.off] as number;
-        this.eff[id] = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v;
+        const v = this.#cur[e.off] as number;
+        this.#eff[id] = e.fullCircle ? e.lo + wrap(v - e.lo, e.hi - e.lo) : v;
         break;
       }
       case K_ENUM:
       case K_XFADE:
       case K_BOOL:
-        this.eff[id] = this.index[id] as number;
+        this.#eff[id] = this.#index[id] as number;
         break;
       default:
-        this.eff[id] = 0;
+        this.#eff[id] = 0;
     }
     if (modulated) return;
-    this.writeSlot(e);
+    this.#writeSlot(e);
   }
 
-  private writeSlot(e: ParamEntry): void {
+  #writeSlot(e: ParamEntry): void {
     const s = e.slot;
     if (!s) return;
     const p = this.params;
     const o = s.offset;
-    const eff = this.eff[e.id] as number;
+    const eff = this.#eff[e.id] as number;
     switch (e.kind) {
       case K_NUM:
       case K_ENUM:
@@ -621,15 +625,15 @@ export class ParamStore {
         p[o] = e.fullCircle ? wrap(eff * DEG, TAU) : eff * DEG;
         break;
       case K_VEC2:
-        p[o] = this.cur[e.off] as number;
-        p[o + 1] = this.cur[e.off + 1] as number;
+        p[o] = this.#cur[e.off] as number;
+        p[o + 1] = this.#cur[e.off + 1] as number;
         break;
       case K_COLOR: {
-        const c = this.rgb;
+        const c = this.#rgb;
         oklabToLinearInto(
-          this.cur[e.off] as number,
-          this.cur[e.off + 1] as number,
-          this.cur[e.off + 2] as number,
+          this.#cur[e.off] as number,
+          this.#cur[e.off + 1] as number,
+          this.#cur[e.off + 2] as number,
           c,
         );
         p[o] = Math.max(0, c[0] as number);
@@ -652,10 +656,10 @@ export class ScalarTween {
   tgt: number;
   dur = 0;
 
-  constructor(
-    value: number,
-    private readonly eps = 1e-4,
-  ) {
+  readonly #eps: number;
+
+  constructor(value: number, eps = 1e-4) {
+    this.#eps = eps;
     this.cur = value;
     this.tgt = value;
   }
@@ -671,7 +675,7 @@ export class ScalarTween {
     if (this.cur === this.tgt) return false;
     const k = this.dur > 0 ? 1 - Math.exp((-dt * 5000) / this.dur) : 1;
     this.cur += (this.tgt - this.cur) * k;
-    if (Math.abs(this.tgt - this.cur) <= this.eps) this.cur = this.tgt;
+    if (Math.abs(this.tgt - this.cur) <= this.#eps) this.cur = this.tgt;
     return true;
   }
 }

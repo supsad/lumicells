@@ -548,29 +548,32 @@ export interface StageTargets {
  * cell-resolution draws and three RGBA32F targets per slot, and gives the very same values.
  */
 export class FieldPass {
-  private readonly variants: FieldVariant[] = [];
+  readonly #variants: FieldVariant[] = [];
   /** Second-stage programs by noise mapping (staged pass only). */
-  private readonly rests: (RestStage | null)[] = [null, null];
+  readonly #rests: (RestStage | null)[] = [null, null];
   /** The pack program (staged pass only, one for every variant). */
-  private pack: FieldProgram | null = null;
+  #pack: FieldProgram | null = null;
   /** Target formats of the field framebuffer (fieldA, fieldB, bloom source). */
-  private readonly formats: readonly TextureFormat[];
-  private readonly stageFormat: TextureFormat | null;
+  readonly #formats: readonly TextureFormat[];
+  readonly #stageFormat: TextureFormat | null;
 
-  constructor(private readonly ctx: PassContext) {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
     const caps = ctx.caps;
-    this.formats = [caps.hdrFormat, caps.rgba8, caps.hdrFormat];
-    this.stageFormat = caps.stageFormat;
+    this.#formats = [caps.hdrFormat, caps.rgba8, caps.hdrFormat];
+    this.#stageFormat = caps.stageFormat;
   }
 
   /** Runs in stages (see the class header). */
   get staged(): boolean {
-    return this.stageFormat !== null;
+    return this.#stageFormat !== null;
   }
 
-  private program(fs: string, label: string, outputs: 'field' | 'stage'): FieldProgram {
-    const gl = this.ctx.gl;
-    const prog = new LazyProgram(this.ctx, FULLSCREEN_VS, fs, label, (p) => {
+  #program(fs: string, label: string, outputs: 'field' | 'stage'): FieldProgram {
+    const gl = this.#ctx.gl;
+    const prog = new LazyProgram(this.#ctx, FULLSCREEN_VS, fs, label, (p) => {
       setSampler(gl, p, 'u_life', UNIT_LIFE);
       setSampler(gl, p, 'u_lut', UNIT_LUT);
       setSampler(gl, p, 'u_stage', UNIT_STAGE);
@@ -586,46 +589,46 @@ export class FieldPass {
    * costliest program is submitted first: compiles run on a few worker threads.
    */
   request(wanted: number, keepAfter: number): void {
-    if (variantToRequest(this.variants, wanted) < 0) return;
-    const evict = variantToEvict(this.variants, MAX_FIELD_VARIANTS, keepAfter);
+    if (variantToRequest(this.#variants, wanted) < 0) return;
+    const evict = variantToEvict(this.#variants, MAX_FIELD_VARIANTS, keepAfter);
     if (evict >= 0) {
-      const old = this.variants[evict] as FieldVariant;
+      const old = this.#variants[evict] as FieldVariant;
       old.main.warmed = false;
       old.main.prog.dispose();
-      this.variants.splice(evict, 1);
+      this.#variants.splice(evict, 1);
     }
-    const header = this.ctx.header;
+    const header = this.#ctx.header;
     const tag = wanted.toString(16);
     if (!this.staged) {
-      const main = this.program(fieldFs(header, wanted), `field-${tag}`, 'field');
-      this.variants.push(new FieldVariant(wanted, main, null, null));
+      const main = this.#program(fieldFs(header, wanted), `field-${tag}`, 'field');
+      this.#variants.push(new FieldVariant(wanted, main, null, null));
       return;
     }
-    const main = this.program(fieldModesFs(header, wanted), `field-modes-${tag}`, 'stage');
+    const main = this.#program(fieldModesFs(header, wanted), `field-modes-${tag}`, 'stage');
     const noise = (wanted & FEATURE_NOISE_MAP) !== 0 ? 1 : 0;
-    let rest = this.rests[noise] ?? null;
+    let rest = this.#rests[noise] ?? null;
     if (!rest) {
       const scalar = fieldRestFs(header, wanted, 'scalar');
       const color = fieldRestFs(header, wanted, 'color');
       rest = {
-        scalar: this.program(scalar, `field-rest-scalar-${noise}`, 'stage'),
-        color: this.program(color, `field-rest-color-${noise}`, 'stage'),
+        scalar: this.#program(scalar, `field-rest-scalar-${noise}`, 'stage'),
+        color: this.#program(color, `field-rest-color-${noise}`, 'stage'),
       };
-      this.rests[noise] = rest;
+      this.#rests[noise] = rest;
     }
-    this.pack ??= this.program(fieldPackFs(header), 'field-pack', 'field');
-    this.variants.push(new FieldVariant(wanted, main, rest, this.pack));
+    this.#pack ??= this.#program(fieldPackFs(header), 'field-pack', 'field');
+    this.#variants.push(new FieldVariant(wanted, main, rest, this.#pack));
   }
 
   /** A ready variant covers `needed`. */
   covers(needed: number): boolean {
-    for (const v of this.variants) if (v.ready && (v.mask & needed) === needed) return true;
+    for (const v of this.#variants) if (v.ready && (v.mask & needed) === needed) return true;
     return false;
   }
 
   /** A program of a variant is still compiling (not linked yet). */
   get linking(): boolean {
-    for (const v of this.variants) {
+    for (const v of this.#variants) {
       if (!v.main.linked || (v.pack && !v.pack.linked)) return true;
       if (v.rest && (!v.rest.scalar.linked || !v.rest.color.linked)) return true;
     }
@@ -644,22 +647,22 @@ export class FieldPass {
       out.push(fp);
       n++;
     };
-    for (const v of this.variants) poll(v.main);
-    for (const r of this.rests) {
+    for (const v of this.#variants) poll(v.main);
+    for (const r of this.#rests) {
       poll(r?.scalar);
       poll(r?.color);
     }
-    poll(this.pack);
+    poll(this.#pack);
     return n;
   }
 
   /** The warm-up draw of a linked program, into scratch targets of its real layout. */
   warm(fp: FieldProgram, targets: WarmTargets): void {
     const fb =
-      fp.outputs === 'stage' && this.stageFormat
-        ? targets.framebuffer([this.stageFormat])
-        : targets.framebuffer(this.formats, mrtFirst(this.ctx));
-    warmDraw(this.ctx, fp.prog, fb);
+      fp.outputs === 'stage' && this.#stageFormat
+        ? targets.framebuffer([this.#stageFormat])
+        : targets.framebuffer(this.#formats, mrtFirst(this.#ctx));
+    warmDraw(this.#ctx, fp.prog, fb);
   }
 
   /**
@@ -667,8 +670,8 @@ export class FieldPass {
    * device frame counter (recency, for eviction and ties).
    */
   select(needed: number, previous: FieldVariant | null, frame: number): FieldVariant | null {
-    const prev = previous ? this.variants.indexOf(previous) : -1;
-    const v = this.variants[pickVariant(this.variants, needed, prev)];
+    const prev = previous ? this.#variants.indexOf(previous) : -1;
+    const v = this.#variants[pickVariant(this.#variants, needed, prev)];
     if (!v) return null;
     v.lastUsed = frame;
     return v;
@@ -687,27 +690,27 @@ export class FieldPass {
     life: WebGLTexture,
     v: FieldVariant,
   ): void {
-    const gl = this.ctx.gl;
+    const gl = this.#ctx.gl;
     v.main.prog.use();
     bindTexture(gl, UNIT_LIFE, life);
     gl.viewport(0, 0, w, h);
     const { stage, restColor, restScalar } = stages;
     if (v.rest && v.pack && stage && restColor && restScalar) {
-      this.draw(stage.fb, 1);
+      this.#draw(stage.fb, 1);
       v.rest.scalar.prog.use();
-      this.draw(restScalar.fb, 1);
+      this.#draw(restScalar.fb, 1);
       v.rest.color.prog.use();
-      this.draw(restColor.fb, 1);
+      this.#draw(restColor.fb, 1);
       v.pack.prog.use();
     }
-    this.draw(fb, 3, mrtFirst(this.ctx));
+    this.#draw(fb, 3, mrtFirst(this.#ctx));
   }
 
   /** One fullscreen draw into `count` attachments of `fb` (from `first`), viewport set. */
-  private draw(fb: WebGLFramebuffer, count: number, first = 0): void {
-    const gl = this.ctx.gl;
+  #draw(fb: WebGLFramebuffer, count: number, first = 0): void {
+    const gl = this.#ctx.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    discardTargets(this.ctx, count, first);
+    discardTargets(this.#ctx, count, first);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -717,15 +720,15 @@ export class FieldPass {
       fp.warmed = false;
       fp.prog.dispose();
     };
-    for (const v of this.variants) drop(v.main);
-    this.variants.length = 0;
-    for (const r of this.rests) {
+    for (const v of this.#variants) drop(v.main);
+    this.#variants.length = 0;
+    for (const r of this.#rests) {
       drop(r?.color);
       drop(r?.scalar);
     }
-    this.rests[0] = null;
-    this.rests[1] = null;
-    drop(this.pack);
-    this.pack = null;
+    this.#rests[0] = null;
+    this.#rests[1] = null;
+    drop(this.#pack);
+    this.#pack = null;
   }
 }

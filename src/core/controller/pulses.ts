@@ -32,24 +32,24 @@ export interface PulseInit {
 const ATTACK = 0.06;
 
 export class PulseList {
-  private readonly space = new Uint8Array(MAX_PULSES);
-  private readonly minor = new Uint8Array(MAX_PULSES);
+  readonly #space = new Uint8Array(MAX_PULSES);
+  readonly #minor = new Uint8Array(MAX_PULSES);
   /** x, y, strength, speed, width, r, g, b, colorMix, age, duration */
-  private readonly data = new Float64Array(MAX_PULSES * 11);
+  readonly #data = new Float64Array(MAX_PULSES * 11);
   count = 0;
 
   add(p: PulseInit): void {
     let i = this.count;
     if (i >= MAX_PULSES) {
-      i = this.oldest(true);
-      if (i < 0) i = this.oldest(false);
+      i = this.#oldest(true);
+      if (i < 0) i = this.#oldest(false);
     } else {
       this.count++;
     }
-    const d = this.data;
+    const d = this.#data;
     const o = i * 11;
-    this.space[i] = p.space;
-    this.minor[i] = p.minor ? 1 : 0;
+    this.#space[i] = p.space;
+    this.#minor[i] = p.minor ? 1 : 0;
     d[o] = p.x;
     d[o + 1] = p.y;
     d[o + 2] = p.strength;
@@ -70,7 +70,7 @@ export class PulseList {
   /** Pulses other than landing ripples (clicks, pulse() calls) alive. */
   get majorCount(): number {
     let n = 0;
-    for (let i = 0; i < this.count; i++) if (this.minor[i] !== 1) n++;
+    for (let i = 0; i < this.count; i++) if (this.#minor[i] !== 1) n++;
     return n;
   }
 
@@ -79,51 +79,45 @@ export class PulseList {
    * LiftScheduler.adopt), moved by (ox, oy) cells. Other pulses stay.
    */
   adoptMinor(from: PulseList, ox: number, oy: number): void {
-    const d = this.data;
+    const d = this.#data;
     let w = 0;
     for (let i = 0; i < this.count; i++) {
-      if (this.minor[i] === 1) continue;
+      if (this.#minor[i] === 1) continue;
       if (w !== i) {
         d.copyWithin(w * 11, i * 11, i * 11 + 11);
-        this.space[w] = this.space[i] as number;
-        this.minor[w] = 0;
+        this.#space[w] = this.#space[i] as number;
+        this.#minor[w] = 0;
       }
       w++;
     }
-    const fd = from.data;
+    const fd = from.#data;
     for (let i = 0; i < from.count && w < MAX_PULSES; i++) {
-      if (from.minor[i] !== 1 || from.space[i] !== SPACE_CELLS) continue;
+      if (from.#minor[i] !== 1 || from.#space[i] !== SPACE_CELLS) continue;
       d.set(fd.subarray(i * 11, i * 11 + 11), w * 11);
       d[w * 11] = (d[w * 11] as number) + ox;
       d[w * 11 + 1] = (d[w * 11 + 1] as number) + oy;
-      this.space[w] = SPACE_CELLS;
-      this.minor[w] = 1;
+      this.#space[w] = SPACE_CELLS;
+      this.#minor[w] = 1;
       w++;
     }
     this.count = w;
   }
 
   get needsClientOrigin(): boolean {
-    for (let i = 0; i < this.count; i++) if (this.space[i] === SPACE_CLIENT) return true;
+    for (let i = 0; i < this.count; i++) if (this.#space[i] === SPACE_CLIENT) return true;
     return false;
   }
 
   /** Current strength of pulse `i` (tests). */
   strengthAt(i: number): number {
     const o = i * 11;
-    const d = this.data;
+    const d = this.#data;
     return (d[o + 2] as number) * envelope(d[o + 9] as number, d[o + 10] as number);
-  }
-
-  /** Current radius of pulse `i` in cells (tests). */
-  radiusCells(i: number): number {
-    const o = i * 11;
-    return (this.data[o + 3] as number) * (this.data[o + 9] as number);
   }
 
   /** Ages pulses, drops expired ones and writes f_pulse. Returns the count written. */
   step(dt: number, geo: Geometry, clientX: number, clientY: number, frame: Float32Array): number {
-    const d = this.data;
+    const d = this.#data;
     let w = 0;
     for (let i = 0; i < this.count; i++) {
       const o = i * 11;
@@ -132,8 +126,8 @@ export class PulseList {
       d[o + 9] = age;
       if (w !== i) {
         d.copyWithin(w * 11, o, o + 11);
-        this.space[w] = this.space[i] as number;
-        this.minor[w] = this.minor[i] as number;
+        this.#space[w] = this.#space[i] as number;
+        this.#minor[w] = this.#minor[i] as number;
       }
       w++;
     }
@@ -145,7 +139,7 @@ export class PulseList {
       const y = d[o + 1] as number;
       let px: number;
       let py: number;
-      switch (this.space[i]) {
+      switch (this.#space[i]) {
         case SPACE_NORM:
           px = geo.hostX + x * geo.hostW;
           py = geo.hostY + y * geo.hostH;
@@ -180,12 +174,12 @@ export class PulseList {
     return w;
   }
 
-  private oldest(minorOnly: boolean): number {
+  #oldest(minorOnly: boolean): number {
     let best = -1;
     let bestAge = -1;
     for (let i = 0; i < this.count; i++) {
-      if (minorOnly && this.minor[i] !== 1) continue;
-      const age = (this.data[i * 11 + 9] as number) / (this.data[i * 11 + 10] as number);
+      if (minorOnly && this.#minor[i] !== 1) continue;
+      const age = (this.#data[i * 11 + 9] as number) / (this.#data[i * 11 + 10] as number);
       if (age > bestAge) {
         bestAge = age;
         best = i;

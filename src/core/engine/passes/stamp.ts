@@ -108,22 +108,25 @@ export class StampTarget {
   /** Set when the slot's params block changed: the next bake re-renders it. */
   dirty = true;
 
-  constructor(
-    private readonly gl: WebGL2RenderingContext,
-    private readonly format: TextureFormat,
-  ) {}
+  readonly #gl: WebGL2RenderingContext;
+  readonly #format: TextureFormat;
+
+  constructor(gl: WebGL2RenderingContext, format: TextureFormat) {
+    this.#gl = gl;
+    this.#format = format;
+  }
 
   /**
    * (Re)allocates the pair at `size` and binds it to its texture units: only ever called while
    * the owning slot is the one bound on the device.
    */
   allocate(size: number): void {
-    const gl = this.gl;
+    const gl = this.#gl;
     this.free();
     // New textures bind to the active unit: use the scratch one, then bind them to their own.
     gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
-    this.texA = createTargetTexture(gl, size, size, { format: this.format });
-    this.texB = createTargetTexture(gl, size, size, { format: this.format });
+    this.texA = createTargetTexture(gl, size, size, { format: this.#format });
+    this.texB = createTargetTexture(gl, size, size, { format: this.#format });
     this.fbA = createMrtFramebuffer(gl, [this.texA]);
     this.fbB = createMrtFramebuffer(gl, [this.texB]);
     bindTexture(gl, UNIT_SRC, null);
@@ -133,7 +136,7 @@ export class StampTarget {
   }
 
   free(): void {
-    const gl = this.gl;
+    const gl = this.#gl;
     gl.deleteFramebuffer(this.fbA);
     gl.deleteFramebuffer(this.fbB);
     gl.deleteTexture(this.texA);
@@ -148,25 +151,28 @@ export class StampTarget {
 }
 
 export class StampPass {
-  private readonly progA: LazyProgram;
-  private readonly progB: LazyProgram;
+  readonly #progA: LazyProgram;
+  readonly #progB: LazyProgram;
 
-  constructor(private readonly ctx: PassContext) {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
     const vs = FULLSCREEN_VS;
-    this.progA = new LazyProgram(ctx, vs, stampFs(ctx.header, 'a'), 'cell-stamp-a', () => {});
-    this.progB = new LazyProgram(ctx, vs, stampFs(ctx.header, 'b'), 'cell-stamp-b', () => {});
+    this.#progA = new LazyProgram(ctx, vs, stampFs(ctx.header, 'a'), 'cell-stamp-a', () => {});
+    this.#progB = new LazyProgram(ctx, vs, stampFs(ctx.header, 'b'), 'cell-stamp-b', () => {});
   }
 
   poll(): boolean {
-    const a = this.progA.poll();
-    return this.progB.poll() && a;
+    const a = this.#progA.poll();
+    return this.#progB.poll() && a;
   }
 
   /** The warm-up draws (see GpuDevice), into a scratch target of the real format. */
   warm(targets: WarmTargets): void {
-    const fb = targets.framebuffer([this.ctx.caps.hdrFormat]);
-    warmDraw(this.ctx, this.progA, fb);
-    warmDraw(this.ctx, this.progB, fb);
+    const fb = targets.framebuffer([this.#ctx.caps.hdrFormat]);
+    warmDraw(this.#ctx, this.#progA, fb);
+    warmDraw(this.#ctx, this.#progB, fb);
   }
 
   /** Whether update() would (re)allocate `t` (a synchronous framebuffer check). */
@@ -182,23 +188,23 @@ export class StampPass {
     const p = Math.max(1, Math.round(pitch));
     if (!t.dirty && p === t.pitch && t.fbA) return;
     if (!t.fbA || needsRealloc(t.alloc, p, STAMP_STEP)) t.allocate(bucketSize(p, STAMP_STEP));
-    this.bake(this.progA, t.fbA as WebGLFramebuffer, p);
-    this.bake(this.progB, t.fbB as WebGLFramebuffer, p);
+    this.#bake(this.#progA, t.fbA as WebGLFramebuffer, p);
+    this.#bake(this.#progB, t.fbB as WebGLFramebuffer, p);
     t.pitch = p;
     t.dirty = false;
   }
 
-  private bake(prog: LazyProgram, fb: WebGLFramebuffer, p: number): void {
-    const gl = this.ctx.gl;
+  #bake(prog: LazyProgram, fb: WebGLFramebuffer, p: number): void {
+    const gl = this.#ctx.gl;
     prog.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.viewport(0, 0, p, p);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   dispose(): void {
-    this.progA.dispose();
-    this.progB.dispose();
+    this.#progA.dispose();
+    this.#progB.dispose();
   }
 }

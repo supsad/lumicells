@@ -65,38 +65,41 @@ export interface HostSize {
 
 export class HostView {
   canvas: HTMLCanvasElement | null = null;
-  private overflow = 0;
-  private ro: ResizeObserver | null = null;
-  private mountCtl: AbortController | null = null;
-  private savedPosition: string | null = null;
-  private savedBg: readonly { v: string; p: string }[] | null = null;
-  private posterCss = '';
-  private pending = false;
+  #overflow = 0;
+  #ro: ResizeObserver | null = null;
+  #mountCtl: AbortController | null = null;
+  #savedPosition: string | null = null;
+  #savedBg: readonly { v: string; p: string }[] | null = null;
+  #posterCss = '';
+  #pending = false;
   /** Mounted, but neither the observer nor a measure-phase read has reported a size yet. */
-  private needsInitialRead = false;
-  private everApplied = false;
-  private lastApply = Number.NEGATIVE_INFINITY;
-  private dprArmed = false;
+  #needsInitialRead = false;
+  #everApplied = false;
+  #lastApply = Number.NEGATIVE_INFINITY;
+  #dprArmed = false;
   /** The last frame kept on screen during a renderer switch (see the header). */
-  private standIn: HTMLCanvasElement | null = null;
+  #standIn: HTMLCanvasElement | null = null;
   /** The position check is queued (see flushPositions). */
-  private positionPending = false;
-  private readonly size: HostSize = { hostCssW: 0, hostCssH: 0, deviceW: 0, deviceH: 0, dpr: 1 };
+  #positionPending = false;
+  readonly #size: HostSize = { hostCssW: 0, hostCssH: 0, deviceW: 0, deviceH: 0, dpr: 1 };
   /** Called when a new size is pending (so a paused owner can react). */
   onChange: (() => void) | null = null;
   /** Called when devicePixelRatio changed (zoom, or the window moved to another display). */
   onDprChange: (() => void) | null = null;
 
+  readonly #signal: AbortSignal;
+
   constructor(
     readonly host: HTMLElement,
-    private readonly signal: AbortSignal,
+    signal: AbortSignal,
   ) {
+    this.#signal = signal;
     // The canvas is absolutely positioned against the host. An inline non-static position needs
     // no computed-style read; otherwise it is read in a batch (see the header). The size read,
     // which forces layout, is deferred to the measure phase.
     const inline = host.style.position;
     if (host.ownerDocument.defaultView && !(inline && inline !== 'static')) {
-      this.positionPending = true;
+      this.#positionPending = true;
       if (positionQueue.length === 0) queueMicrotask(flushPositions);
       positionQueue.push(this);
     }
@@ -104,24 +107,24 @@ export class HostView {
 
   /** The host is statically positioned (reads the computed style; see flushPositions). */
   readsStatic(): boolean {
-    if (!this.positionPending || this.signal.aborted) return false;
+    if (!this.#positionPending || this.#signal.aborted) return false;
     const win = this.host.ownerDocument.defaultView;
     const pos = win?.getComputedStyle(this.host).position;
     return !pos || pos === 'static';
   }
 
   makeRelative(): void {
-    if (!this.positionPending || this.signal.aborted) return;
-    this.positionPending = false;
-    this.savedPosition = this.host.style.position;
+    if (!this.#positionPending || this.#signal.aborted) return;
+    this.#positionPending = false;
+    this.#savedPosition = this.host.style.position;
     this.host.style.position = 'relative';
   }
 
   /** A canvas is about to be inserted: the host must be positioned now, not in the batch. */
-  private ensurePositioned(): void {
-    if (!this.positionPending) return;
+  #ensurePositioned(): void {
+    if (!this.#positionPending) return;
     if (this.readsStatic()) this.makeRelative();
-    this.positionPending = false;
+    this.#positionPending = false;
   }
 
   get dpr(): number {
@@ -143,7 +146,7 @@ export class HostView {
   /** Creates a fresh canvas with the given overflow margin (CSS px). */
   mount(overflow: number): HTMLCanvasElement {
     this.unmount();
-    this.ensurePositioned();
+    this.#ensurePositioned();
     const doc = this.host.ownerDocument;
     const canvas = doc.createElement('canvas');
     canvas.setAttribute('aria-hidden', 'true');
@@ -155,23 +158,23 @@ export class HostView {
     s.zIndex = '0';
     s.visibility = 'hidden';
     this.canvas = canvas;
-    this.applyOverflow(overflow);
+    this.#applyOverflow(overflow);
     this.host.insertBefore(canvas, this.host.firstChild);
-    this.mountCtl = new AbortController();
-    this.observe(canvas);
-    if (!this.dprArmed) {
-      this.dprArmed = true;
-      this.armDpr();
+    this.#mountCtl = new AbortController();
+    this.#observe(canvas);
+    if (!this.#dprArmed) {
+      this.#dprArmed = true;
+      this.#armDpr();
     }
     return canvas;
   }
 
   unmount(): void {
-    this.needsInitialRead = false;
-    this.mountCtl?.abort();
-    this.mountCtl = null;
-    this.ro?.disconnect();
-    this.ro = null;
+    this.#needsInitialRead = false;
+    this.#mountCtl?.abort();
+    this.#mountCtl = null;
+    this.#ro?.disconnect();
+    this.#ro = null;
     this.canvas?.remove();
     this.canvas = null;
   }
@@ -184,13 +187,13 @@ export class HostView {
     const c = this.canvas;
     if (!c) return;
     this.dropStandIn();
-    this.needsInitialRead = false;
-    this.mountCtl?.abort();
-    this.mountCtl = null;
-    this.ro?.disconnect();
-    this.ro = null;
+    this.#needsInitialRead = false;
+    this.#mountCtl?.abort();
+    this.#mountCtl = null;
+    this.#ro?.disconnect();
+    this.#ro = null;
     this.canvas = null;
-    this.standIn = c;
+    this.#standIn = c;
   }
 
   /**
@@ -217,14 +220,14 @@ export class HostView {
     copy.dataset.lumicells = '';
     copy.style.cssText = c.style.cssText;
     this.host.insertBefore(copy, c);
-    this.standIn = copy;
+    this.#standIn = copy;
   }
 
   /** Removes the stand-in (the new canvas shows its first frame, or the poster takes over). */
   dropStandIn(): void {
-    const s = this.standIn;
+    const s = this.#standIn;
     if (!s) return;
-    this.standIn = null;
+    this.#standIn = null;
     s.remove();
     // Browsers cap the canvas memory of a page: free it now rather than at GC.
     s.width = 0;
@@ -239,9 +242,9 @@ export class HostView {
 
   /** Changes the margin without rebuilding (both old and new values > 0). */
   setOverflow(overflow: number): void {
-    if (overflow === this.overflow) return;
-    this.applyOverflow(overflow);
-    this.markPending();
+    if (overflow === this.#overflow) return;
+    this.#applyOverflow(overflow);
+    this.#markPending();
   }
 
   /**
@@ -250,17 +253,17 @@ export class HostView {
    * canvas is stretched by CSS in between.
    */
   takeSize(now: number, throttleMs = 100): HostSize | null {
-    if (!this.pending || !this.canvas) return null;
-    if (this.needsInitialRead) {
+    if (!this.#pending || !this.canvas) return null;
+    if (this.#needsInitialRead) {
       // Measure phase: every instance reads here, after all of them wrote their mounts.
       const c = this.canvas;
-      this.record(c.clientWidth, c.clientHeight, 0, 0);
+      this.#record(c.clientWidth, c.clientHeight, 0, 0);
     }
-    if (this.everApplied && now - this.lastApply < throttleMs) return null;
-    this.pending = false;
-    this.everApplied = true;
-    this.lastApply = now;
-    return this.size;
+    if (this.#everApplied && now - this.#lastApply < throttleMs) return null;
+    this.#pending = false;
+    this.#everApplied = true;
+    this.#lastApply = now;
+    return this.#size;
   }
 
   /** Host padding-box origin in client px into `out` [x, y] (forces layout if dirty). */
@@ -272,10 +275,10 @@ export class HostView {
 
   showPoster(css: string): void {
     const st = this.host.style;
-    if (!this.savedBg) {
+    if (!this.#savedBg) {
       // Nothing to read on a host without inline styles (the common case, and cheaper when a
       // list of backgrounds mounts).
-      this.savedBg =
+      this.#savedBg =
         st.length === 0
           ? NO_BG
           : BG_PROPS.map((p) => ({
@@ -283,16 +286,16 @@ export class HostView {
               p: st.getPropertyPriority(p),
             }));
     }
-    if (css === this.posterCss) return;
-    this.posterCss = css;
+    if (css === this.#posterCss) return;
+    this.#posterCss = css;
     st.background = css;
   }
 
   hidePoster(): void {
-    const saved = this.savedBg;
+    const saved = this.#savedBg;
     if (!saved) return;
-    this.savedBg = null;
-    this.posterCss = '';
+    this.#savedBg = null;
+    this.#posterCss = '';
     const st = this.host.style;
     BG_PROPS.forEach((p, i) => {
       const s = saved[i];
@@ -302,28 +305,28 @@ export class HostView {
   }
 
   get posterVisible(): boolean {
-    return this.savedBg !== null;
+    return this.#savedBg !== null;
   }
 
   /** Undo every host style change (destroy). */
   restore(): void {
     this.unmount();
     this.dropStandIn();
-    this.positionPending = false;
+    this.#positionPending = false;
     this.hidePoster();
-    if (this.savedPosition !== null) {
-      this.host.style.position = this.savedPosition;
-      this.savedPosition = null;
+    if (this.#savedPosition !== null) {
+      this.host.style.position = this.#savedPosition;
+      this.#savedPosition = null;
     }
   }
 
   // -------------------------------------------------------------------------------------------
 
-  private applyOverflow(overflow: number): void {
-    this.overflow = Math.max(0, overflow);
+  #applyOverflow(overflow: number): void {
+    this.#overflow = Math.max(0, overflow);
     const c = this.canvas;
     if (!c) return;
-    const o = this.overflow;
+    const o = this.#overflow;
     const s = c.style;
     s.left = `${-o}px`;
     s.top = `${-o}px`;
@@ -331,32 +334,32 @@ export class HostView {
     s.height = o > 0 ? `calc(100% + ${2 * o}px)` : '100%';
   }
 
-  private markPending(): void {
-    this.pending = true;
+  #markPending(): void {
+    this.#pending = true;
     this.onChange?.();
   }
 
-  private record(cssW: number, cssH: number, devW: number, devH: number): void {
-    this.needsInitialRead = false;
-    const o = this.overflow;
-    const s = this.size;
+  #record(cssW: number, cssH: number, devW: number, devH: number): void {
+    this.#needsInitialRead = false;
+    const o = this.#overflow;
+    const s = this.#size;
     s.hostCssW = Math.max(1, cssW - 2 * o);
     s.hostCssH = Math.max(1, cssH - 2 * o);
     s.deviceW = devW;
     s.deviceH = devH;
     s.dpr = this.dpr;
-    this.markPending();
+    this.#markPending();
   }
 
-  private observe(canvas: HTMLCanvasElement): void {
+  #observe(canvas: HTMLCanvasElement): void {
     const win = this.host.ownerDocument.defaultView;
-    const signal = this.mountCtl?.signal;
+    const signal = this.#mountCtl?.signal;
     if (win && typeof win.ResizeObserver === 'function') {
       const ro = new win.ResizeObserver((entries) => {
         const e = entries[entries.length - 1];
         if (!e) return;
         const dp = e.devicePixelContentBoxSize?.[0];
-        this.record(
+        this.#record(
           e.contentRect.width,
           e.contentRect.height,
           dp?.inlineSize ?? 0,
@@ -368,30 +371,30 @@ export class HostView {
       } catch {
         ro.observe(canvas);
       }
-      this.ro = ro;
+      this.#ro = ro;
     } else if (win) {
       // No ResizeObserver: poll on window resizes.
-      const read = () => this.record(canvas.clientWidth, canvas.clientHeight, 0, 0);
+      const read = () => this.#record(canvas.clientWidth, canvas.clientHeight, 0, 0);
       win.addEventListener('resize', read, { signal });
     }
     // The observer reports after this frame's rAF callbacks: the first size is read in the next
     // measure phase instead (deferred, not synchronously here, see takeSize()).
-    this.needsInitialRead = true;
-    this.markPending();
+    this.#needsInitialRead = true;
+    this.#markPending();
   }
 
-  private armDpr(): void {
+  #armDpr(): void {
     const win = this.host.ownerDocument.defaultView;
     if (!win?.matchMedia) return;
     const mql = win.matchMedia(`(resolution: ${win.devicePixelRatio || 1}dppx)`);
     const onChange = () => {
       mql.removeEventListener('change', onChange);
-      if (this.signal.aborted) return;
-      this.size.dpr = this.dpr;
-      this.markPending();
+      if (this.#signal.aborted) return;
+      this.#size.dpr = this.dpr;
+      this.#markPending();
       this.onDprChange?.();
-      this.armDpr();
+      this.#armDpr();
     };
-    mql.addEventListener('change', onChange, { signal: this.signal });
+    mql.addEventListener('change', onChange, { signal: this.#signal });
   }
 }

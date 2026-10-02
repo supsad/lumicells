@@ -104,21 +104,24 @@ export function lifeRunSeed(lifeSeed: number, run: number): number {
 }
 
 export class LifePass {
-  private readonly prog: LazyProgram;
+  readonly #prog: LazyProgram;
 
-  constructor(private readonly ctx: PassContext) {
-    this.prog = new LazyProgram(ctx, FULLSCREEN_VS, lifeFs(ctx.header), 'life', (p) => {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
+    this.#prog = new LazyProgram(ctx, FULLSCREEN_VS, lifeFs(ctx.header), 'life', (p) => {
       setSampler(ctx.gl, p, 'u_prev', UNIT_SRC);
     });
   }
 
   poll(): boolean {
-    return this.prog.poll();
+    return this.#prog.poll();
   }
 
   /** The warm-up draw (see GpuDevice), into a scratch target of the real format. */
   warm(targets: WarmTargets): void {
-    warmDraw(this.ctx, this.prog, targets.framebuffer([this.ctx.caps.rgba8]));
+    warmDraw(this.#ctx, this.#prog, targets.framebuffer([this.#ctx.caps.rgba8]));
   }
 
   /**
@@ -136,11 +139,11 @@ export class LifePass {
     f: FrameInputs,
     run: number,
   ): void {
-    const gl = this.ctx.gl;
-    const p = this.prog.use();
+    const gl = this.#ctx.gl;
+    const p = this.#prog.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, dst);
     // Every texel of the logical rect is rewritten: tiled GPUs need not load the old contents.
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.viewport(0, 0, w, h);
     bindTexture(gl, UNIT_SRC, src);
     gl.uniform4i(p.uniform('u_size'), w, h, Math.max(1, prevW), Math.max(1, prevH));
@@ -153,6 +156,6 @@ export class LifePass {
   }
 
   dispose(): void {
-    this.prog.dispose();
+    this.#prog.dispose();
   }
 }

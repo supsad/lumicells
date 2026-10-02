@@ -55,23 +55,26 @@ export class Binding {
 }
 
 export class ElementTracker {
-  private readonly list: Binding[] = [];
-  private ro: ResizeObserver | null = null;
-  private readonly byEl = new Map<Element, Binding[]>();
-  private windowHooked = false;
+  readonly #list: Binding[] = [];
+  #ro: ResizeObserver | null = null;
+  readonly #byEl = new Map<Element, Binding[]>();
+  #windowHooked = false;
 
-  constructor(
-    private readonly registry: InfluenceRegistry,
-    private readonly signal: AbortSignal,
-  ) {}
+  readonly #registry: InfluenceRegistry;
+  readonly #signal: AbortSignal;
+
+  constructor(registry: InfluenceRegistry, signal: AbortSignal) {
+    this.#registry = registry;
+    this.#signal = signal;
+  }
 
   get size(): number {
-    return this.list.length;
+    return this.#list.length;
   }
 
   /** Whether the next measure needs the host's client rect. */
   get needsHostRect(): boolean {
-    const l = this.list;
+    const l = this.#list;
     for (let i = 0; i < l.length; i++) {
       const b = l[i] as Binding;
       // Expired (ttlMs) or fading out: nothing left to place.
@@ -96,13 +99,13 @@ export class ElementTracker {
   ): Binding {
     const mode = track === 'frame' ? MODE_FRAME : track === 'manual' ? MODE_MANUAL : MODE_AUTO;
     const b = new Binding(el, entry, mode, padding, autoCorner, onLost);
-    this.list.push(b);
+    this.#list.push(b);
     if (mode !== MODE_MANUAL) {
-      let arr = this.byEl.get(el);
+      let arr = this.#byEl.get(el);
       if (!arr) {
         arr = [];
-        this.byEl.set(el, arr);
-        this.observer()?.observe(el);
+        this.#byEl.set(el, arr);
+        this.#observer()?.observe(el);
       }
       arr.push(b);
     }
@@ -122,7 +125,7 @@ export class ElementTracker {
       el.addEventListener('animationstart', start, opts);
       el.addEventListener('animationend', end, opts);
       el.addEventListener('animationcancel', end, opts);
-      this.hookWindow();
+      this.#hookWindow();
     }
     return b;
   }
@@ -131,27 +134,27 @@ export class ElementTracker {
     if (b.disposed) return;
     b.disposed = true;
     b.ctl?.abort();
-    const i = this.list.indexOf(b);
-    if (i >= 0) this.list.splice(i, 1);
-    const arr = this.byEl.get(b.el);
+    const i = this.#list.indexOf(b);
+    if (i >= 0) this.#list.splice(i, 1);
+    const arr = this.#byEl.get(b.el);
     if (arr) {
       const j = arr.indexOf(b);
       if (j >= 0) arr.splice(j, 1);
       if (arr.length === 0) {
-        this.byEl.delete(b.el);
-        this.ro?.unobserve(b.el);
+        this.#byEl.delete(b.el);
+        this.#ro?.unobserve(b.el);
       }
     }
   }
 
   /** Something global moved (scroll, host resize): re-read every auto binding. */
   markAllDirty(): void {
-    for (let i = 0; i < this.list.length; i++) (this.list[i] as Binding).dirty = true;
+    for (let i = 0; i < this.#list.length; i++) (this.#list[i] as Binding).dirty = true;
   }
 
   /** Measure phase: host padding-box origin in client px (NaN when not read this frame). */
   measure(hostX: number, hostY: number): void {
-    const l = this.list;
+    const l = this.#list;
     for (let i = l.length - 1; i >= 0; i--) {
       const b = l[i] as Binding;
       if (b.entry.removed) {
@@ -183,19 +186,19 @@ export class ElementTracker {
         if (!(b.dirty || b.animated || b.running > 0 || b.sinceRead >= SAFETY_POLL)) continue;
       }
       if (Number.isNaN(hostX)) continue;
-      this.read(b, hostX, hostY);
+      this.#read(b, hostX, hostY);
     }
   }
 
   clear(): void {
-    for (const b of this.list.slice()) this.remove(b);
-    this.ro?.disconnect();
-    this.ro = null;
+    for (const b of this.#list.slice()) this.remove(b);
+    this.#ro?.disconnect();
+    this.#ro = null;
   }
 
   // -------------------------------------------------------------------------------------------
 
-  private read(b: Binding, hostX: number, hostY: number): void {
+  #read(b: Binding, hostX: number, hostY: number): void {
     b.dirty = false;
     b.sinceRead = 0;
     if (b.el.getClientRects().length === 0) {
@@ -213,7 +216,7 @@ export class ElementTracker {
     }
     const pad = b.padding;
     const e = b.entry;
-    this.registry.setShape(
+    this.#registry.setShape(
       e,
       SPACE_HOST,
       r.left + r.width / 2 - hostX,
@@ -225,13 +228,13 @@ export class ElementTracker {
     e.hidden = false;
   }
 
-  private observer(): ResizeObserver | null {
-    if (this.ro) return this.ro;
+  #observer(): ResizeObserver | null {
+    if (this.#ro) return this.#ro;
     const RO = typeof ResizeObserver === 'function' ? ResizeObserver : null;
     if (!RO) return null;
-    this.ro = new RO((entries) => {
+    this.#ro = new RO((entries) => {
       for (const en of entries) {
-        const arr = this.byEl.get(en.target);
+        const arr = this.#byEl.get(en.target);
         if (!arr) continue;
         for (const b of arr) {
           b.dirty = true;
@@ -239,15 +242,15 @@ export class ElementTracker {
         }
       }
     });
-    this.signal.addEventListener('abort', () => this.ro?.disconnect(), { once: true });
-    return this.ro;
+    this.#signal.addEventListener('abort', () => this.#ro?.disconnect(), { once: true });
+    return this.#ro;
   }
 
-  private hookWindow(): void {
-    if (this.windowHooked || typeof window === 'undefined') return;
-    this.windowHooked = true;
+  #hookWindow(): void {
+    if (this.#windowHooked || typeof window === 'undefined') return;
+    this.#windowHooked = true;
     const dirty = () => this.markAllDirty();
-    const opts = { signal: this.signal, passive: true, capture: true } as const;
+    const opts = { signal: this.#signal, passive: true, capture: true } as const;
     window.addEventListener('scroll', dirty, opts);
     window.addEventListener('resize', dirty, opts);
   }

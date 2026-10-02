@@ -300,21 +300,24 @@ export function liteHazeSigma(hazeSigma: number): number {
 }
 
 export class BloomPass {
-  private readonly downsample: LazyProgram;
-  private readonly blurs: LazyProgram[];
-  private readonly taps = new Float32Array(MAX_TAPS * 2);
-  private readonly weights = new Float32Array(MAX_RADIUS + 1);
-  private bloomSigma = -1;
-  private hazeSigma = -1;
-  private mixView = -1;
+  readonly #downsample: LazyProgram;
+  readonly #blurs: LazyProgram[];
+  readonly #taps = new Float32Array(MAX_TAPS * 2);
+  readonly #weights = new Float32Array(MAX_RADIUS + 1);
+  #bloomSigma = -1;
+  #hazeSigma = -1;
+  #mixView = -1;
   /** Last u_lite of the combine program (-1: unknown). */
-  private liteFlag = -1;
+  #liteFlag = -1;
   /** Last uploaded target sizes (setSizes arguments). */
-  private readonly sizes = new Float32Array(8).fill(Number.NaN);
+  readonly #sizes = new Float32Array(8).fill(Number.NaN);
 
-  constructor(private readonly ctx: PassContext) {
+  readonly #ctx: PassContext;
+
+  constructor(ctx: PassContext) {
+    this.#ctx = ctx;
     const gl = ctx.gl;
-    this.downsample = new LazyProgram(
+    this.#downsample = new LazyProgram(
       ctx,
       FULLSCREEN_VS,
       downsampleFs(ctx.header),
@@ -328,7 +331,7 @@ export class BloomPass {
       });
     // Separate programs per layer and direction: each keeps its own kernel uniforms, so kernels
     // are uploaded only when a sigma changes. bloom-y also combines bloom and haze into the glow.
-    this.blurs = [
+    this.#blurs = [
       blur('x', 'bloom-x'),
       blur('y', 'bloom-y-combine', true),
       blur('x', 'haze-x'),
@@ -337,8 +340,8 @@ export class BloomPass {
   }
 
   poll(): boolean {
-    let ok = this.downsample.poll();
-    for (const b of this.blurs) ok = b.poll() && ok;
+    let ok = this.#downsample.poll();
+    for (const b of this.#blurs) ok = b.poll() && ok;
     return ok;
   }
 
@@ -347,39 +350,39 @@ export class BloomPass {
    * format for the combine program, the HDR one for the others.
    */
   warm(targets: WarmTargets): void {
-    const caps = this.ctx.caps;
+    const caps = this.#ctx.caps;
     const hdr = targets.framebuffer([caps.hdrFormat]);
-    warmDraw(this.ctx, this.downsample, hdr);
-    this.blurs.forEach((b, i) => {
-      warmDraw(this.ctx, b, i === 1 ? targets.framebuffer([caps.glowFormat]) : hdr);
+    warmDraw(this.#ctx, this.#downsample, hdr);
+    this.#blurs.forEach((b, i) => {
+      warmDraw(this.#ctx, b, i === 1 ? targets.framebuffer([caps.glowFormat]) : hdr);
     });
   }
 
   /** Forces kernel re-upload (after programs are (re)linked). */
   invalidate(): void {
-    this.bloomSigma = -1;
-    this.hazeSigma = -1;
-    this.mixView = -1;
-    this.liteFlag = -1;
-    this.sizes.fill(Number.NaN);
+    this.#bloomSigma = -1;
+    this.#hazeSigma = -1;
+    this.#mixView = -1;
+    this.#liteFlag = -1;
+    this.#sizes.fill(Number.NaN);
   }
 
   /**
    * Uploads the kernel of `sigma` to programs `first`..`last`: u_taps / u_count (u_w / u_radius
    * on RGBA8), or with `haze` the combine program's lite haze kernel (u_hazeTaps / u_hazeCount).
    */
-  private uploadKernel(first: number, last: number, sigma: number, haze = false): void {
-    const gl = this.ctx.gl;
-    const hdr = this.ctx.caps.hdr;
-    const count = hdr ? gaussianTaps(sigma, this.taps) : gaussianWeights(sigma, this.weights);
+  #uploadKernel(first: number, last: number, sigma: number, haze = false): void {
+    const gl = this.#ctx.gl;
+    const hdr = this.#ctx.caps.hdr;
+    const count = hdr ? gaussianTaps(sigma, this.#taps) : gaussianWeights(sigma, this.#weights);
     for (let i = first; i <= last; i++) {
-      const p = this.blurs[i]?.use();
+      const p = this.#blurs[i]?.use();
       if (!p) continue;
       if (hdr) {
-        gl.uniform2fv(p.uniform(haze ? 'u_hazeTaps' : 'u_taps'), this.taps);
+        gl.uniform2fv(p.uniform(haze ? 'u_hazeTaps' : 'u_taps'), this.#taps);
         gl.uniform1i(p.uniform(haze ? 'u_hazeCount' : 'u_count'), count);
       } else {
-        gl.uniform1fv(p.uniform(haze ? 'u_hazeW' : 'u_w'), this.weights);
+        gl.uniform1fv(p.uniform(haze ? 'u_hazeW' : 'u_w'), this.#weights);
         gl.uniform1i(p.uniform(haze ? 'u_hazeRadius' : 'u_radius'), count);
       }
     }
@@ -387,15 +390,15 @@ export class BloomPass {
 
   /** Updates kernels when sigmas change (cells for bloom, cells for haze; haze runs at 1/4). */
   setSigmas(bloomSigma: number, hazeSigma: number): void {
-    if (bloomSigma !== this.bloomSigma) {
-      this.bloomSigma = bloomSigma;
-      this.uploadKernel(0, 1, bloomSigma);
+    if (bloomSigma !== this.#bloomSigma) {
+      this.#bloomSigma = bloomSigma;
+      this.#uploadKernel(0, 1, bloomSigma);
     }
-    if (hazeSigma !== this.hazeSigma) {
-      this.hazeSigma = hazeSigma;
-      this.uploadKernel(2, 3, hazeSigma / 4);
+    if (hazeSigma !== this.#hazeSigma) {
+      this.#hazeSigma = hazeSigma;
+      this.#uploadKernel(2, 3, hazeSigma / 4);
       // The lite combine blurs the downsampled haze itself (see liteHazeSigma).
-      this.uploadKernel(1, 1, liteHazeSigma(hazeSigma), true);
+      this.#uploadKernel(1, 1, liteHazeSigma(hazeSigma), true);
     }
   }
 
@@ -410,7 +413,7 @@ export class BloomPass {
     allocQW: number,
     allocQH: number,
   ): void {
-    const s = this.sizes;
+    const s = this.#sizes;
     if (
       s[0] === w &&
       s[1] === h &&
@@ -431,11 +434,11 @@ export class BloomPass {
     s[5] = qh;
     s[6] = allocQW;
     s[7] = allocQH;
-    const gl = this.ctx.gl;
-    const dp = this.downsample.use();
+    const gl = this.#ctx.gl;
+    const dp = this.#downsample.use();
     gl.uniform4f(dp.uniform('u_cellTex'), w, h, 1 / allocW, 1 / allocH);
     for (let i = 0; i < 4; i++) {
-      const p = this.blurs[i]?.use();
+      const p = this.#blurs[i]?.use();
       if (!p) continue;
       if (i < 2) gl.uniform4f(p.uniform('u_tex'), w, h, 1 / allocW, 1 / allocH);
       else gl.uniform4f(p.uniform('u_tex'), qw, qh, 1 / allocQW, 1 / allocQH);
@@ -460,63 +463,63 @@ export class BloomPass {
     debugView: number,
     lite = false,
   ): void {
-    const gl = this.ctx.gl;
+    const gl = this.#ctx.gl;
     // Haze first (the combine step reads it): source -> quarter res, x -> tmp, y -> haze.
     bindTexture(gl, UNIT_SRC, bloom.tex);
-    this.downsample.use();
+    this.#downsample.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, haze.fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.viewport(0, 0, qw, qh);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (lite) {
       // Lite: the combine pass blurs the bloom source and the downsampled haze in 2-D itself.
       gl.viewport(0, 0, w, h);
-      this.combine(bloom.tex, glow, debugView, 1);
+      this.#combine(bloom.tex, glow, debugView, 1);
       return;
     }
-    this.blurs[2]?.use();
+    this.#blurs[2]?.use();
     bindTexture(gl, UNIT_SRC, haze.tex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, hazeTmp.fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    this.blurs[3]?.use();
+    this.#blurs[3]?.use();
     bindTexture(gl, UNIT_SRC, hazeTmp.tex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, haze.fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // Bloom: x -> tmp, then y + combine with the haze -> glow.
     gl.viewport(0, 0, w, h);
-    this.blurs[0]?.use();
+    this.#blurs[0]?.use();
     bindTexture(gl, UNIT_SRC, bloom.tex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, bloomTmp.fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    this.combine(bloomTmp.tex, glow, debugView, 0);
+    this.#combine(bloomTmp.tex, glow, debugView, 0);
   }
 
   /** bloom-y-combine: `src` blurred (in y, or in 2-D when `lite`) plus the haze -> `glow`. */
-  private combine(src: WebGLTexture, glow: BlurTarget, debugView: number, lite: number): void {
-    const gl = this.ctx.gl;
-    const p = this.blurs[1]?.use();
-    if (p && this.mixView !== debugView) {
-      this.mixView = debugView;
+  #combine(src: WebGLTexture, glow: BlurTarget, debugView: number, lite: number): void {
+    const gl = this.#ctx.gl;
+    const p = this.#blurs[1]?.use();
+    if (p && this.#mixView !== debugView) {
+      this.#mixView = debugView;
       const m = glowMix(debugView);
       gl.uniform3f(p.uniform('u_mix'), m[0], m[1], m[2]);
     }
-    if (p && this.liteFlag !== lite) {
-      this.liteFlag = lite;
+    if (p && this.#liteFlag !== lite) {
+      this.#liteFlag = lite;
       gl.uniform1f(p.uniform('u_lite'), lite);
     }
     bindTexture(gl, UNIT_SRC, src);
     gl.bindFramebuffer(gl.FRAMEBUFFER, glow.fb);
-    discardTargets(this.ctx);
+    discardTargets(this.#ctx);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // Unbind the scratch unit so no later pass sees a feedback loop on it.
     bindTexture(gl, UNIT_SRC, null);
   }
 
   dispose(): void {
-    this.downsample.dispose();
-    for (const b of this.blurs) b.dispose();
+    this.#downsample.dispose();
+    for (const b of this.#blurs) b.dispose();
   }
 }

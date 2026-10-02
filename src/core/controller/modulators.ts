@@ -25,10 +25,10 @@ export class Modulator {
   disposed = false;
   // The source is split by kind so a numeric source lives in a double field: set(v) every
   // frame then writes in place instead of boxing a number into a mixed-type field.
-  private kind = SRC_NUMBER;
-  private num = 0;
-  private fn: (() => number) | null = null;
-  private obj: { get(): number } | null = null;
+  #kind = SRC_NUMBER;
+  #num = 0;
+  #fn: (() => number) | null = null;
+  #obj: { get(): number } | null = null;
 
   constructor(source: ModSource, blend: ModBlend = 'add', smoothingMs = 0) {
     this.blend = BLEND_CODE[blend] ?? 0;
@@ -38,14 +38,14 @@ export class Modulator {
 
   setSource(source: ModSource): void {
     if (typeof source === 'number') {
-      this.kind = SRC_NUMBER;
-      this.num = source;
+      this.#kind = SRC_NUMBER;
+      this.#num = source;
     } else if (typeof source === 'function') {
-      this.kind = SRC_FUNCTION;
-      this.fn = source;
+      this.#kind = SRC_FUNCTION;
+      this.#fn = source;
     } else {
-      this.kind = SRC_OBJECT;
-      this.obj = source;
+      this.#kind = SRC_OBJECT;
+      this.#obj = source;
     }
   }
 
@@ -55,13 +55,13 @@ export class Modulator {
    */
   sample(dtSec: number): void {
     let raw: number;
-    if (this.kind === SRC_NUMBER) raw = this.num;
+    if (this.#kind === SRC_NUMBER) raw = this.#num;
     else {
       try {
         raw =
-          this.kind === SRC_FUNCTION
-            ? (this.fn as () => number)()
-            : (this.obj as { get(): number }).get();
+          this.#kind === SRC_FUNCTION
+            ? (this.#fn as () => number)()
+            : (this.#obj as { get(): number }).get();
       } catch {
         raw = Number.NaN;
       }

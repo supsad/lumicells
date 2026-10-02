@@ -113,52 +113,52 @@ export class GpuDevice {
   readonly features: FeatureSource;
   /** Polls so far: the frame counter of field-variant recency. */
   frameCount = 0;
-  private readonly slots = new Set<RenderSlot>();
-  private programs: DevicePasses | null = null;
-  private gpuTimer: GpuTimer | null = null;
-  private readonly onError: ((error: EngineError) => void) | undefined;
+  readonly #slots = new Set<RenderSlot>();
+  #programs: DevicePasses | null = null;
+  #gpuTimer: GpuTimer | null = null;
+  readonly #onError: ((error: EngineError) => void) | undefined;
   /** Every program but the field variants is linked (their warm-up issued). */
-  private baseLinked = false;
+  #baseLinked = false;
   /** Every program created on the device (see PassContext.programs). */
-  private readonly created: LazyProgram[] = [];
+  readonly #created: LazyProgram[] = [];
   /** When the programs were submitted, ms. */
-  private submittedAt = 0;
+  #submittedAt = 0;
   /**
    * Whether every program submitted at start-up was linked CACHED_LINK_MS later (from the
    * browser's program cache: no warm-up needed), as checked then by a timer; null before.
    */
-  private cacheHit: boolean | null = null;
-  private cacheTimer: ReturnType<typeof setTimeout> | undefined;
+  #cacheHit: boolean | null = null;
+  #cacheTimer: ReturnType<typeof setTimeout> | undefined;
   /** ...and warmed up (or from the program cache): the device can draw. */
-  private linked = false;
+  #linked = false;
   /** Field variants asked for before the programs were submitted (see startPasses). */
-  private readonly requested: number[] = [];
+  readonly #requested: number[] = [];
   /** Field programs linked and not warmed up yet (reused). */
-  private readonly linkedNow: FieldProgram[] = [];
+  readonly #linkedNow: FieldProgram[] = [];
   /** Their programs, for fromCache (reused). */
-  private readonly linkedProgs: LazyProgram[] = [];
+  readonly #linkedProgs: LazyProgram[] = [];
   /** Scratch objects of the warm-up draws (created on the first one). */
-  private warmFbs: Map<string, WebGLFramebuffer> | null = null;
-  private warmTextures: WebGLTexture[] = [];
-  private warmBuffers: WebGLBuffer[] = [];
-  private failure: EngineError | null = null;
-  private disposed = false;
+  #warmFbs: Map<string, WebGLFramebuffer> | null = null;
+  #warmTextures: WebGLTexture[] = [];
+  #warmBuffers: WebGLBuffer[] = [];
+  #failure: EngineError | null = null;
+  #disposed = false;
   /** Set once the context has been lost: every GL object of this device is dead for good. */
-  private wasLost = false;
+  #wasLost = false;
   /**
    * A lost context ends this device's compile at once: devices waiting for it (claimCompile)
    * must not wait for a poll that never comes (nothing polls a lost device). Both calls skip GL
    * calls on a lost context.
    */
-  private readonly onContextLost = () => {
-    this.wasLost = true;
+  readonly #onContextLost = () => {
+    this.#wasLost = true;
     forgetWarmups(this.gl);
     releaseCompile(this, false);
   };
 
   constructor(canvas: HTMLCanvasElement, opts: GpuDeviceOptions) {
     this.canvas = canvas;
-    this.onError = opts.onError;
+    this.#onError = opts.onError;
     this.paramsPrelude = opts.paramsPrelude;
     const attrs: WebGLContextAttributes = {
       alpha: !opts.opaque,
@@ -181,7 +181,7 @@ export class GpuDevice {
     this.caps = probeCaps(gl, opts.forceRgba8 ?? false);
     this.softwareFallback = caveat || this.caps.software;
     this.declaredParamVec4 = declaredParamVec4(opts.paramsPrelude);
-    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextlost', this.#onContextLost);
 
     if (opts.warnMissingParams ?? true) {
       const missing = missingParamMacros(opts.paramsPrelude);
@@ -192,19 +192,19 @@ export class GpuDevice {
       }
     }
     this.features = parseFeatureSource(opts.paramsPrelude);
-    this.header = buildHeader(this.caps.hdr, opts.paramsPrelude, this.caps.d3d);
+    this.#header = buildHeader(this.caps.hdr, opts.paramsPrelude, this.caps.d3d);
     // The programs are submitted on the first field request (or poll): see createPasses.
   }
 
-  private readonly header: string;
+  readonly #header: string;
   /** progress(), for a device that waits for this one's compile (see claimCompile). */
-  private readonly step = (): void => this.progress();
+  readonly #step = (): void => this.progress();
 
   /** CACHED_LINK_MS after submission: were the start-up programs all linked by then? */
-  private readonly checkCache = (): void => {
-    this.cacheTimer = undefined;
-    if (this.disposed || this.isContextLost()) return;
-    this.cacheHit = this.created.every((p) => p.completed());
+  readonly #checkCache = (): void => {
+    this.#cacheTimer = undefined;
+    if (this.#disposed || this.isContextLost()) return;
+    this.#cacheHit = this.#created.every((p) => p.completed());
   };
 
   /**
@@ -213,12 +213,12 @@ export class GpuDevice {
    * found after it go by its verdict; programs created after it need the verdict and a link
    * that fast of their own.
    */
-  private fromCache(progs: readonly LazyProgram[]): boolean {
-    const hit = this.cacheHit;
-    if (hit === null) return performance.now() - this.submittedAt < CACHED_LINK_MS;
+  #fromCache(progs: readonly LazyProgram[]): boolean {
+    const hit = this.#cacheHit;
+    if (hit === null) return performance.now() - this.#submittedAt < CACHED_LINK_MS;
     if (!hit) return false;
     for (const p of progs) {
-      if (p.submitted > this.submittedAt + CACHED_LINK_MS && p.linkMs >= CACHED_LINK_MS) {
+      if (p.submitted > this.#submittedAt + CACHED_LINK_MS && p.linkMs >= CACHED_LINK_MS) {
         return false;
       }
     }
@@ -229,38 +229,38 @@ export class GpuDevice {
    * Submits the programs unless another device of the page compiles the same ones (then they
    * come from the program cache once it is done: see warmup.ts). True once submitted.
    */
-  private startPasses(): boolean {
-    if (this.programs) return true;
-    if (!claimCompile(this, this.header, this.step)) return false;
+  #startPasses(): boolean {
+    if (this.#programs) return true;
+    if (!claimCompile(this, this.#header, this.#step)) return false;
     try {
-      this.createPasses();
+      this.#createPasses();
     } catch (err) {
-      this.fail(err, 'resource');
+      this.#fail(err, 'resource');
       return false;
     }
     return true;
   }
 
-  private createPasses(): void {
+  #createPasses(): void {
     const gl = this.gl;
     const ctx: PassContext = {
       gl,
       caps: this.caps,
-      header: this.header,
+      header: this.#header,
       mrtPad: this.caps.d3d,
-      programs: this.created,
+      programs: this.#created,
     };
     // Compiles are submitted here and link in the background (KHR_parallel_shader_compile), on a
     // few worker threads: the field variants asked for so far go first, being the costliest. The
     // field program is compiled per variant (requestField).
-    this.submittedAt = performance.now();
+    this.#submittedAt = performance.now();
     if (typeof setTimeout === 'function') {
-      this.cacheTimer = setTimeout(this.checkCache, CACHED_LINK_MS);
+      this.#cacheTimer = setTimeout(this.#checkCache, CACHED_LINK_MS);
     }
     const field = new FieldPass(ctx);
-    for (const mask of this.requested) field.request(mask, this.frameCount - 1);
-    this.requested.length = 0;
-    this.programs = {
+    for (const mask of this.#requested) field.request(mask, this.frameCount - 1);
+    this.#requested.length = 0;
+    this.#programs = {
       life: new LifePass(ctx),
       field,
       bloom: new BloomPass(ctx),
@@ -268,7 +268,7 @@ export class GpuDevice {
       lift: new LiftPass(ctx),
       stamp: new StampPass(ctx),
     };
-    if (this.caps.timerQuery) this.gpuTimer = new GpuTimer(gl, this.caps.timerQuery);
+    if (this.caps.timerQuery) this.#gpuTimer = new GpuTimer(gl, this.caps.timerQuery);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
@@ -278,12 +278,12 @@ export class GpuDevice {
 
   /** The shared programs: null on a context lost at creation and after dispose(). */
   get passes(): DevicePasses | null {
-    return this.programs;
+    return this.#programs;
   }
 
   /** GPU frame timer (EXT_disjoint_timer_query_webgl2), null when unsupported. */
   get timer(): GpuTimer | null {
-    return this.gpuTimer;
+    return this.#gpuTimer;
   }
 
   /**
@@ -291,7 +291,7 @@ export class GpuDevice {
    * true after a context loss: check isContextLost too.
    */
   get isLinked(): boolean {
-    return this.linked;
+    return this.#linked;
   }
 
   /**
@@ -299,30 +299,26 @@ export class GpuDevice {
    * in the background unless one (ready or compiling) covers it already.
    */
   requestField(wanted: number): void {
-    if (this.disposed || this.failure) return;
-    const p = this.programs;
+    if (this.#disposed || this.#failure) return;
+    const p = this.#programs;
     if (p) {
       p.field.request(wanted, this.frameCount - 1);
       return;
     }
-    if (!this.requested.includes(wanted)) this.requested.push(wanted);
+    if (!this.#requested.includes(wanted)) this.#requested.push(wanted);
     // The first request submits every program, this variant first (submitting makes no
     // synchronous call, so it may happen during another device's warm-up).
-    if (!this.isContextLost()) this.startPasses();
+    if (!this.isContextLost()) this.#startPasses();
   }
 
   /** The failure that stopped the device (compile/link or program creation), if any. */
   get error(): EngineError | null {
-    return this.failure;
-  }
-
-  get isDisposed(): boolean {
-    return this.disposed;
+    return this.#failure;
   }
 
   /** Live slots on this device. */
   get slotCount(): number {
-    return this.slots.size;
+    return this.#slots.size;
   }
 
   /**
@@ -330,7 +326,7 @@ export class GpuDevice {
    * belong to the dead context, so recovery is dispose() + a new device (and new slots).
    */
   isContextLost(): boolean {
-    return this.wasLost || this.gl.isContextLost();
+    return this.#wasLost || this.gl.isContextLost();
   }
 
   /** Simulates a context loss (WEBGL_lose_context), for testing the recovery path. */
@@ -349,7 +345,7 @@ export class GpuDevice {
    * after dispose(). Field variants progress here too (see requestField).
    */
   poll(): boolean {
-    if (this.disposed || this.failure) return false;
+    if (this.#disposed || this.#failure) return false;
     if (this.isContextLost()) {
       forgetWarmups(this.gl);
       releaseCompile(this, false);
@@ -357,7 +353,7 @@ export class GpuDevice {
     }
     this.frameCount++;
     this.progress();
-    return this.linked && !this.failure;
+    return this.#linked && !this.#failure;
   }
 
   /**
@@ -367,7 +363,7 @@ export class GpuDevice {
    * has no field variant to draw with yet runs it again (a variant may have linked since).
    */
   progress(): void {
-    if (this.disposed || this.failure) return;
+    if (this.#disposed || this.#failure) return;
     if (this.isContextLost()) {
       // Lost before its event was dispatched (a waiting device calls this through its claim):
       // the claim must not hold that device back.
@@ -376,33 +372,33 @@ export class GpuDevice {
       return;
     }
     // gpuBusy() also settles the warm-ups the GPU is past (this device's among them).
-    if (gpuBusy() || !this.startPasses()) return;
-    const p = this.programs;
+    if (gpuBusy() || !this.#startPasses()) return;
+    const p = this.#programs;
     if (!p) return;
     try {
-      if (!this.baseLinked) {
+      if (!this.#baseLinked) {
         let ok = p.life.poll();
         ok = p.bloom.poll() && ok;
         ok = p.composite.poll() && ok;
         ok = p.lift.poll() && ok;
         ok = p.stamp.poll() && ok;
         if (ok) {
-          this.baseLinked = true;
+          this.#baseLinked = true;
           p.bloom.invalidate();
           // From the program cache (see CACHED_LINK_MS): nothing left to compile on a draw.
-          if (this.fromCache(NO_PROGRAMS)) {
-            this.linked = true;
+          if (this.#fromCache(NO_PROGRAMS)) {
+            this.#linked = true;
           } else {
-            this.warm(
+            this.#warm(
               (t) => {
                 p.life.warm(t);
                 p.bloom.warm(t);
                 p.composite.warm(t);
                 p.stamp.warm(t);
-                p.lift.warm(t, this.warmBuffer());
+                p.lift.warm(t, this.#warmBuffer());
               },
               () => {
-                this.linked = true;
+                this.#linked = true;
               },
             );
           }
@@ -411,12 +407,12 @@ export class GpuDevice {
       // Field programs wait for the base ones: whether those came from the program cache says
       // whether these did too (the pack links fast either way, its draw-time code is what its
       // warm-up compiles: see passes/field.ts). A later variant also needs to link fast.
-      const linked = this.linkedNow;
+      const linked = this.#linkedNow;
       p.field.pollLinks(linked);
-      if (this.baseLinked && linked.length > 0) {
-        const progs = this.linkedProgs;
+      if (this.#baseLinked && linked.length > 0) {
+        const progs = this.#linkedProgs;
         for (const fp of linked) progs.push(fp.prog);
-        const cached = this.fromCache(progs);
+        const cached = this.#fromCache(progs);
         progs.length = 0;
         if (cached) {
           for (const fp of linked) fp.warmed = true;
@@ -425,7 +421,7 @@ export class GpuDevice {
           // A copy for `done`: the reused list is emptied before the fence passes.
           const programs = linked.slice();
           linked.length = 0;
-          this.warm(
+          this.#warm(
             (t) => {
               for (const fp of programs) p.field.warm(fp, t);
             },
@@ -436,31 +432,31 @@ export class GpuDevice {
         }
       }
     } catch (err) {
-      this.fail(err, 'compile');
+      this.#fail(err, 'compile');
       return;
     }
     // Linked (field variants included): the browser's program cache holds them, another device
     // may link them from there now (their warm-up draws are cheap: see passes/field.ts).
-    if (this.baseLinked && !p.field.linking) releaseCompile(this, true);
+    if (this.#baseLinked && !p.field.linking) releaseCompile(this, true);
   }
 
   /**
    * Issues warm-up draws (`draw` gets the scratch targets) and a fence behind them; `done` runs
    * once the GPU is past them (at once when fences are unavailable).
    */
-  private warm(draw: (targets: WarmTargets) => void, done: () => void): void {
+  #warm(draw: (targets: WarmTargets) => void, done: () => void): void {
     const gl = this.gl;
     // The programs' uniform blocks must be backed by large enough buffers, or WebGL skips the
     // draw: bind zeroed scratch ones (every slot binds its own again before drawing).
-    if (this.warmBuffers.length === 0) {
-      const params = this.scratchBuffer(Math.max(1, this.declaredParamVec4) * 16);
-      const frame = this.scratchBuffer(FRAME_BYTES);
-      this.warmBuffers.push(params, frame);
+    if (this.#warmBuffers.length === 0) {
+      const params = this.#scratchBuffer(Math.max(1, this.declaredParamVec4) * 16);
+      const frame = this.#scratchBuffer(FRAME_BYTES);
+      this.#warmBuffers.push(params, frame);
     }
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_PARAMS, this.warmBuffers[0] as WebGLBuffer);
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_FRAME, this.warmBuffers[1] as WebGLBuffer);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_PARAMS, this.#warmBuffers[0] as WebGLBuffer);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, BIND_FRAME, this.#warmBuffers[1] as WebGLBuffer);
     this.boundSlot = null;
-    draw(this.warmTargets);
+    draw(this.#warmTargets);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (!sync) {
@@ -471,7 +467,7 @@ export class GpuDevice {
     trackWarmup(gl, sync, done);
   }
 
-  private scratchBuffer(bytes: number): WebGLBuffer {
+  #scratchBuffer(bytes: number): WebGLBuffer {
     const gl = this.gl;
     const b = gl.createBuffer();
     if (!b) throw new Error('[lumicells] cannot create a warm-up buffer');
@@ -482,18 +478,18 @@ export class GpuDevice {
   }
 
   /** The lift program's warm-up instance (zeros, see LiftPass.warm). */
-  private warmBuffer(): WebGLBuffer {
+  #warmBuffer(): WebGLBuffer {
     const b = createLiftBuffer(this.gl);
-    this.warmBuffers.push(b);
+    this.#warmBuffers.push(b);
     return b;
   }
 
   /** 1x1 scratch framebuffers by layout (no completeness check: that call is synchronous). */
-  private readonly warmTargets: WarmTargets = {
+  readonly #warmTargets: WarmTargets = {
     framebuffer: (formats: readonly TextureFormat[], first = 0): WebGLFramebuffer => {
       const key = `${first}:${formats.map((f) => f.internalFormat).join(',')}`;
-      const fbs = this.warmFbs ?? new Map<string, WebGLFramebuffer>();
-      this.warmFbs = fbs;
+      const fbs = this.#warmFbs ?? new Map<string, WebGLFramebuffer>();
+      this.#warmFbs = fbs;
       let fb = fbs.get(key);
       if (fb) return fb;
       const gl = this.gl;
@@ -502,7 +498,7 @@ export class GpuDevice {
       gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
       const textures = formats.map((format) => createTargetTexture(gl, 1, 1, { format }));
       bindTexture(gl, UNIT_SRC, null);
-      this.warmTextures.push(...textures);
+      this.#warmTextures.push(...textures);
       fb = createMrtFramebuffer(gl, textures, first, false);
       fbs.set(key, fb);
       return fb;
@@ -514,7 +510,7 @@ export class GpuDevice {
    * are shared, and a slot with another parameter layout would read the wrong uniforms.
    */
   createSlot(opts: RenderSlotOptions): RenderSlot {
-    if (this.disposed) throw new EngineError('resource', '[lumicells] the GPU device is disposed');
+    if (this.#disposed) throw new EngineError('resource', '[lumicells] the GPU device is disposed');
     if (this.isContextLost()) {
       throw new EngineError('resource', '[lumicells] the GPU device lost its context');
     }
@@ -525,50 +521,50 @@ export class GpuDevice {
       );
     }
     const slot = new RenderSlot(this, opts);
-    this.slots.add(slot);
+    this.#slots.add(slot);
     return slot;
   }
 
   /** Called by RenderSlot.dispose(): forget everything that refers to the slot. */
   releaseSlot(slot: RenderSlot, liftBuffer: WebGLBuffer | null): void {
-    this.slots.delete(slot);
+    this.#slots.delete(slot);
     if (this.boundSlot === slot) this.boundSlot = null;
-    if (liftBuffer) this.programs?.lift.release(liftBuffer);
+    if (liftBuffer) this.#programs?.lift.release(liftBuffer);
   }
 
-  private fail(err: unknown, code: EngineErrorCode): void {
-    if (this.failure) return;
-    this.failure = toEngineError(err, code);
+  #fail(err: unknown, code: EngineErrorCode): void {
+    if (this.#failure) return;
+    this.#failure = toEngineError(err, code);
     forgetWarmups(this.gl);
     releaseCompile(this, false);
-    this.onError?.(this.failure);
+    this.#onError?.(this.#failure);
   }
 
   /** Disposes the remaining slots, then frees every GL object (skipped on a lost context). */
   dispose(): void {
-    if (this.disposed) return;
-    for (const slot of [...this.slots]) slot.dispose();
-    this.disposed = true;
-    if (this.cacheTimer !== undefined) clearTimeout(this.cacheTimer);
-    this.cacheTimer = undefined;
-    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    if (this.#disposed) return;
+    for (const slot of [...this.#slots]) slot.dispose();
+    this.#disposed = true;
+    if (this.#cacheTimer !== undefined) clearTimeout(this.#cacheTimer);
+    this.#cacheTimer = undefined;
+    this.canvas.removeEventListener('webglcontextlost', this.#onContextLost);
     forgetWarmups(this.gl);
     releaseCompile(this, false);
-    const passes = this.programs;
-    const timer = this.gpuTimer;
-    const fbs = this.warmFbs;
-    this.programs = null;
-    this.gpuTimer = null;
+    const passes = this.#programs;
+    const timer = this.#gpuTimer;
+    const fbs = this.#warmFbs;
+    this.#programs = null;
+    this.#gpuTimer = null;
     this.boundSlot = null;
-    this.warmFbs = null;
+    this.#warmFbs = null;
     if (this.isContextLost()) return;
     try {
       const gl = this.gl;
       for (const fb of fbs?.values() ?? []) gl.deleteFramebuffer(fb);
-      for (const t of this.warmTextures) gl.deleteTexture(t);
-      for (const b of this.warmBuffers) gl.deleteBuffer(b);
-      this.warmTextures = [];
-      this.warmBuffers = [];
+      for (const t of this.#warmTextures) gl.deleteTexture(t);
+      for (const b of this.#warmBuffers) gl.deleteBuffer(b);
+      this.#warmTextures = [];
+      this.#warmBuffers = [];
       timer?.dispose();
       if (passes) {
         passes.life.dispose();
