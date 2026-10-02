@@ -573,7 +573,8 @@ export interface LumiCellsEvents {
    * never drew before) as soon as a context frees up. `auto` instances never wait: they use the
    * shared renderer instead (see the `renderer` event). `load`: the engine, a chunk of its own
    * that loads behind the poster, could not be loaded (a network error; an `error` event carries
-   * it). Instances created later try to load it again.
+   * it). The failure lasts for the page: browsers keep a failed dynamic import, so instances
+   * created later fall back the same way until the page is reloaded.
    */
   fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' | 'budget' | 'load' };
   /**
