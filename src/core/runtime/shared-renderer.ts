@@ -22,8 +22,14 @@
  * copies from a 1280x1024 atlas, 1 s). The copy path is chosen by measurement, not by browser:
  * the first frames with several copies time the direct copies; when a copy costs more than a
  * copy of its own pixels plausibly can (CHEAP_COPY_MS), the next frames time the staged path:
- * ONE drawImage of the used part of the atlas into a 2D staging canvas, then every region from
- * there. From then on each frame takes the cheaper of the two for its number of copies.
+ * ONE snapshot of the used part of the atlas into a 2D staging canvas, then every region from
+ * there. The snapshot is timed both ways: a drawImage of the atlas (which still reads the whole
+ * drawing buffer back in Firefox: 15-19 ms for 1280x1024, however little of it is used), then a
+ * readPixels of only the used part, flipped to canvas row order and unpremultiplied for the
+ * putImageData into the staging canvas (Firefox: 4 ms for 1200x185, 13 ms for all of 1280x1024).
+ * The cheaper snapshot stays, and from then on each frame takes it or the direct copies, whichever
+ * costs less for its number of copies and the part of the atlas in use. Where copies are cheap (a
+ * GPU-backed 2D canvas: Chrome, Safari) nothing but the direct path is ever timed.
  *
  * The 2D canvases are sized to each instance's drawing buffer and stretched by CSS exactly like
  * an own canvas, so the copy is 1:1 (no filtering). When the drawing instances need more pixels
@@ -171,11 +177,20 @@ export const COPY_BUDGET_FLOOR = 0.25;
 /** Largest frame divisor (and number of phases). */
 export const MAX_DIVISOR = 60;
 
-/** Copy path probe states (see the header): timing direct copies, timing staged ones, decided. */
+/**
+ * Copy path probe states (see the header): timing direct copies, staged ones with a drawn
+ * snapshot, staged ones with a read snapshot; decided.
+ */
 const PROBE_DIRECT = 0;
 const PROBE_STAGED = 1;
 const DIRECT_ONLY = 2;
 const CHOOSE = 3;
+const PROBE_READBACK = 4;
+
+/** How a frame's copy series gets its pixels (see the header). */
+const SNAP_NONE = 0;
+const SNAP_DRAW = 1;
+const SNAP_READ = 2;
 
 /** A shared instance as the renderer sees it. Callbacks run synchronously inside the renderer. */
 export interface SharedClient extends BudgetMember {
@@ -400,6 +415,36 @@ function byRank(x: SharedClient, y: SharedClient): number {
   return compareRank(y, x) || x.order - y.order;
 }
 
+/**
+ * A `w` x `h` rectangle read with readPixels into `img` (rows img.width apart, its last row a
+ * scratch row) made what putImageData takes: GL rows run bottom-up, they are flipped; the drawing
+ * buffer holds premultiplied colors, they are unpremultiplied when `alpha` (putImageData
+ * premultiplies them again, within 1 LSB of what was read; an opaque canvas gets exactly what
+ * drawImage would give it: the premultiplied color).
+ */
+function toImageRows(img: ImageData, w: number, h: number, alpha: boolean): void {
+  const px = img.data;
+  const row = img.width * 4;
+  const len = w * 4;
+  const tmp = (img.height - 1) * row;
+  for (let a = 0, b = (h - 1) * row; a < b; a += row, b -= row) {
+    px.copyWithin(tmp, a, a + len);
+    px.copyWithin(a, b, b + len);
+    px.copyWithin(b, tmp, tmp + len);
+  }
+  if (!alpha) return;
+  for (let y = 0; y < h; y++) {
+    for (let i = y * row, end = i + len; i < end; i += 4) {
+      const a = px[i + 3] as number;
+      if (a === 0 || a === 255) continue;
+      // Uint8ClampedArray rounds to nearest and clamps.
+      px[i] = ((px[i] as number) * 255) / a;
+      px[i + 1] = ((px[i + 1] as number) * 255) / a;
+      px[i + 2] = ((px[i + 2] as number) * 255) / a;
+    }
+  }
+}
+
 export class SharedRenderer {
   readonly stats: SharedRendererStats = {
     gpuMs: null,
@@ -413,6 +458,7 @@ export class SharedRenderer {
     regions: 0,
     scale: 1,
     copyStaged: false,
+    copyReadback: false,
     reducers: {
       frameDivisor: 1,
       level: 0,
@@ -488,8 +534,12 @@ export class SharedRenderer {
   /** Staged: snapshot ms per megapixel snapshotted, and ms per region copy from the snapshot. */
   #snapMsPerMpx = 0;
   #stagedMsPerCopy = 0;
+  /** The snapshot is read (readPixels), not drawn: it was the cheaper per megapixel. */
+  #readSnap = false;
   #staging: HTMLCanvasElement | null = null;
   #stagingCtx: CanvasRenderingContext2D | null = null;
+  /** Read snapshot: texels the size of the staging canvas, plus a scratch row (toImageRows). */
+  #stagingImg: ImageData | null = null;
   /** The page's frame budget (see frame-load.ts). */
   readonly load = new FrameLoad();
   #lastBeginAt = Number.NaN;
@@ -1079,6 +1129,7 @@ export class SharedRenderer {
     }
     this.#staging = null;
     this.#stagingCtx = null;
+    this.#stagingImg = null;
     const s = this.stats;
     s.atlasWidth = 0;
     s.atlasHeight = 0;
@@ -1086,6 +1137,7 @@ export class SharedRenderer {
     s.regions = 0;
     s.draws = 0;
     s.copyStaged = false;
+    s.copyReadback = false;
     this.#phaseLoad.fill(0);
     this.#divisor = 1;
     releaseSharedContext();
@@ -1787,6 +1839,8 @@ export class SharedRenderer {
     let count = 0;
     let bw = 0;
     let bh = 0;
+    /** Some copy goes to a canvas with alpha: a read snapshot must be unpremultiplied. */
+    let alpha = false;
     for (let i = 0; i < n; i++) {
       const s = due[i] as SharedSeat;
       s.copyMs = 0;
@@ -1811,6 +1865,7 @@ export class SharedRenderer {
       }
       if (s.released || !s.target) continue;
       count++;
+      if (s.alpha) alpha = true;
       bw = Math.max(bw, s.srcX + s.srcW);
       bh = Math.max(bh, s.srcY + s.srcH);
     }
@@ -1818,13 +1873,19 @@ export class SharedRenderer {
     let src: HTMLCanvasElement = atlas;
     let snapMs = 0;
     this.#stagingResized = false;
-    if (count >= 2 && this.#wantsStaging(count, bw, bh)) {
+    const snap = count >= 2 ? this.#snapshotKind(count, bw, bh) : SNAP_NONE;
+    if (snap !== SNAP_NONE) {
       const t0 = performance.now();
-      const stage = this.#snapshot(atlas, bw, bh);
+      const stage =
+        snap === SNAP_READ ? this.#readback(bw, bh, alpha) : this.#snapshot(atlas, bw, bh);
       snapMs = performance.now() - t0;
       if (stage) src = stage;
+      // Lost while the pixels were read: what came back is not the frame. Every instance keeps
+      // its last one (the loss is handled at the next present).
+      else if (this.#device?.isContextLost()) return;
     }
     const staged = src !== atlas;
+    const read = staged && snap === SNAP_READ;
     // Frames that resize or set up canvases (a list joining) are left out of the calibration.
     let churn = this.#stagingResized || this.#firstDrawsNow > 0 || this.#queue.size > 0;
     let copied = 0;
@@ -1901,6 +1962,7 @@ export class SharedRenderer {
     // A lone direct copy cannot tell its flush from its own cost: the estimate waits.
     if (staged || copied >= 2) st.snapshotMs += (common - st.snapshotMs) * EMA;
     st.copyStaged = staged;
+    st.copyReadback = read;
     if (copied === 0) return;
     this.#noteCopyCost(staged, copied, regionMs, Math.max(0, firstMs), snapMs, bw * bh);
     // Snapshot included, canvas set-up excluded: what the copies of these pixels cost.
@@ -1940,27 +2002,33 @@ export class SharedRenderer {
     }
   }
 
-  /** Whether this frame's `count` copies (regions within `bw` x `bh`) go through a snapshot. */
-  #wantsStaging(count: number, bw: number, bh: number): boolean {
+  /**
+   * Whether this frame's `count` copies (regions within `bw` x `bh`) go through a snapshot, and
+   * which (SNAP_*).
+   */
+  #snapshotKind(count: number, bw: number, bh: number): number {
     switch (this.#probe) {
       case PROBE_STAGED:
-        return true;
+        return SNAP_DRAW;
+      case PROBE_READBACK:
+        return SNAP_READ;
       case CHOOSE: {
         const atlasMpx = (this.#planner.width * this.#planner.height) / 1e6;
         const direct = count * this.#directMsPerMpx * atlasMpx;
         const staged = this.#snapMsPerMpx * ((bw * bh) / 1e6) + count * this.#stagedMsPerCopy;
-        return staged < STAGE_MARGIN * direct;
+        if (staged >= STAGE_MARGIN * direct) return SNAP_NONE;
+        return this.#readSnap ? SNAP_READ : SNAP_DRAW;
       }
       default:
-        return false;
+        return SNAP_NONE;
     }
   }
 
   /**
-   * One snapshot of the atlas's used part (`w` x `h` from its top-left corner) in the staging
-   * canvas, for every copy of this frame. Null when no 2D context can be had (copy directly).
+   * The staging canvas's 2D context, the canvas sized for a snapshot of `w` x `h`. Null when no
+   * 2D context can be had (copy directly).
    */
-  #snapshot(atlas: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement | null {
+  #stagingFor(w: number, h: number): CanvasRenderingContext2D | null {
     let stage = this.#staging;
     if (!stage) {
       stage = document.createElement('canvas');
@@ -1983,13 +2051,51 @@ export class SharedRenderer {
       ctx.imageSmoothingEnabled = false;
       this.#stagingCtx = ctx;
     }
+    return ctx;
+  }
+
+  /**
+   * One snapshot of the atlas's used part (`w` x `h` from its top-left corner) in the staging
+   * canvas, for every copy of this frame, drawn from the WebGL canvas. Null when no 2D context
+   * can be had (copy directly).
+   */
+  #snapshot(atlas: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement | null {
+    const ctx = this.#stagingFor(w, h);
+    if (!ctx) return null;
     ctx.drawImage(atlas, 0, 0, w, h, 0, 0, w, h);
-    return stage;
+    return ctx.canvas;
+  }
+
+  /**
+   * The same snapshot read with readPixels (only the used part leaves the GPU), unpremultiplied
+   * when some copy keeps alpha (see toImageRows). Null when no 2D context can be had or the
+   * context was lost meanwhile.
+   */
+  #readback(w: number, h: number, alpha: boolean): HTMLCanvasElement | null {
+    const gl = (this.#device as GpuDevice).gl;
+    const ctx = this.#stagingFor(w, h);
+    if (!ctx) return null;
+    const { width, height } = ctx.canvas;
+    let img = this.#stagingImg;
+    if (img?.width !== width || img.height !== height + 1) {
+      img = new ImageData(width, height + 1);
+      this.#stagingImg = img;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Rows as wide as the staging canvas: the pixels land where putImageData takes them.
+    gl.pixelStorei(gl.PACK_ROW_LENGTH, width);
+    gl.readPixels(0, gl.drawingBufferHeight - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, img.data);
+    gl.pixelStorei(gl.PACK_ROW_LENGTH, 0);
+    if (gl.isContextLost()) return null;
+    toImageRows(img, w, h, alpha);
+    ctx.putImageData(img, 0, 0, 0, 0, w, h);
+    return ctx.canvas;
   }
 
   /**
    * Feeds the copy path probe with a frame of `count` copies: `regionMs` for the region copies
-   * (`firstMs` of it the first one), `snapMs` for the snapshot of `snapPx` pixels when staged.
+   * (`firstMs` of it the first one), `snapMs` for the snapshot of `snapPx` pixels when staged
+   * (drawn while PROBE_STAGED, read while PROBE_READBACK).
    */
   #noteCopyCost(
     staged: boolean,
@@ -2000,7 +2106,7 @@ export class SharedRenderer {
     snapPx: number,
   ): void {
     const probe = this.#probe;
-    if (count < 2 || (probe !== PROBE_DIRECT && probe !== PROBE_STAGED)) return;
+    if (count < 2 || probe === DIRECT_ONLY || probe === CHOOSE) return;
     if (this.#probeSkip < PROBE_SKIP) {
       this.#probeSkip++;
       return;
@@ -2024,6 +2130,16 @@ export class SharedRenderer {
       if (++this.#probeFrames < PROBE_FRAMES) return;
       this.#snapMsPerMpx = this.#probeSnapMs / Math.max(1e-6, this.#probeUnits);
       this.#stagedMsPerCopy = this.#probeMs / this.#probeCount;
+      this.#resetProbe();
+      this.#probe = PROBE_READBACK;
+    } else if (probe === PROBE_READBACK && staged) {
+      this.#probeSnapMs += snapMs;
+      this.#probeUnits += snapPx / 1e6;
+      if (++this.#probeFrames < PROBE_FRAMES) return;
+      // Per megapixel of the part in use, like the drawn snapshot: the cheaper one stays.
+      const read = this.#probeSnapMs / Math.max(1e-6, this.#probeUnits);
+      this.#readSnap = read < this.#snapMsPerMpx;
+      if (this.#readSnap) this.#snapMsPerMpx = read;
       this.#resetProbe();
       this.#probe = CHOOSE;
     }

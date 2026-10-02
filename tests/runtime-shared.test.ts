@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
  * The shared renderer without a GPU: a fake GpuDevice / RenderSlot (recording draws), fake 2D
- * contexts (recording copies) and a manual rAF driving the shared ticker. Covers the device
- * lifecycle (lazy creation, release with the last member, the context budget reservation), the
- * frame structure (all draws before all copies), rate limits, the pixel budget, context loss and
- * the facade's shared path (2D canvas, 'ready' after the first copy, parking, loss, renderer
- * switches).
+ * contexts (recording copies), a fake readPixels and a manual rAF driving the shared ticker.
+ * Covers the device lifecycle (lazy creation, release with the last member, the context budget
+ * reservation), the frame structure (all draws before all copies), rate limits, the pixel
+ * budget, context loss and the facade's shared path (2D canvas, 'ready' after the first copy,
+ * parking, loss, renderer switches).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OFF_CLOCK } from '../src/core/engine/frame-block';
@@ -98,11 +98,55 @@ const fake = vi.hoisted(() => {
       FakeDevice.instances.push(this);
       if (FakeDevice.failInCtor) this.error = FakeDevice.failInCtor;
     }
+    /** readPixels calls: [x, y, w, h, PACK_ROW_LENGTH]. */
+    reads: number[][] = [];
+    /** Texel a readPixels returns at column x, row r of the rectangle (bottom-up); else zeros. */
+    static texel: ((x: number, y: number) => readonly number[]) | null = null;
+    /** Called by every readPixels (a test can make it cost virtual time, or lose the context). */
+    static onRead: ((w: number, h: number, device: FakeDevice) => void) | null = null;
+    #gl: Record<string, unknown> | null = null;
     get gl() {
-      return {
-        drawingBufferWidth: this.canvas.width,
-        drawingBufferHeight: this.canvas.height,
+      if (this.#gl) return this.#gl;
+      const dev = this;
+      let rowLength = 0;
+      this.#gl = {
+        FRAMEBUFFER: 0x8d40,
+        PACK_ROW_LENGTH: 0x0d02,
+        RGBA: 0x1908,
+        UNSIGNED_BYTE: 0x1401,
+        get drawingBufferWidth() {
+          return dev.canvas.width;
+        },
+        get drawingBufferHeight() {
+          return dev.canvas.height;
+        },
+        bindFramebuffer() {},
+        pixelStorei(pname: number, v: number) {
+          if (pname === 0x0d02) rowLength = v;
+        },
+        readPixels(
+          x: number,
+          y: number,
+          w: number,
+          h: number,
+          _f: number,
+          _t: number,
+          px: Uint8ClampedArray,
+        ) {
+          dev.reads.push([x, y, w, h, rowLength]);
+          const stride = rowLength || w;
+          const texel = FakeDevice.texel;
+          if (texel) {
+            // GL rows bottom-up: the first row written is the lowest of the rectangle.
+            for (let r = 0; r < h; r++) {
+              for (let c = 0; c < w; c++) px.set(texel(x + c, r), (r * stride + c) * 4);
+            }
+          }
+          FakeDevice.onRead?.(w, h, dev);
+        },
+        isContextLost: () => dev.lost,
       };
+      return this.#gl;
     }
     poll(): boolean {
       return !this.disposed && !this.lost && !this.error && FakeDevice.linked;
@@ -175,6 +219,11 @@ interface Fake2d {
   copies: number;
   drawImage(src: HTMLCanvasElement, ...args: number[]): void;
   lastArgs: number[];
+  /** putImageData calls, the last call's arguments and a copy of what it put (row-major). */
+  puts: number;
+  putArgs: number[];
+  put: { width: number; data: Uint8ClampedArray } | null;
+  putImageData(img: ImageData, ...args: number[]): void;
 }
 const contexts2d = new WeakMap<HTMLCanvasElement, Fake2d>();
 function ctx2d(canvas: HTMLCanvasElement | null): Fake2d | undefined {
@@ -185,6 +234,10 @@ let copyTag = new WeakMap<HTMLCanvasElement, number>();
 let copyCost: ((src: HTMLCanvasElement, args: number[], dst: Fake2d) => void) | null = null;
 /** Called when a fake 2D context is created (a test can make the set-up cost virtual time). */
 let ctxCost: (() => void) | null = null;
+/** Called by every fake putImageData (a test can make it cost virtual time). */
+let putCost: ((args: number[]) => void) | null = null;
+/** Every fake 2D context of the test, in creation order. */
+let all2d: Fake2d[] = [];
 
 // Manual rAF driving the shared ticker.
 let rafQueue: FrameRequestCallback[] = [];
@@ -239,6 +292,21 @@ beforeAll(async () => {
 });
 
 beforeAll(() => {
+  // jsdom has no canvas, and no ImageData (the read snapshot fills one).
+  if (typeof ImageData === 'undefined') {
+    vi.stubGlobal(
+      'ImageData',
+      class {
+        readonly data: Uint8ClampedArray;
+        constructor(
+          readonly width: number,
+          readonly height: number,
+        ) {
+          this.data = new Uint8ClampedArray(width * height * 4);
+        }
+      },
+    );
+  }
   HTMLCanvasElement.prototype.getContext = function (
     this: HTMLCanvasElement,
     type: string,
@@ -263,8 +331,18 @@ beforeAll(() => {
           log.push(`copy ${copyTag.get(canvas) ?? '?'}`);
           copyCost?.(src, args, this);
         },
+        puts: 0,
+        putArgs: [],
+        put: null,
+        putImageData(img: ImageData, ...args: number[]) {
+          this.puts++;
+          this.putArgs = args;
+          this.put = { width: img.width, data: img.data.slice() };
+          putCost?.(args);
+        },
       };
       contexts2d.set(this, c);
+      all2d.push(c);
     }
     return c;
   } as unknown as typeof HTMLCanvasElement.prototype.getContext;
@@ -306,6 +384,10 @@ beforeEach(() => {
   copyTag = new WeakMap();
   copyCost = null;
   ctxCost = null;
+  putCost = null;
+  all2d = [];
+  FakeDevice.texel = null;
+  FakeDevice.onRead = null;
   resetRuntimeForTesting();
   resetSharedForTesting();
 });
@@ -783,9 +865,14 @@ describe('shared renderer: copy path', () => {
   /**
    * Copies cost virtual time: a drawImage from the WebGL atlas `perAtlasPx` ms per pixel of the
    * WHOLE atlas (a browser that snapshots the drawing buffer for every call) plus `perPx` per
-   * pixel copied; from a 2D canvas `perPx` per pixel copied only.
+   * pixel copied; from a 2D canvas `perPx` per pixel copied only. A readPixels costs `perReadPx`
+   * per pixel read (default: a stall far above any snapshot), a putImageData `perPx` per pixel.
    */
-  function costModel(perAtlasPx: number, perPx: number): { atlasReads: () => number } {
+  function costModel(
+    perAtlasPx: number,
+    perPx: number,
+    perReadPx = 1e-3,
+  ): { atlasReads: () => number } {
     let clock = 0;
     let reads = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => clock);
@@ -796,6 +883,12 @@ describe('shared renderer: copy path', () => {
         clock += src.width * src.height * perAtlasPx;
       }
       clock += (args[2] ?? 0) * (args[3] ?? 0) * perPx;
+    };
+    FakeDevice.onRead = (w, h) => {
+      clock += w * h * perReadPx;
+    };
+    putCost = (args) => {
+      clock += (args[4] ?? 0) * (args[5] ?? 0) * perPx;
     };
     return { atlasReads: () => reads };
   }
@@ -816,8 +909,11 @@ describe('shared renderer: copy path', () => {
     drive(list, 6); // every member drew once
     const atlasPx =
       (FakeDevice.instances[0]?.canvas.width ?? 0) * (FakeDevice.instances[0]?.canvas.height ?? 0);
-    drive(list, 2 * PROBE_FRAMES + 4);
+    drive(list, 3 * PROBE_FRAMES + 4);
     expect(r.stats.copyStaged).toBe(true);
+    // readPixels was timed too (a stall here): the snapshot is drawn from the WebGL canvas.
+    expect(FakeDevice.instances[0]?.reads.length).toBe(PROBE_FRAMES);
+    expect(r.stats.copyReadback).toBe(false);
     // One read of the atlas per frame now, not one per member.
     const reads = cost.atlasReads();
     drive(list, 5);
@@ -852,12 +948,105 @@ describe('shared renderer: copy path', () => {
     frames(3);
     drive(list, 6 + 3 * PROBE_FRAMES);
     expect(r.stats.copyStaged).toBe(false);
+    // Nothing but the direct path was timed: no readPixels either.
+    expect(FakeDevice.instances[0]?.reads).toEqual([]);
     // One atlas read per member and frame, and no staging canvas ever filled.
     const reads = cost.atlasReads();
     drive(list, 2);
     expect(cost.atlasReads() - reads).toBe(24);
     // Far below the threshold: 18 000 px per copy.
     expect(r.stats.copyMs / 12).toBeLessThan(CHEAP_COPY_MS);
+  });
+
+  it('where readPixels of the used part beats a drawn snapshot of the whole atlas, it is read', () => {
+    // A drawn snapshot reads the whole atlas (1e-5 ms per atlas pixel); readPixels reads only
+    // the used part at 1e-6 ms per pixel (Firefox measured about 2-3x apart per pixel, and the
+    // used part is often a fraction of the atlas).
+    costModel(1e-5, 1e-8, 1e-6);
+    const r = getSharedRenderer();
+    const list = Array.from({ length: 16 }, () => client(180, 100));
+    for (const c of list) r.request(c);
+    frames(3);
+    drive(list, 6);
+    drive(list, 3 * PROBE_FRAMES + 4);
+    expect(r.stats.copyStaged).toBe(true);
+    expect(r.stats.copyReadback).toBe(true);
+    const dev = FakeDevice.instances[0] as InstanceType<typeof FakeDevice>;
+    const reads = dev.reads.length;
+    drive(list, 3);
+    // One read per frame, of the used part only, into rows as wide as the staging canvas.
+    expect(dev.reads.length - reads).toBe(3);
+    const used = list.reduce(
+      (m, c) => ({
+        w: Math.max(m.w, (c.seat?.item.x ?? 0) + 180),
+        h: Math.max(m.h, (c.seat?.item.y ?? 0) + 100),
+      }),
+      { w: 0, h: 0 },
+    );
+    const [x, y, w, h, rowLength] = dev.reads.at(-1) as number[];
+    expect([x, w, h]).toEqual([0, used.w, used.h]);
+    // GL rows bottom-up: the used part is the top of the drawing buffer.
+    expect(y).toBe(dev.canvas.height - used.h);
+    expect(rowLength).toBeGreaterThanOrEqual(used.w);
+    // Every member is still copied every frame, from its region of the staging canvas.
+    for (const c of list) expect(c.events.at(-1)).toBe('presented 11');
+    const ctx = ctx2d(list[3]?.seat?.target ?? null) as Fake2d;
+    expect(ctx.lastArgs.slice(0, 4)).toEqual([
+      list[3]?.seat?.item.x,
+      list[3]?.seat?.item.y,
+      180,
+      100,
+    ]);
+  });
+
+  it('a read snapshot is flipped to canvas rows, and unpremultiplied only where alpha is kept', () => {
+    costModel(1e-5, 1e-8, 1e-6);
+    // Texels by row of the rectangle read (GL order, bottom-up): red = the row; the bottom row
+    // half transparent (green 64 premultiplied at alpha 128), the others opaque.
+    FakeDevice.texel = (_x, y) => (y === 0 ? [0, 64, 0, 128] : [y % 256, 64, 0, 255]);
+    const r = getSharedRenderer();
+    const list = Array.from({ length: 4 }, () => client(100, 50));
+    for (const c of list) r.request(c);
+    frames(3);
+    drive(list, 6 + 3 * PROBE_FRAMES + 4);
+    expect(r.stats.copyReadback).toBe(true);
+    const dev = FakeDevice.instances[0] as InstanceType<typeof FakeDevice>;
+    const h = (dev.reads.at(-1) as number[])[3] as number;
+    // The staging canvas: the one context putImageData went to.
+    const staging = all2d.filter((c) => c.puts > 0);
+    expect(staging).toHaveLength(1);
+    const row = (canvasRow: number) => {
+      const img = staging[0]?.put as { width: number; data: Uint8ClampedArray };
+      const i = canvasRow * img.width * 4;
+      return [...img.data.slice(i, i + 4)];
+    };
+    // Top canvas row = the highest row read; the bottom one = the lowest.
+    expect(row(0)).toEqual([h - 1, 64, 0, 255]);
+    // Opaque targets only: the half-transparent texel stays premultiplied (what drawImage would
+    // give an opaque canvas).
+    expect(row(h - 1)).toEqual([0, 64, 0, 128]);
+    // A target with alpha: unpremultiplied (64 * 255 / 128 = 127.5, rounded to even).
+    const glass = list[0] as TestClient;
+    glass.seat?.setTarget(glass.seat.target as HTMLCanvasElement, true);
+    drive(list, 2);
+    expect(row(h - 1)).toEqual([0, 128, 0, 128]);
+    expect(row(0)).toEqual([h - 1, 64, 0, 255]);
+  });
+
+  it('a context lost while the snapshot is read copies nothing: the members keep their frame', () => {
+    costModel(1e-5, 1e-8, 1e-6);
+    const r = getSharedRenderer();
+    const list = Array.from({ length: 4 }, () => client(100, 50));
+    for (const c of list) r.request(c);
+    frames(3);
+    drive(list, 6 + 3 * PROBE_FRAMES + 4);
+    expect(r.stats.copyReadback).toBe(true);
+    const copies = list.map((c) => ctx2d(c.seat?.target ?? null)?.copies ?? 0);
+    FakeDevice.onRead = (_w, _h, dev) => {
+      dev.lost = true;
+    };
+    drive(list, 1);
+    expect(list.map((c) => ctx2d(c.seat?.target ?? null)?.copies ?? 0)).toEqual(copies);
   });
 
   it('a single member copies directly (a snapshot would only add a copy)', () => {

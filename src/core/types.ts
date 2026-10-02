@@ -469,6 +469,12 @@ export interface SharedRendererStats {
    * frame instead of one per instance.
    */
   copyStaged: boolean;
+  /**
+   * The snapshot of the last staged copy series was read with readPixels (only the part of the
+   * atlas in use) rather than drawn from the WebGL canvas (which, where it costs a readback,
+   * reads all of it). Chosen by measurement too.
+   */
+  copyReadback: boolean;
   /** The per-instance cost reducers page-wide (lower frame rate, lite pipeline). */
   reducers: SharedReducers;
   /** Look groups (`look: 'shared'`): each is drawn once per frame, in one region of the atlas. */

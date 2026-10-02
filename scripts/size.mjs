@@ -72,12 +72,18 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  *   half of it: core went from about 80.3 to 82.2 KiB in total.
  * Earlier steps: the UI metadata leaking back into the runtime adds ~5 KiB, unminified GLSL
  * ~9 KiB; the shared look cost ~5.5 KiB, a first visit without a frozen page on Windows ~5 KiB.
- * Raise a budget only on purpose, for a feature worth its weight.
+ * Raised by 0.1 KiB (totals only) in October 2026 for the shared renderer's read snapshot (0.6
+ * KiB): in Firefox the staged copy series reads only the part of the atlas in use with
+ * readPixels, about a quarter cheaper than a snapshot drawn from the WebGL canvas, which reads
+ * all of it (100 cards on one screen: copies 18 instead of 25 ms per frame, 41 instead of 34
+ * fps). The fixes for Firefox and WebKit next to it (renderer string, warm-up fence polls, a new
+ * canvas shown with its second frame) add 0.1 KiB. The eager parts did not move. Raise a budget
+ * only on purpose, for a feature worth its weight.
  */
 const BUDGET_GZIP = {
-  core: { eager: 16.2 * 1024, total: 82.8 * 1024 },
-  react: { eager: 17.3 * 1024, total: 83.8 * 1024 },
-  element: { eager: 20.3 * 1024, total: 86.7 * 1024 },
+  core: { eager: 16.2 * 1024, total: 82.9 * 1024 },
+  react: { eager: 17.3 * 1024, total: 83.9 * 1024 },
+  element: { eager: 20.3 * 1024, total: 86.8 * 1024 },
   iife: { eager: null, total: 86.9 * 1024 },
 };
 
