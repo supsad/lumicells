@@ -59,11 +59,21 @@ jobs:
           path: dist/size-report.json
           if-no-files-found: ignore
 
-  # Browser end-to-end tests (playwright.config.ts): the runner has no GPU, so Chromium renders
-  # WebGL with SwiftShader; invariants fail hard, timings only on gross regressions.
+  # Browser end-to-end tests (playwright.config.ts), one job per browser engine (the Playwright
+  # projects). The runner has no GPU: Chromium renders WebGL with SwiftShader, Firefox and WebKit
+  # with Mesa's llvmpipe (software OpenGL). The browsers run headless inside Xvfb, as Playwright's
+  # own CI runs them (its WebGL2 tests pass there for all three engines on Linux). Invariants fail
+  # hard, timings only on gross regressions; a browser without WebGL2 fails every test at once
+  # with the reason (the `webgl2` fixture in tests/e2e/support/test.ts): a run never passes on
+  # posters alone.
   e2e:
+    name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@v5
 
@@ -74,11 +84,21 @@ jobs:
 
       - run: npm ci
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      # Mesa's EGL/GLX and DRI drivers (llvmpipe) for Firefox and WebKit; Chromium brings its
+      # own software rasterizer. Xvfb (installed with the browser) pulls in part of them already.
+      - name: Install software OpenGL
+        if: ${{ matrix.browser != 'chromium' }}
+        run: >-
+          sudo apt-get install -y --no-install-recommends
+          libgl1-mesa-dri libglx-mesa0 libegl1 libegl-mesa0 libgles2 libgbm1
 
       - name: End-to-end tests
-        run: npm run test:e2e
+        run: >-
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24"
+          npm run test:e2e -- --project=${{ matrix.browser }}
         env:
           LC_E2E_GPU: swiftshader
 
@@ -86,7 +106,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-report
+          name: e2e-report-${{ matrix.browser }}
           path: |
             playwright-report/
             test-results/e2e/
@@ -97,7 +117,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-timings
+          name: e2e-timings-${{ matrix.browser }}
           path: |
             test-results/e2e-perf.json
             test-results/e2e-results.json

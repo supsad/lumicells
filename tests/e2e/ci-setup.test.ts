@@ -135,8 +135,26 @@ describe('CI workflow', () => {
     );
   });
 
-  it('runs the e2e suite on SwiftShader', () => {
-    expect(ci).toMatch(/run: npm run test:e2e\n\s+env:\n\s+LC_E2E_GPU: swiftshader\n/);
+  it('runs the e2e suite once per browser on software rendering, none cancelling the others', () => {
+    const job = ci.slice(ci.indexOf('\n  e2e:\n'));
+    expect(job).toMatch(/fail-fast: false\n/);
+    expect(job).toContain(`browser: [${BROWSERS.join(', ')}]`);
+    expect(job).toMatch(/run: npx playwright install --with-deps \$\{\{ matrix\.browser \}\}\n/);
+    expect(job).toMatch(
+      /npm run test:e2e -- --project=\$\{\{ matrix\.browser \}\}\n\s+env:\n\s+LC_E2E_GPU: swiftshader\n/,
+    );
+    // Software OpenGL for the browsers that do not bring their own, under an X display.
+    expect(job).toMatch(
+      /if: \$\{\{ matrix\.browser != 'chromium' \}\}\n\s+run: >-\n\s+sudo apt-get install/,
+    );
+    expect(job).toContain('libgl1-mesa-dri');
+    expect(job).toContain('xvfb-run');
+  });
+
+  it('uploads the artifacts of each browser under names of their own', () => {
+    const job = ci.slice(ci.indexOf('\n  e2e:\n'));
+    expect(job).toMatch(/name: e2e-report-\$\{\{ matrix\.browser \}\}\n/);
+    expect(job).toMatch(/name: e2e-timings-\$\{\{ matrix\.browser \}\}\n/);
   });
 });
 
