@@ -83,12 +83,33 @@ export function isTiledRenderer(renderer: string): boolean {
   return !IMMEDIATE_RE.test(renderer) && !SOFTWARE_RE.test(renderer);
 }
 
-function readRenderer(gl: WebGL2RenderingContext): string {
-  // Firefox deprecates the debug extension but reports the unmasked string in RENDERER already.
+/** GLCaps.software from a renderer string. */
+export function isSoftwareRenderer(renderer: string): boolean {
+  return SOFTWARE_RE.test(renderer);
+}
+
+/** RENDERER of Blink and WebKit: a fixed mask (the GPU is in WEBGL_debug_renderer_info). */
+const MASKED_RE = /^webkit webgl$/i;
+
+/** The calls readRenderer makes (a subset of WebGL2, so tests can fake it). */
+export interface RendererGL {
+  readonly RENDERER: GLenum;
+  getParameter(pname: GLenum): unknown;
+  getExtension(name: 'WEBGL_debug_renderer_info'): WEBGL_debug_renderer_info | null;
+}
+
+/**
+ * The renderer string: RENDERER, unless it is the generic mask, then the debug extension's
+ * UNMASKED_RENDERER_WEBGL. Firefox reports the (sanitized) GPU in RENDERER already and logs a
+ * deprecation warning on every page that enables the debug extension, so it is asked only where
+ * RENDERER says nothing (Chrome, Edge, Safari).
+ */
+export function readRenderer(gl: RendererGL): string {
+  const plain = String(gl.getParameter(gl.RENDERER) ?? '');
+  if (plain !== '' && !MASKED_RE.test(plain)) return plain;
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const unmasked = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null;
-  const plain = gl.getParameter(gl.RENDERER);
-  return String(unmasked ?? plain ?? '');
+  return String(unmasked ?? plain);
 }
 
 /** Checks that a 4x4 texture of the given format can be attached and rendered to. */
