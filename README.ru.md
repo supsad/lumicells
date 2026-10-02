@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://supsad.github.io/lumicells/"><img alt="Живое демо" src="https://img.shields.io/badge/live%20demo-open%20the%20playground-e0267a?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-8a5cf6?style=flat-square" /></a>
 </p>
 
 <p align="center">
@@ -694,10 +695,8 @@ examples        страницы на чистом HTML и инструмент�
 ## Планы
 
 - [ ] Опубликовать `lumicells` в npm.
-- [ ] Выбрать и добавить открытую лицензию.
 - [ ] Замерить производительность на реальных мобильных GPU.
 
 ## Лицензия
 
-Пока не выбрана. Лицензия появится до публикации в npm, до этого код не лицензирован для
-повторного использования.
+[MIT](LICENSE).

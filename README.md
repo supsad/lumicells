@@ -12,6 +12,7 @@
   <img alt="WebGL2" src="https://img.shields.io/badge/WebGL2-shaders-0476ff?style=flat-square" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-typed%20API-3178c6?style=flat-square" />
   <img alt="Zero dependencies" src="https://img.shields.io/badge/runtime%20deps-0-19e6d0?style=flat-square" />
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8a5cf6?style=flat-square" /></a>
 </p>
 
 <p align="center">
@@ -694,10 +695,8 @@ Dev pages: `/` (playground), `/examples/web-component.html`, `/examples/core-bas
 ## Roadmap
 
 - [ ] Publish `lumicells` to npm.
-- [ ] Choose and add an open-source license.
 - [ ] Measure on real mobile GPUs and publish the numbers.
 
 ## License
 
-Not chosen yet. A license will be added before the npm release; until then the code is not
-licensed for reuse.
+[MIT](LICENSE).

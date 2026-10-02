@@ -25,7 +25,7 @@
   },
   "type": "module",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "./dist/lib/lumicells.js",
   "module": "./dist/lib/lumicells.js",
   "types": "./dist/types/core/index.d.ts",
