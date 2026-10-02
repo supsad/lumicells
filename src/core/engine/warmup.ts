@@ -16,7 +16,10 @@
  * poll or set up programs, slots do not allocate targets or resize their canvas (they skip the
  * frame), the shared renderer does not resize its atlas and the scheduler creates no context.
  * The fences are polled (non-blocking) by whoever asks gpuBusy(), so a device that stopped
- * drawing (its instance went off screen) never keeps the others waiting.
+ * drawing (its instance went off screen) never keeps the others waiting. They are polled once per
+ * task: a WebGL sync object only changes state between tasks, so a hundred instances asking in
+ * one frame cost one poll, not a hundred (Firefox warns about a fence polled 100 times without
+ * SYNC_FLUSH_COMMANDS_BIT; the polls set it, so a fence that takes long keeps moving too).
  *
  * A device also waits with its programs while another device compiles the same ones
  * (claimCompile): once those are linked, the browser's program cache holds them, and the next
@@ -56,11 +59,18 @@ export const PACER_IDLE_MS = 5_000;
 
 /** The calls warmup.ts makes on a context (a subset of WebGL2, so tests can fake it). */
 export interface FenceGL {
-  readonly SYNC_STATUS: GLenum;
-  readonly SIGNALED: GLenum;
-  getSyncParameter(sync: WebGLSync, pname: GLenum): unknown;
+  readonly SYNC_FLUSH_COMMANDS_BIT: GLbitfield;
+  readonly ALREADY_SIGNALED: GLenum;
+  readonly CONDITION_SATISFIED: GLenum;
+  clientWaitSync(sync: WebGLSync, flags: GLbitfield, timeout: GLuint64): GLenum;
   deleteSync(sync: WebGLSync | null): void;
   isContextLost(): boolean;
+}
+
+/** Whether the GPU is past `sync`: a non-blocking poll (timeout 0) that flushes if it is not. */
+function passed(gl: FenceGL, sync: WebGLSync): boolean {
+  const r = gl.clientWaitSync(sync, gl.SYNC_FLUSH_COMMANDS_BIT, 0);
+  return r === gl.ALREADY_SIGNALED || r === gl.CONDITION_SATISFIED;
 }
 
 /** The calls the pacer makes on its context (a subset of WebGL2, so tests can fake it). */
@@ -111,18 +121,23 @@ export function forgetWarmups(gl: FenceGL): void {
   }
 }
 
-/** Settles every fence the GPU is past (non-blocking polls). */
+/** The fences were polled in the current task (see the header). */
+let polledInTask = false;
+const endOfTask = (): void => {
+  polledInTask = false;
+};
+
+/** Settles every fence the GPU is past (non-blocking polls, once per task). */
 function settle(): void {
-  if (warmups.length === 0) return;
+  if (warmups.length === 0 || polledInTask) return;
+  polledInTask = true;
+  queueMicrotask(endOfTask);
   const t = now();
   for (let i = 0; i < warmups.length; ) {
     const w = warmups[i] as Warmup;
     const lost = w.gl.isContextLost();
-    const passed =
-      lost ||
-      w.gl.getSyncParameter(w.sync, w.gl.SYNC_STATUS) === w.gl.SIGNALED ||
-      t - w.startedAt > WARM_TIMEOUT_MS;
-    if (!passed) {
+    const over = lost || passed(w.gl, w.sync) || t - w.startedAt > WARM_TIMEOUT_MS;
+    if (!over) {
       i++;
       continue;
     }
@@ -238,8 +253,7 @@ export function readyForContext(pace = true): boolean {
     p.since = now();
     return false;
   }
-  const passed = gl.getSyncParameter(p.sync, gl.SYNC_STATUS) === gl.SIGNALED;
-  if (!passed && now() - p.since < PACE_TIMEOUT_MS) return false;
+  if (!passed(gl, p.sync) && now() - p.since < PACE_TIMEOUT_MS) return false;
   releasePacer();
   return true;
 }
@@ -247,6 +261,7 @@ export function readyForContext(pace = true): boolean {
 /** Tests only. */
 export function resetWarmupForTesting(): void {
   warmups.length = 0;
+  polledInTask = false;
   compiling.clear();
   primed.clear();
   if (pacer?.timer !== undefined) clearTimeout(pacer.timer);

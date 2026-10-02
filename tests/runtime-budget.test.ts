@@ -539,12 +539,13 @@ describe('scheduler', () => {
     configureRuntime({ createPerFrame: 2 });
     expect(a.settingsChanged).toHaveBeenCalledTimes(1);
   });
-  it('creates no context while a warm-up compiles, and refuses nobody for it', () => {
+  it('creates no context while a warm-up compiles, and refuses nobody for it', async () => {
     let done = false;
     const warm: FenceGL = {
-      SYNC_STATUS: 1,
-      SIGNALED: 2,
-      getSyncParameter: () => (done ? 2 : 3),
+      SYNC_FLUSH_COMMANDS_BIT: 1,
+      ALREADY_SIGNALED: 2,
+      CONDITION_SATISFIED: 3,
+      clientWaitSync: () => (done ? 3 : 4),
       deleteSync: () => {},
       isContextLost: () => false,
     };
@@ -555,6 +556,8 @@ describe('scheduler', () => {
     expect(a.granted).not.toHaveBeenCalled();
     expect(a.refused).not.toHaveBeenCalled();
     done = true;
+    // Fences are polled once per task (engine/warmup.ts): the next frame is another task.
+    await Promise.resolve();
     frame();
     expect(a.granted).toHaveBeenCalledTimes(1);
   });
@@ -563,16 +566,17 @@ describe('scheduler', () => {
     const fences: WebGLSync[] = [];
     let signaled = false;
     const pacer: PacerGL = {
-      SYNC_STATUS: 1,
-      SIGNALED: 2,
-      SYNC_GPU_COMMANDS_COMPLETE: 3,
+      SYNC_FLUSH_COMMANDS_BIT: 1,
+      ALREADY_SIGNALED: 2,
+      CONDITION_SATISFIED: 3,
+      SYNC_GPU_COMMANDS_COMPLETE: 5,
       fenceSync: () => {
         const f = {} as WebGLSync;
         fences.push(f);
         return f;
       },
       flush: () => {},
-      getSyncParameter: () => (signaled ? 2 : 4),
+      clientWaitSync: () => (signaled ? 2 : 4),
       deleteSync: () => {},
       isContextLost: () => false,
     };

@@ -161,8 +161,8 @@ function fakeGL(fixed?: { width: number; height: number }, opts: FakeOptions = {
       fences.push(f);
       return f;
     },
-    getSyncParameter: (f: unknown) =>
-      signaled.has(f) ? constant('SIGNALED') : constant('UNSIGNALED'),
+    clientWaitSync: (f: unknown) =>
+      signaled.has(f) ? constant('CONDITION_SATISFIED') : constant('TIMEOUT_EXPIRED'),
     createBuffer: () => {
       calls.push(['createBuffer']);
       return buffersFail ? null : { id: ++nextId, kind: 'buffer' };
@@ -878,6 +878,8 @@ afterEach(() => {
 const D3D = 'ANGLE (NVIDIA, NVIDIA GeForce RTX (0x00002B85) Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
 describe('start-up warm-ups', () => {
+  /** The end of the current task: warm-up fences are polled once per task (engine/warmup.ts). */
+  const endTask = () => Promise.resolve();
   /** Link time of a compile that does not come from the program cache, ms. */
   const LINK = CACHED_LINK_MS + 100;
   const compiled = () => vi.advanceTimersByTime(LINK);
@@ -890,7 +892,7 @@ describe('start-up warm-ups', () => {
     vi.useRealTimers();
   });
 
-  it('draws every program once into 1x1 scratch targets before reporting the device linked', () => {
+  it('draws every program once into 1x1 scratch targets before reporting the device linked', async () => {
     const fake = fakeGL({ width: 640, height: 360 }, { fences: true, linkMs: LINK });
     const c = controller(1, [200, 120]);
     const device = new GpuDevice(fake.canvas, {
@@ -914,11 +916,12 @@ describe('start-up warm-ups', () => {
     expect(fake.syncCalls.length).toBe(sync);
     expect(named(waiting, 'drawArrays')).toHaveLength(0);
     fake.signal();
+    await endTask();
     expect(device.poll()).toBe(true);
     expect(gpuBusy()).toBe(false);
   });
 
-  it('a slot draws once its look has a field variant: compiled, warmed, then drawn', () => {
+  it('a slot draws once its look has a field variant: compiled, warmed, then drawn', async () => {
     const fake = fakeGL({ width: 640, height: 360 }, { fences: true, linkMs: LINK });
     const c = controller(1, [200, 120]);
     const device = new GpuDevice(fake.canvas, {
@@ -930,6 +933,7 @@ describe('start-up warm-ups', () => {
     compiled();
     device.poll();
     fake.signal();
+    await endTask();
     expect(device.poll()).toBe(true);
     const f = frame(c);
     const surface = new RegionSurface(device, 0, 0);
@@ -943,10 +947,11 @@ describe('start-up warm-ups', () => {
     expect(named(linked, 'drawArrays')).toHaveLength(1);
     expect(gpuBusy()).toBe(true);
     fake.signal();
+    await endTask();
     expect(slot.draw(frame(c), surface)).toBe(true);
   });
 
-  it('tells cache hits by a timer: polls held back for a while (a calibration) change nothing', () => {
+  it('tells cache hits by a timer: polls held back for a while (a calibration) change nothing', async () => {
     // From the cache: linked at once, found by a poll that comes late.
     const warm = fakeGL(undefined, { fences: true });
     const c = controller(1, [200, 120]);
@@ -965,6 +970,7 @@ describe('start-up warm-ups', () => {
     expect(b.poll()).toBe(false);
     expect(named(cold.calls, 'fenceSync').length).toBeGreaterThan(0);
     cold.signal();
+    await endTask();
     expect(b.poll()).toBe(true);
   });
 
@@ -984,7 +990,7 @@ describe('start-up warm-ups', () => {
     expect(gpuBusy()).toBe(false);
   });
 
-  it('while a warm-up compiles, a slot that would allocate or resize waits; one that would not draws', () => {
+  it('while a warm-up compiles, a slot that would allocate or resize waits; one that would not draws', async () => {
     const fake = fakeGL(undefined, { fences: true, linkMs: LINK });
     const c = controller(1, [200, 120]);
     const device = new GpuDevice(fake.canvas, {
@@ -996,11 +1002,13 @@ describe('start-up warm-ups', () => {
     compiled();
     device.poll();
     fake.signal();
+    await endTask();
     device.poll();
     warmFields(device, [[a, c]]);
     compiled();
     device.progress();
     fake.signal();
+    await endTask();
     const own = new OwnSurface(device);
     expect(a.draw(frame(c), own)).toBe(true);
     // Another look starts compiling: a warm-up fence is pending again.
@@ -1021,11 +1029,12 @@ describe('start-up warm-ups', () => {
     expect(fake.canvas.width).toBe(width);
     expect(fake.syncCalls.length).toBe(sync);
     fake.signal();
+    await endTask();
     expect(a.draw(frame(c), own)).toBe(true);
     expect(b.draw(frame(cb), new RegionSurface(device, 0, 0))).toBe(true);
   });
 
-  it('a second device waits with its programs while the first compiles the same ones', () => {
+  it('a second device waits with its programs while the first compiles the same ones', async () => {
     const fa = fakeGL(undefined, { fences: true, linkPending: true, linkMs: LINK });
     const fb = fakeGL(undefined, { fences: true });
     const c = controller(1, [200, 120]);
@@ -1047,13 +1056,15 @@ describe('start-up warm-ups', () => {
     expect(named(fa.calls, 'fenceSync').length).toBeGreaterThan(0);
     expect(named(fb.calls, 'createProgram').length).toBeGreaterThan(0);
     fa.signal();
+    await endTask();
     expect(a.poll()).toBe(true);
     b.poll();
     fb.signal();
+    await endTask();
     expect(b.poll()).toBe(true);
   });
 
-  it('a tween turning a mode on waits for its field variant, requested ahead of time', () => {
+  it('a tween turning a mode on waits for its field variant, requested ahead of time', async () => {
     const fake = fakeGL(undefined, { fences: true, linkMs: LINK });
     const c = controller(1, [200, 120]);
     c.setConfig({ modes: { vortex: { weight: 0 } } }, { transition: 0 });
@@ -1066,11 +1077,13 @@ describe('start-up warm-ups', () => {
     compiled();
     device.poll();
     fake.signal();
+    await endTask();
     device.poll();
     warmFields(device, [[slot, c]]);
     compiled();
     device.progress();
     fake.signal();
+    await endTask();
     const surface = new RegionSurface(device, 0, 0);
     expect(slot.draw(frame(c), surface)).toBe(true);
     c.setFieldGate((pending) => slot.fieldReady(pending));
@@ -1086,6 +1099,7 @@ describe('start-up warm-ups', () => {
       device.poll();
       expect(slot.draw(frame(c), surface)).toBe(true);
       fake.signal();
+      await endTask();
       frames++;
     }
     expect(frames).toBeGreaterThan(1);
@@ -1096,7 +1110,7 @@ describe('start-up warm-ups', () => {
     expect(slot.prepare(c.update(1 / 60))).toBe(true);
   });
 
-  it('a device whose context is lost while it compiles no longer holds the others back', () => {
+  it('a device whose context is lost while it compiles no longer holds the others back', async () => {
     for (const event of [true, false]) {
       resetWarmupForTesting();
       const fa = fakeGL(undefined, { fences: true, linkPending: true, linkMs: LINK });
@@ -1117,6 +1131,7 @@ describe('start-up warm-ups', () => {
       compiled();
       b.poll();
       fb.signal();
+      await endTask();
       expect(b.poll()).toBe(true);
       a.dispose();
       b.dispose();

@@ -26,19 +26,32 @@ interface FakeFenceGL extends FenceGL {
   deleted: WebGLSync[];
   lost: boolean;
   polls: number;
+  /** Polls without SYNC_FLUSH_COMMANDS_BIT (Firefox warns after 100 of one fence). */
+  unflushedPolls: number;
 }
+
+// WebGL2's values.
+const ALREADY_SIGNALED = 0x911a;
+const TIMEOUT_EXPIRED = 0x911b;
+const CONDITION_SATISFIED = 0x911c;
+const SYNC_FLUSH_COMMANDS_BIT = 0x1;
 
 function fenceGL(): FakeFenceGL {
   const gl: FakeFenceGL = {
-    SYNC_STATUS: 1,
-    SIGNALED: 2,
+    SYNC_FLUSH_COMMANDS_BIT,
+    ALREADY_SIGNALED,
+    CONDITION_SATISFIED,
     signaled: new Set(),
     deleted: [],
     lost: false,
     polls: 0,
-    getSyncParameter(sync: WebGLSync) {
+    unflushedPolls: 0,
+    clientWaitSync(sync: WebGLSync, flags: GLbitfield, timeout: GLuint64) {
       gl.polls++;
-      return gl.signaled.has(sync) ? 2 : 3;
+      if (!(flags & SYNC_FLUSH_COMMANDS_BIT)) gl.unflushedPolls++;
+      // Never blocks.
+      expect(timeout).toBe(0);
+      return gl.signaled.has(sync) ? CONDITION_SATISFIED : TIMEOUT_EXPIRED;
     },
     deleteSync(sync: WebGLSync | null) {
       if (sync) gl.deleted.push(sync);
@@ -49,6 +62,9 @@ function fenceGL(): FakeFenceGL {
 }
 
 const sync = () => ({}) as WebGLSync;
+
+/** The next task: fences are polled once per task (see warmup.ts). */
+const nextTask = () => new Promise<void>((r) => setTimeout(r, 0));
 
 interface FakePacerGL extends FakeFenceGL, PacerGL {
   fences: WebGLSync[];
@@ -79,24 +95,48 @@ afterEach(() => {
 });
 
 describe('warm-up fences', () => {
-  it('keep the page busy until the GPU is past them, then run done once', () => {
+  it('keep the page busy until the GPU is past them, then run done once', async () => {
     const gl = fenceGL();
     const s = sync();
     const done = vi.fn();
     expect(gpuBusy()).toBe(false);
     trackWarmup(gl, s, done);
     expect(gpuBusy()).toBe(true);
+    await nextTask();
     expect(gpuBusy()).toBe(true);
     expect(done).not.toHaveBeenCalled();
     gl.signaled.add(s);
+    await nextTask();
     expect(gpuBusy()).toBe(false);
     expect(done).toHaveBeenCalledTimes(1);
     expect(gl.deleted).toEqual([s]);
+    await nextTask();
     expect(gpuBusy()).toBe(false);
     expect(done).toHaveBeenCalledTimes(1);
   });
 
-  it('are settled by any caller: a device that stopped polling holds nobody back', () => {
+  it('are polled once per task, whoever asks, always with SYNC_FLUSH_COMMANDS_BIT', async () => {
+    const gl = fenceGL();
+    const s = sync();
+    trackWarmup(gl, s, vi.fn());
+    // A hundred instances asking in one frame cost one poll (a sync object only changes state
+    // between tasks), and no poll goes without the flush bit (Firefox warns after 100 of those).
+    for (let i = 0; i < 100; i++) expect(gpuBusy()).toBe(true);
+    expect(gl.polls).toBe(1);
+    gl.signaled.add(s);
+    expect(gpuBusy()).toBe(true);
+    expect(gl.polls).toBe(1);
+    await nextTask();
+    expect(gpuBusy()).toBe(false);
+    expect(gl.polls).toBe(2);
+    expect(gl.unflushedPolls).toBe(0);
+    // A fence tracked after this task's poll waits for the next task (it cannot have passed).
+    trackWarmup(gl, sync(), vi.fn());
+    expect(gpuBusy()).toBe(true);
+    expect(gl.polls).toBe(2);
+  });
+
+  it('are settled by any caller: a device that stopped polling holds nobody back', async () => {
     const a = fenceGL();
     const b = fenceGL();
     const sa = sync();
@@ -107,6 +147,7 @@ describe('warm-up fences', () => {
     b.signaled.add(sb);
     expect(gpuBusy()).toBe(true);
     a.signaled.add(sa);
+    await nextTask();
     expect(gpuBusy()).toBe(false);
     expect(doneA).toHaveBeenCalledTimes(1);
   });
@@ -127,7 +168,7 @@ describe('warm-up fences', () => {
     expect(b.deleted).toHaveLength(1);
   });
 
-  it('are given up after WARM_TIMEOUT_MS (a fence that never signals)', () => {
+  it('are given up after WARM_TIMEOUT_MS (a fence that never signals)', async () => {
     vi.useFakeTimers();
     const gl = fenceGL();
     const done = vi.fn();
@@ -135,6 +176,8 @@ describe('warm-up fences', () => {
     vi.advanceTimersByTime(WARM_TIMEOUT_MS - 1);
     expect(gpuBusy()).toBe(true);
     vi.advanceTimersByTime(2);
+    // Fake timers leave microtasks alone: the task ends once its microtasks ran.
+    await Promise.resolve();
     expect(gpuBusy()).toBe(false);
     expect(done).toHaveBeenCalledTimes(1);
   });
@@ -210,7 +253,7 @@ describe('compile claims', () => {
 });
 
 describe('the pacer of the first context creation', () => {
-  it('lets the first creation wait for its fence (issued on the first ask), then no more', () => {
+  it('lets the first creation wait for its fence (issued on the first ask), then no more', async () => {
     const gl = pacerGL();
     const release = vi.fn();
     adoptPacer(gl, release);
@@ -235,11 +278,13 @@ describe('the pacer of the first context creation', () => {
     expect(readyForContext()).toBe(false);
     expect(gl.fences).toHaveLength(1);
     warm.signaled.add(s);
+    await nextTask();
     expect(readyForContext()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
+    expect(gl.unflushedPolls + warm.unflushedPolls).toBe(0);
   });
 
-  it('waits for warm-ups first, and gives the fence up after PACE_TIMEOUT_MS', () => {
+  it('waits for warm-ups first, and gives the fence up after PACE_TIMEOUT_MS', async () => {
     vi.useFakeTimers();
     const gl = pacerGL();
     adoptPacer(gl, vi.fn());
@@ -249,6 +294,7 @@ describe('the pacer of the first context creation', () => {
     expect(readyForContext()).toBe(false);
     expect(gl.fences).toHaveLength(0);
     warm.signaled.add(s);
+    await Promise.resolve();
     expect(readyForContext()).toBe(false);
     vi.advanceTimersByTime(PACE_TIMEOUT_MS - 1);
     expect(readyForContext()).toBe(false);
