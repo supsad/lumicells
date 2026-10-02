@@ -4,6 +4,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
+  adoptPacer,
+  type FenceGL,
+  type PacerGL,
+  resetWarmupForTesting,
+  trackWarmup,
+} from '../src/core/engine/warmup';
+import {
   AREA_EVICT_RATIO,
   type BudgetMember,
   COARSE_MAX_CONTEXTS,
@@ -17,6 +24,7 @@ import {
 } from '../src/core/runtime/context-budget';
 import {
   cancelRequest,
+  claimContextCreation,
   configureRuntime,
   contextsInUse,
   maxContexts,
@@ -308,6 +316,7 @@ describe('scheduler', () => {
 
   afterEach(() => {
     resetRuntimeForTesting();
+    resetWarmupForTesting();
     vi.unstubAllGlobals();
   });
 
@@ -529,5 +538,67 @@ describe('scheduler', () => {
     configureRuntime({ parkAfterMs: 500 }); // unchanged
     configureRuntime({ createPerFrame: 2 });
     expect(a.settingsChanged).toHaveBeenCalledTimes(1);
+  });
+  it('creates no context while a warm-up compiles, and refuses nobody for it', () => {
+    let done = false;
+    const warm: FenceGL = {
+      SYNC_STATUS: 1,
+      SIGNALED: 2,
+      getSyncParameter: () => (done ? 2 : 3),
+      deleteSync: () => {},
+      isContextLost: () => false,
+    };
+    trackWarmup(warm, {} as WebGLSync, () => {});
+    const a = client('a');
+    requestContext(a);
+    frame();
+    expect(a.granted).not.toHaveBeenCalled();
+    expect(a.refused).not.toHaveBeenCalled();
+    done = true;
+    frame();
+    expect(a.granted).toHaveBeenCalledTimes(1);
+  });
+
+  it('paces the first creation; the shared device does not take the turn of own engines', () => {
+    const fences: WebGLSync[] = [];
+    let signaled = false;
+    const pacer: PacerGL = {
+      SYNC_STATUS: 1,
+      SIGNALED: 2,
+      SYNC_GPU_COMMANDS_COMPLETE: 3,
+      fenceSync: () => {
+        const f = {} as WebGLSync;
+        fences.push(f);
+        return f;
+      },
+      flush: () => {},
+      getSyncParameter: () => (signaled ? 2 : 4),
+      deleteSync: () => {},
+      isContextLost: () => false,
+    };
+    adoptPacer(pacer, () => {});
+    const a = client('a');
+    requestContext(a);
+    // The shared renderer asks before the frame end: it leaves the pacer to the own request.
+    expect(claimContextCreation(now + 16)).toBe(false);
+    expect(fences).toHaveLength(0);
+    frame();
+    expect(fences).toHaveLength(1);
+    expect(a.granted).not.toHaveBeenCalled();
+    signaled = true;
+    expect(claimContextCreation(now + 16)).toBe(false);
+    frame();
+    // Created first, as on a page that needs no pacing; the shared device gets the next frame.
+    expect(a.granted).toHaveBeenCalledTimes(1);
+    expect(claimContextCreation(now)).toBe(false);
+    expect(claimContextCreation(now + 16)).toBe(true);
+    // Without own requests waiting, the shared renderer paces the page by itself.
+    resetWarmupForTesting();
+    signaled = false;
+    adoptPacer(pacer, () => {});
+    expect(claimContextCreation(now + 32)).toBe(false);
+    expect(fences).toHaveLength(2);
+    signaled = true;
+    expect(claimContextCreation(now + 48)).toBe(true);
   });
 });

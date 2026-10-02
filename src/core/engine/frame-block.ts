@@ -165,6 +165,12 @@ layout(std140) uniform FrameBlock {
   vec4 f_socket[MAX_LIFTS];
 };
 
+// A loop bound the shader compiler cannot see through: n at run time (f_counts.x, a record
+// count, is never negative). Loops whose body holds a gradient noise use it, so Direct3D's
+// compiler (FXC, behind ANGLE) keeps them as loops instead of unrolling an inlined copy of the
+// noise per iteration: its compile time grows much faster than the code it compiles.
+#define RUNTIME_COUNT(n) ((n) + min(int(f_counts.x), 0))
+
 // Hash epochs: the CPU accumulates each effect's phase in epochs (wrapped at EPOCH_WRAP) and
 // uploads it as (whole epochs, fraction). Epoch indices are taken modulo the wrap, so crossing it
 // continues the same epoch sequence; offset (a per-cell or per-slot shift, >= 0) is added to the

@@ -40,16 +40,16 @@ describe('multi-slot waivers (known library bugs)', () => {
   const d3d11 =
     'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 (0x00002484) Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
-  it("waive only 'D2' in rgba8+debug, only on ANGLE/D3D11", () => {
-    expect(multiSlotWaivers(d3d11)).toEqual(['rgba8+debug/D2']);
-    for (const other of [
+  it('waives nothing on any renderer (no known bug is open)', () => {
+    for (const renderer of [
+      d3d11,
       'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)',
       'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)',
       'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D9Ex vs_3_0 ps_3_0, D3D9Ex)',
       'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)',
       '',
     ]) {
-      expect(multiSlotWaivers(other), other).toEqual([]);
+      expect(multiSlotWaivers(renderer), renderer).toEqual([]);
     }
   });
 

@@ -8,36 +8,62 @@
  *                 a = intensity before socket dimming / 2 (read by the lift pass for gating).
  * bloom (third attachment, HDR): the bloom source (thresholded, fill-scaled emission), computed
  *                 here from the unencoded values instead of in a prefilter pass of its own.
+ *
+ * Compile cost. This is by far the largest shader of the engine, and on Windows it is compiled by
+ * FXC (ANGLE's Direct3D backend), whose compile time grows much faster than the code: with eleven
+ * inlined copies of the gradient noise it took ~2.3 s per compile on a fast desktop CPU, paid
+ * twice before the first frame (see MRT_PAD in shared.ts). So:
+ * - the pass compiles variants holding only the modes and color features a look uses
+ *   (field-variants.ts), lazily, when a slot first needs one;
+ * - every function holds one call of the noise, in a loop where it needs several (RUNTIME_COUNT
+ *   keeps FXC from unrolling it), and mapT is inlined once (the crossfade's previous mapping is
+ *   a second loop iteration). Both give the very same values as the straight-line code;
+ * - on Direct3D the pass runs in stages whose heavy programs have a single output (see
+ *   FieldPass): those compile in the background, never on the thread that presents the page.
  */
 
+import type { TextureFormat } from '../../gl/caps';
+import {
+  ALL_FEATURES,
+  FEATURE_NOISE_MAP,
+  FEATURE_WARP,
+  pickVariant,
+  type VariantState,
+  variantToEvict,
+  variantToRequest,
+} from '../field-variants';
 import { FULLSCREEN_VS } from '../glsl/common';
 import { INFLUENCE_GLSL } from '../glsl/influence';
-import { MODE_STRUCT_GLSL, MODES_EVAL_GLSL, MODES_GLSL } from '../glsl/modes/index';
+import { MODE_STRUCT_GLSL, modesEvalGlsl, modesGlsl } from '../glsl/modes/index';
 import { NOISE_GLSL } from '../glsl/noise';
+import type { Target } from '../resources';
 import { BLOOM_SOURCE_GLSL } from './bloom';
 import {
   bindTexture,
   discardTargets,
   LazyProgram,
+  MRT_PAD_WRITE,
+  mrtFirst,
+  mrtOutputs,
   type PassContext,
   setSampler,
   UNIT_LIFE,
   UNIT_LUT,
+  UNIT_REST_COLOR,
+  UNIT_REST_SCALAR,
+  UNIT_STAGE,
+  type WarmTargets,
+  warmDraw,
 } from './shared';
 
-function fieldFs(header: string): string {
-  return `${header}
-${NOISE_GLSL}
-uniform sampler2D u_life;
-uniform sampler2D u_lut;
-layout(location = 0) out vec4 o_fieldA;
-layout(location = 1) out vec4 o_fieldB;
-layout(location = 2) out vec4 o_bloom;
-${INFLUENCE_GLSL}
-${BLOOM_SOURCE_GLSL}
-${MODE_STRUCT_GLSL}
-${MODES_GLSL}
+/** Field variants a device keeps compiled (more only while all of them are in use). */
+export const MAX_FIELD_VARIANTS = 6;
 
+/**
+ * GLSL of the field pass, in parts: the programs of the staged pass share most of them (see
+ * FieldPass).
+ */
+const MIX_GLSL = /* glsl */ `
 struct Mix { float scr; float over; float sum; float mx; float w; float env; float accent; };
 
 void addMode(inout Mix x, float w, vec3 v) {
@@ -50,7 +76,10 @@ void addMode(inout Mix x, float w, vec3 v) {
   x.env = 1.0 - (1.0 - x.env) * (1.0 - sat(w * v.y));
   x.accent = max(x.accent, w * v.z);
 }
+`;
 
+/** Intensity shaping and the palette mapping (flicker, sparsity, sparkles, mapT). */
+const SHAPE_GLSL = /* glsl */ `
 // Per-cell value noise in time: aperiodic, smooth, identical at any frame rate. It doubles as the
 // per-cell brightness variety: calm on the dense structure, twice as wide where the envelope
 // thins out (the reference's outer band mixes bright and dim cells side by side).
@@ -133,11 +162,19 @@ float mapT(float mode, vec2 p, float I, float cs) {
     return 0.5 + (0.5 - abs(2.0 * u - 1.0)) * sc;
   }
   if (mode < 3.5) return 0.5 + (I - 0.5) * sc;
+#if FIELD_NOISE_MAP
   float fq = P_color_warpScale * 0.8;
   return 0.5 + 0.9 * sc * fbm3(vec3(p * fq + 13.0, f_clock.x * 0.0625), 3, fq * cs);
+#else
+  // A variant without the noise mapping draws only while the one with it compiles (a mapping
+  // just switched to noise): the intensity mapping stands in for that moment.
+  return 0.5 + (I - 0.5) * sc;
+#endif
 }
+`;
 
-void main() {
+/** main() head: the cell, its hash keys and its sampling position (repel influences applied). */
+const PRELUDE_GLSL = /* glsl */ `
   ivec2 cell = ivec2(gl_FragCoord.xy);
   float pitch = f_grid.z;
   vec2 cpx = f_origin.xy + (vec2(cell) + 0.5) * pitch;
@@ -164,14 +201,38 @@ void main() {
       if (len > 1e-3) p += (dv / len) * (influenceK(i, cpx, pitch) * b.z * 0.25 / zoom);
     }
   }
+`;
 
+/** The weighted modes: blended intensity I, envelope env and accent. */
+function modesMainGlsl(features: number): string {
+  return `
   ModeIn m = ModeIn(p, length(p), cs, cell, h);
   Mix x = Mix(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-${MODES_EVAL_GLSL}
+${modesEvalGlsl(features)}
   float blend = P_animation_blend;
   float I = blend < 0.5 ? 1.0 - x.scr + x.over : (blend < 1.5 ? x.sum / max(1.0, x.w) : x.mx);
   float env = sat(x.env);
+  float accent = x.accent;
+`;
+}
 
+/** The palette warp (an fbm per cell, FEATURE_WARP): warpN. */
+const WARP_GLSL = /* glsl */ `
+#if FIELD_WARP
+  float warpN = P_color_warp > 0.0
+    ? fbm3(vec3(p * P_color_warpScale, f_clock.x * 0.0625), 2, P_color_warpScale * cs)
+    : 0.0;
+#else
+  float warpN = 0.0;
+#endif
+`;
+
+/**
+ * From I, env, accent and warpN to the three outputs. FIELD_SCALAR_IN (the staged pass's color
+ * program): Ipre, hot and t come from the scalar program's texel (`scalarIn`, the very values),
+ * so neither the intensity shaping nor the palette mapping runs twice.
+ */
+const REST_GLSL = /* glsl */ `
   I = pow(max(I, 0.0), max(P_animation_gamma, 0.05)) * P_animation_brightness * P_animation_energy;
   I *= flickerF(key, h, env);
   // Heat is judged before the sparsity boost: a lone bright survivor in the outskirts must stay
@@ -228,7 +289,11 @@ ${MODES_EVAL_GLSL}
     tint += f_pulse[i * 3 + 2].rgb * (band * b.y);
     tintW += band * b.y;
   }
+#if FIELD_SCALAR_IN
+  float Ipre = scalarIn.w;
+#else
   float Ipre = I * shade;
+#endif
 
   // Lift sockets: the source cell dims while its copy floats above.
   float sock = 0.0;
@@ -246,25 +311,39 @@ ${MODES_EVAL_GLSL}
 #endif
   I = Ipre * (1.0 - sat(sock) * smoothstep(0.5 * gateHi, gateHi, Ipre));
 
+#if FIELD_SCALAR_IN
+  float hot = scalarIn.y;
+#else
   float hot = (smoothstep(P_color_hot_threshold, 1.0, Iheat) * P_color_hot_amount + hotAdd) * shade;
+#endif
 
   // Palette position: mapping (+ crossfade from the previous mapping), warp, jitter, drift.
-  float t = mapT(P_color_mapping, p, Ipre, cs);
-  if (f_misc.y < 0.999) t = mix(mapT(f_misc.x, p, Ipre, cs), t, sat(f_misc.y));
-  float warpN = P_color_warp > 0.0
-    ? fbm3(vec3(p * P_color_warpScale, f_clock.x * 0.0625), 2, P_color_warpScale * cs)
-    : 0.0;
+  // While a mapping change crossfades, the previous mapping is a second iteration: one inlined
+  // copy of mapT (and of its noise) instead of two.
+#if FIELD_SCALAR_IN
+  float t = scalarIn.x;
+#else
+  float t = 0.0;
+  float tPrev = 0.0;
+  int maps = f_misc.y < 0.999 ? 2 : 1;
+  for (int k = 0; k < RUNTIME_COUNT(maps); k++) {
+    float v = mapT(k == 0 ? P_color_mapping : f_misc.x, p, Ipre, cs);
+    if (k == 0) t = v;
+    else tPrev = v;
+  }
+  if (maps == 2) t = mix(tPrev, t, sat(f_misc.y));
   t += P_color_offset + P_color_warp * warpN + P_color_jitter * (h2 - 0.5)
      + P_color_intensityShift * (Ipre - 0.5);
   // Drift: tri() folds the palette (period 2, the drift phase wraps at 2 as well). The switch is a
   // per-frame flag (rate or phase nonzero), never the phase value itself.
   t = f_misc.w > 0.5 ? tri(t + f_phaseB.w) : sat(t);
+#endif
 
   vec3 base = texture(u_lut, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.25)).rgb;
   // Hue cues from the reference: organic inner-edge patches take the accent color on the cool
   // half of the palette (cyan in the blue), hot cells lean red on the warm side. Both in OKLab.
   // Sharpened so patch cores take the accent fully (distinct teal cells, not a tinted azure).
-  float acc = sat(1.6 * x.accent * P_color_accent_amount - 0.3) * smoothstep(0.42, 0.58, t);
+  float acc = sat(1.6 * accent * P_color_accent_amount - 0.3) * smoothstep(0.42, 0.58, t);
   float rot = 0.35 * sat(hot) * (1.0 - smoothstep(0.2, 0.35, t));
   if (acc > 1e-3 || rot > 1e-3) {
     vec3 lab = lin2oklab(base);
@@ -281,39 +360,372 @@ ${MODES_EVAL_GLSL}
   // Quadratic visibility: unlit cells read faintly next to the structure and vanish in the hole
   // and the far outskirts (clean navy there, as in the reference).
   dead *= min(dead * 4.0, 1.0);
+`;
+
+/** The three outputs (after the MRT pad output). */
+const OUTPUTS_GLSL = `${MRT_PAD_WRITE}
   o_fieldA = enc4(vec4(base, I));
   o_fieldB = vec4(t, sat(hot), sat(dead), sat(Ipre * 0.5));
-  o_bloom = enc4(vec4(bloomSource(base * I), 1.0));
+  o_bloom = enc4(vec4(bloomSource(base * I), 1.0));`;
+
+/**
+ * Feature switches of a program (see field-variants.ts); `scalarIn`: the staged pass's color
+ * program (see REST_GLSL).
+ */
+function featureDefines(features: number, scalarIn = false): string {
+  return `#define FIELD_NOISE_MAP ${features & FEATURE_NOISE_MAP ? 1 : 0}
+#define FIELD_WARP ${features & FEATURE_WARP ? 1 : 0}
+#define FIELD_SCALAR_IN ${scalarIn ? 1 : 0}`;
+}
+
+/** The whole field in one program (the fused pass) for a feature mask. */
+export function fieldFs(header: string, features = ALL_FEATURES): string {
+  return `${header}
+${featureDefines(features)}
+${NOISE_GLSL}
+uniform sampler2D u_life;
+uniform sampler2D u_lut;
+${mrtOutputs(['o_fieldA', 'o_fieldB', 'o_bloom'])}
+${INFLUENCE_GLSL}
+${BLOOM_SOURCE_GLSL}
+${MODE_STRUCT_GLSL}
+${modesGlsl(features)}
+${MIX_GLSL}
+${SHAPE_GLSL}
+void main() {
+${PRELUDE_GLSL}
+${modesMainGlsl(features)}
+${WARP_GLSL}
+${REST_GLSL}
+${OUTPUTS_GLSL}
 }
 `;
 }
 
+/** First stage of the staged pass: the modes and the warp into one RGBA32F texel. */
+export function fieldModesFs(header: string, features: number): string {
+  return `${header}
+${featureDefines(features)}
+${NOISE_GLSL}
+uniform sampler2D u_life;
+out vec4 o_stage;
+${INFLUENCE_GLSL}
+${MODE_STRUCT_GLSL}
+${modesGlsl(features)}
+${MIX_GLSL}
+void main() {
+${PRELUDE_GLSL}
+${modesMainGlsl(features)}
+${WARP_GLSL}
+  o_stage = vec4(I, env, accent, warpN);
+}
+`;
+}
+
+/** What a second-stage program of the staged pass writes (see FieldPass). */
+export type RestOutput = 'color' | 'scalar';
+
+/**
+ * Second stage: the rest of the field from the first stage's texel (exact: RGBA32F holds the
+ * values as computed), into one RGBA32F texel, the values the outputs are made of: `scalar` =
+ * (t, hot, dead, Ipre), then `color` = (base, I), which reads Ipre, hot and t from the scalar
+ * texel. Each program evaluates only what its output needs (the compiler drops the rest). Its
+ * only feature switch is the noise mapping.
+ */
+export function fieldRestFs(header: string, features: number, out: RestOutput): string {
+  const color = out === 'color';
+  return `${header}
+${featureDefines(features & FEATURE_NOISE_MAP, color)}
+${NOISE_GLSL}
+uniform highp sampler2D u_stage;
+${color ? 'uniform highp sampler2D u_restScalar;' : ''}
+uniform sampler2D u_lut;
+out vec4 o_rest;
+${INFLUENCE_GLSL}
+${SHAPE_GLSL}
+void main() {
+${PRELUDE_GLSL}
+  vec4 stage = texelFetch(u_stage, cell, 0);
+  float I = stage.x;
+  float env = stage.y;
+  float accent = stage.z;
+  float warpN = stage.w;
+${color ? '  vec4 scalarIn = texelFetch(u_restScalar, cell, 0);' : ''}
+${REST_GLSL}
+  o_rest = ${color ? 'vec4(base, I)' : 'vec4(t, hot, dead, Ipre)'};
+}
+`;
+}
+
+/**
+ * Last stage: the three field targets from the two second-stage texels, exactly as the fused
+ * pass writes them. The only program of the staged pass with several outputs, kept tiny.
+ */
+export function fieldPackFs(header: string): string {
+  return `${header}
+uniform highp sampler2D u_restColor;
+uniform highp sampler2D u_restScalar;
+${mrtOutputs(['o_fieldA', 'o_fieldB', 'o_bloom'])}
+${BLOOM_SOURCE_GLSL}
+void main() {
+  ivec2 cell = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(u_restColor, cell, 0);
+  vec4 s = texelFetch(u_restScalar, cell, 0);
+  vec3 base = c.rgb;
+  float I = c.a;
+  float t = s.x;
+  float hot = s.y;
+  float dead = s.z;
+  float Ipre = s.w;
+${OUTPUTS_GLSL}
+}
+`;
+}
+
+/** One program of the field pass, compiled, linked and warmed up on its own. */
+export class FieldProgram {
+  /** Linked: its warm-up draw is issued (or due). */
+  linked = false;
+  /** Warmed up (see GpuDevice): usable for a draw. */
+  warmed = false;
+
+  constructor(
+    readonly prog: LazyProgram,
+    /** Its outputs: the three field targets, or one RGBA32F texel (staged pass). */
+    readonly outputs: 'field' | 'stage',
+  ) {}
+}
+
+/** The second stage of the staged pass for one noise mapping (shared by its variants). */
+export interface RestStage {
+  /** Writes (t, hot, dead, Ipre). */
+  readonly scalar: FieldProgram;
+  /** Writes (base, I), from the scalar texel. */
+  readonly color: FieldProgram;
+}
+
+/**
+ * The field pass for a feature mask: one program, or on the staged pass its first-stage program
+ * plus the second-stage and pack programs it shares with other variants.
+ */
+export class FieldVariant implements VariantState {
+  lastUsed = -1;
+
+  constructor(
+    readonly mask: number,
+    readonly main: FieldProgram,
+    readonly rest: RestStage | null,
+    readonly pack: FieldProgram | null,
+  ) {}
+
+  get ready(): boolean {
+    if (!this.main.warmed) return false;
+    const rest = this.rest;
+    return !rest || (rest.color.warmed && rest.scalar.warmed && (this.pack?.warmed ?? false));
+  }
+}
+
+/** The staged pass's intermediate targets (a slot's CellTargets; null on the fused pass). */
+export interface StageTargets {
+  /** First stage: (I, env, accent, warpN). */
+  readonly stage: Target | null;
+  readonly restColor: Target | null;
+  readonly restScalar: Target | null;
+}
+
+/**
+ * Field pass. Fused: one MRT program per variant. Staged (GLCaps.stageFormat, ANGLE on
+ * Direct3D): the first stage evaluates the modes and the warp into an RGBA32F texel; two
+ * programs compute the rest from it, one RGBA32F texel each: (t, hot, dead, Ipre), then from
+ * that (base, I); a tiny MRT program packs them into the three field targets.
+ *
+ * Why stages there: ANGLE's D3D11 backend compiles an MRT program's real pixel shader on its
+ * first draw, on the GPU process's main thread, which also composites and rasterizes the page:
+ * nothing on it repaints until that compile ends (~0.3 s for the rest of the field on a fast
+ * desktop CPU, around a second for the fused shader, more on a laptop). A program with a single
+ * output is compiled at link time, on a worker thread, in the background. So every costly part
+ * has a single output, and the draw-time compile only covers the pack. It costs three more
+ * cell-resolution draws and three RGBA32F targets per slot, and gives the very same values.
+ */
 export class FieldPass {
-  private readonly prog: LazyProgram;
+  private readonly variants: FieldVariant[] = [];
+  /** Second-stage programs by noise mapping (staged pass only). */
+  private readonly rests: (RestStage | null)[] = [null, null];
+  /** The pack program (staged pass only, one for every variant). */
+  private pack: FieldProgram | null = null;
+  /** Target formats of the field framebuffer (fieldA, fieldB, bloom source). */
+  private readonly formats: readonly TextureFormat[];
+  private readonly stageFormat: TextureFormat | null;
 
   constructor(private readonly ctx: PassContext) {
-    this.prog = new LazyProgram(ctx, FULLSCREEN_VS, fieldFs(ctx.header), 'field', (p) => {
-      setSampler(ctx.gl, p, 'u_life', UNIT_LIFE);
-      setSampler(ctx.gl, p, 'u_lut', UNIT_LUT);
-    });
+    const caps = ctx.caps;
+    this.formats = [caps.hdrFormat, caps.rgba8, caps.hdrFormat];
+    this.stageFormat = caps.stageFormat;
   }
 
-  poll(): boolean {
-    return this.prog.poll();
+  /** Runs in stages (see the class header). */
+  get staged(): boolean {
+    return this.stageFormat !== null;
   }
 
-  /** `fb` has three attachments: fieldA, fieldB and the bloom source. */
-  run(fb: WebGLFramebuffer, w: number, h: number, life: WebGLTexture): void {
+  private program(fs: string, label: string, outputs: 'field' | 'stage'): FieldProgram {
     const gl = this.ctx.gl;
-    this.prog.use();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    discardTargets(this.ctx, 3);
-    gl.viewport(0, 0, w, h);
+    const prog = new LazyProgram(this.ctx, FULLSCREEN_VS, fs, label, (p) => {
+      setSampler(gl, p, 'u_life', UNIT_LIFE);
+      setSampler(gl, p, 'u_lut', UNIT_LUT);
+      setSampler(gl, p, 'u_stage', UNIT_STAGE);
+      setSampler(gl, p, 'u_restColor', UNIT_REST_COLOR);
+      setSampler(gl, p, 'u_restScalar', UNIT_REST_SCALAR);
+    });
+    return new FieldProgram(prog, outputs);
+  }
+
+  /**
+   * Starts compiling a variant for `wanted` unless one (ready or compiling) covers it. Past
+   * MAX_FIELD_VARIANTS the one used longest ago (and not since `keepAfter`) goes first. The
+   * costliest program is submitted first: compiles run on a few worker threads.
+   */
+  request(wanted: number, keepAfter: number): void {
+    if (variantToRequest(this.variants, wanted) < 0) return;
+    const evict = variantToEvict(this.variants, MAX_FIELD_VARIANTS, keepAfter);
+    if (evict >= 0) {
+      const old = this.variants[evict] as FieldVariant;
+      old.main.warmed = false;
+      old.main.prog.dispose();
+      this.variants.splice(evict, 1);
+    }
+    const header = this.ctx.header;
+    const tag = wanted.toString(16);
+    if (!this.staged) {
+      const main = this.program(fieldFs(header, wanted), `field-${tag}`, 'field');
+      this.variants.push(new FieldVariant(wanted, main, null, null));
+      return;
+    }
+    const main = this.program(fieldModesFs(header, wanted), `field-modes-${tag}`, 'stage');
+    const noise = (wanted & FEATURE_NOISE_MAP) !== 0 ? 1 : 0;
+    let rest = this.rests[noise] ?? null;
+    if (!rest) {
+      const scalar = fieldRestFs(header, wanted, 'scalar');
+      const color = fieldRestFs(header, wanted, 'color');
+      rest = {
+        scalar: this.program(scalar, `field-rest-scalar-${noise}`, 'stage'),
+        color: this.program(color, `field-rest-color-${noise}`, 'stage'),
+      };
+      this.rests[noise] = rest;
+    }
+    this.pack ??= this.program(fieldPackFs(header), 'field-pack', 'field');
+    this.variants.push(new FieldVariant(wanted, main, rest, this.pack));
+  }
+
+  /** A ready variant covers `needed`. */
+  covers(needed: number): boolean {
+    for (const v of this.variants) if (v.ready && (v.mask & needed) === needed) return true;
+    return false;
+  }
+
+  /** A program of a variant is still compiling (not linked yet). */
+  get linking(): boolean {
+    for (const v of this.variants) {
+      if (!v.main.linked || (v.pack && !v.pack.linked)) return true;
+      if (v.rest && (!v.rest.scalar.linked || !v.rest.color.linked)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Polls the compiling programs (throws ShaderError on a failure) and appends the ones that
+   * just linked to `out`: they need their warm-up. Returns how many.
+   */
+  pollLinks(out: FieldProgram[]): number {
+    let n = 0;
+    const poll = (fp: FieldProgram | null | undefined) => {
+      if (!fp || fp.linked || !fp.prog.poll()) return;
+      fp.linked = true;
+      out.push(fp);
+      n++;
+    };
+    for (const v of this.variants) poll(v.main);
+    for (const r of this.rests) {
+      poll(r?.scalar);
+      poll(r?.color);
+    }
+    poll(this.pack);
+    return n;
+  }
+
+  /** The warm-up draw of a linked program, into scratch targets of its real layout. */
+  warm(fp: FieldProgram, targets: WarmTargets): void {
+    const fb =
+      fp.outputs === 'stage' && this.stageFormat
+        ? targets.framebuffer([this.stageFormat])
+        : targets.framebuffer(this.formats, mrtFirst(this.ctx));
+    warmDraw(this.ctx, fp.prog, fb);
+  }
+
+  /**
+   * The variant to draw with (see pickVariant), null when none is usable yet. `frame` is the
+   * device frame counter (recency, for eviction and ties).
+   */
+  select(needed: number, previous: FieldVariant | null, frame: number): FieldVariant | null {
+    const prev = previous ? this.variants.indexOf(previous) : -1;
+    const v = this.variants[pickVariant(this.variants, needed, prev)];
+    if (!v) return null;
+    v.lastUsed = frame;
+    return v;
+  }
+
+  /**
+   * `fb` has three attachments: fieldA, fieldB and the bloom source (after the pad). `stages`:
+   * the slot's intermediate targets (staged pass), which the slot keeps bound to UNIT_STAGE,
+   * UNIT_REST_SCALAR and UNIT_REST_COLOR (see RenderSlot.bindCellTargets).
+   */
+  run(
+    fb: WebGLFramebuffer,
+    stages: StageTargets,
+    w: number,
+    h: number,
+    life: WebGLTexture,
+    v: FieldVariant,
+  ): void {
+    const gl = this.ctx.gl;
+    v.main.prog.use();
     bindTexture(gl, UNIT_LIFE, life);
+    gl.viewport(0, 0, w, h);
+    const { stage, restColor, restScalar } = stages;
+    if (v.rest && v.pack && stage && restColor && restScalar) {
+      this.draw(stage.fb, 1);
+      v.rest.scalar.prog.use();
+      this.draw(restScalar.fb, 1);
+      v.rest.color.prog.use();
+      this.draw(restColor.fb, 1);
+      v.pack.prog.use();
+    }
+    this.draw(fb, 3, mrtFirst(this.ctx));
+  }
+
+  /** One fullscreen draw into `count` attachments of `fb` (from `first`), viewport set. */
+  private draw(fb: WebGLFramebuffer, count: number, first = 0): void {
+    const gl = this.ctx.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    discardTargets(this.ctx, count, first);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   dispose(): void {
-    this.prog.dispose();
+    const drop = (fp: FieldProgram | null | undefined) => {
+      if (!fp) return;
+      fp.warmed = false;
+      fp.prog.dispose();
+    };
+    for (const v of this.variants) drop(v.main);
+    this.variants.length = 0;
+    for (const r of this.rests) {
+      drop(r?.color);
+      drop(r?.scalar);
+    }
+    this.rests[0] = null;
+    this.rests[1] = null;
+    drop(this.pack);
+    this.pack = null;
   }
 }

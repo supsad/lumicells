@@ -56,6 +56,8 @@ const fake = vi.hoisted(() => {
       readonly device: FakeDevice,
       readonly tag: number,
     ) {}
+    /** Field variants (RenderSlot.prepare): nothing to compile here. */
+    prepare(): void {}
     draw(f: FrameInputs, surface: { left: number; top: number }): boolean {
       if (this.disposed || this.device.lost) return false;
       if (FakeDevice.failDraw) throw new Error('fake draw failure');
@@ -144,6 +146,10 @@ vi.mock('../src/core/engine/engine', () => ({
     error = null;
     lost = false;
     constructor(readonly canvas: HTMLCanvasElement) {}
+    /** Field variants (Engine.prepare): nothing to compile here. */
+    prepare(): boolean {
+      return true;
+    }
     render(): boolean {
       return !this.lost;
     }

@@ -35,6 +35,11 @@ export interface Surface {
    * where it goes into `out`. Returns false when no part of it can be seen (nothing is drawn).
    */
   begin(width: number, height: number, out: SurfaceFrame): boolean;
+  /**
+   * Whether begin() would resize a canvas for that size: a synchronous call (the browser waits
+   * for the GPU process), which a slot defers while a warm-up compiles (see warmup.ts).
+   */
+  resizes(width: number, height: number): boolean;
 }
 
 /** The device's own canvas, resized to every frame: the region is its whole drawing buffer. */
@@ -42,6 +47,14 @@ export class OwnSurface implements Surface {
   readonly framebuffer = null;
 
   constructor(private readonly device: GpuDevice) {}
+
+  resizes(width: number, height: number): boolean {
+    const canvas = this.device.canvas;
+    return (
+      canvas.width !== Math.max(1, Math.floor(width)) ||
+      canvas.height !== Math.max(1, Math.floor(height))
+    );
+  }
 
   begin(width: number, height: number, out: SurfaceFrame): boolean {
     const canvas = this.device.canvas;
@@ -73,6 +86,11 @@ export class RegionSurface implements Surface {
     public left = 0,
     public top = 0,
   ) {}
+
+  /** The canvas is sized by whoever lays the regions out. */
+  resizes(): boolean {
+    return false;
+  }
 
   moveTo(left: number, top: number): void {
     this.left = left;

@@ -116,6 +116,23 @@ export class Engine {
   }
 
   /**
+   * Gets everything `f` needs ready (the field variant of its look) without drawing: true once
+   * it is (a frame of `f` then draws exactly). For tests that compare pixels.
+   */
+  prepare(f: FrameInputs): boolean {
+    const slot = this.slot;
+    if (this.disposed || this.failure || !slot || this.isContextLost()) return false;
+    slot.prepare(f);
+    return this.device.poll() && slot.prepare(f);
+  }
+
+  /** See RenderSlot.fieldReady (true without a slot: nothing to hold back for). */
+  fieldReady(pending: number): boolean {
+    const slot = this.slot;
+    return this.disposed || this.failure !== null || !slot || slot.fieldReady(pending);
+  }
+
+  /**
    * Draws one frame. Returns false when nothing was drawn (not linked yet, context lost,
    * disposed or failed); the caller should keep showing its poster in that case.
    */
@@ -124,6 +141,8 @@ export class Engine {
     if (this.disposed || this.failure || !slot) return false;
     const device = this.device;
     if (device.isContextLost()) return false;
+    // The field variant this frame needs compiles alongside the other programs.
+    slot.prepare(f);
     if (!device.poll()) return false;
     try {
       return slot.draw(f, this.surface, device.timer);

@@ -32,6 +32,8 @@ import {
   setSampler,
   UNIT_HAZE,
   UNIT_SRC,
+  type WarmTargets,
+  warmDraw,
 } from './shared';
 
 export const MAX_TAPS = 9;
@@ -338,6 +340,19 @@ export class BloomPass {
     let ok = this.downsample.poll();
     for (const b of this.blurs) ok = b.poll() && ok;
     return ok;
+  }
+
+  /**
+   * The warm-up draws (see GpuDevice), into scratch targets of the real formats: the glow
+   * format for the combine program, the HDR one for the others.
+   */
+  warm(targets: WarmTargets): void {
+    const caps = this.ctx.caps;
+    const hdr = targets.framebuffer([caps.hdrFormat]);
+    warmDraw(this.ctx, this.downsample, hdr);
+    this.blurs.forEach((b, i) => {
+      warmDraw(this.ctx, b, i === 1 ? targets.framebuffer([caps.glowFormat]) : hdr);
+    });
   }
 
   /** Forces kernel re-upload (after programs are (re)linked). */

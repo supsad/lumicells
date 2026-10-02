@@ -30,6 +30,8 @@ import {
   UNIT_LUT,
   UNIT_STAMP_A,
   UNIT_STAMP_B,
+  type WarmTargets,
+  warmDraw,
 } from './shared';
 
 function compositeFs(header: string): string {
@@ -183,6 +185,14 @@ export class CompositePass {
 
   poll(): boolean {
     return this.prog.poll();
+  }
+
+  /**
+   * The warm-up draw (see GpuDevice): its real target is a canvas (one RGBA8 color buffer), so a
+   * scratch RGBA8 target has the same layout.
+   */
+  warm(targets: WarmTargets): void {
+    warmDraw(this.ctx, this.prog, targets.framebuffer([this.ctx.caps.rgba8]));
   }
 
   /**

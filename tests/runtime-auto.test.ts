@@ -101,6 +101,8 @@ const fake = vi.hoisted(() => {
     disposed = false;
     draws = 0;
     constructor(readonly device: FakeDevice) {}
+    /** Field variants (RenderSlot.prepare): nothing to compile here. */
+    prepare(): void {}
     draw(): boolean {
       if (this.disposed || this.device.lost) return false;
       this.draws++;
@@ -158,6 +160,10 @@ const fake = vi.hoisted(() => {
     renders = 0;
     constructor(readonly canvas: HTMLCanvasElement) {
       FakeEngine.instances.push(this);
+    }
+    /** Field variants (Engine.prepare): nothing to compile here. */
+    prepare(): boolean {
+      return true;
     }
     render(): boolean {
       if (this.lost || this.disposed) return false;

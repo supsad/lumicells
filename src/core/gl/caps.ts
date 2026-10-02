@@ -54,12 +54,29 @@ export interface GLCaps {
    * invalidation into a clear of the whole texture (measured: ~10 us per frame for the cell passes).
    */
   readonly tiled: boolean;
+  /**
+   * ANGLE on Direct3D (Chrome, Edge and Firefox on Windows): programs with several outputs get
+   * their pixel shader compiled again on the first draw (see passes/shared.ts, MRT_PAD).
+   */
+  readonly d3d: boolean;
+  /**
+   * RGBA32F, for the staged field pass (see engine/passes/field.ts): only on Direct3D (`d3d`)
+   * and when it is color-renderable (EXT_color_buffer_float); null otherwise.
+   */
+  readonly stageFormat: TextureFormat | null;
 }
 
 const SOFTWARE_RE =
   /swiftshader|llvmpipe|softpipe|software|basic render|microsoft basic|mesa offscreen/i;
 /** Immediate-mode desktop GPU vendors (CPU rasterizers are no tilers either: SOFTWARE_RE). */
 const IMMEDIATE_RE = /nvidia|geforce|quadro|radeon|\bamd\b|\bati\b|intel/i;
+
+const D3D_RE = /direct3d|\bd3d(?:9|11)\b/i;
+
+/** GLCaps.d3d from a renderer string (ANGLE names its backend: "... Direct3D11 vs_5_0 ..."). */
+export function isD3DRenderer(renderer: string): boolean {
+  return D3D_RE.test(renderer);
+}
 
 /** GLCaps.tiled from a renderer string: anything but a known desktop vendor or CPU rasterizer. */
 export function isTiledRenderer(renderer: string): boolean {
@@ -116,6 +133,10 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
   };
   const glowPacked = hdr && isRenderable(gl, packed);
   const renderer = readRenderer(gl);
+  const d3d = isD3DRenderer(renderer);
+  const f32: TextureFormat = { internalFormat: gl.RGBA32F, format: gl.RGBA, type: gl.FLOAT };
+  const stageRenderable =
+    d3d && !!gl.getExtension('EXT_color_buffer_float') && isRenderable(gl, f32);
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
   const maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
   const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as ArrayLike<number> | null;
@@ -142,5 +163,7 @@ export function probeCaps(gl: WebGL2RenderingContext, forceRgba8 = false): GLCap
     renderer,
     software: SOFTWARE_RE.test(renderer),
     tiled: isTiledRenderer(renderer),
+    d3d,
+    stageFormat: stageRenderable ? f32 : null,
   };
 }

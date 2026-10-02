@@ -26,14 +26,23 @@ float gnoise3(vec3 p) {
   ivec3 a = ivec3(fl) & NOISE_WRAP;
   ivec3 b = (a + 1) & NOISE_WRAP;
   vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  float n000 = grad3(hash3(uvec3(a.x, a.y, a.z)), f);
-  float n100 = grad3(hash3(uvec3(b.x, a.y, a.z)), f - vec3(1.0, 0.0, 0.0));
-  float n010 = grad3(hash3(uvec3(a.x, b.y, a.z)), f - vec3(0.0, 1.0, 0.0));
-  float n110 = grad3(hash3(uvec3(b.x, b.y, a.z)), f - vec3(1.0, 1.0, 0.0));
-  float n001 = grad3(hash3(uvec3(a.x, a.y, b.z)), f - vec3(0.0, 0.0, 1.0));
-  float n101 = grad3(hash3(uvec3(b.x, a.y, b.z)), f - vec3(1.0, 0.0, 1.0));
-  float n011 = grad3(hash3(uvec3(a.x, b.y, b.z)), f - vec3(0.0, 1.0, 1.0));
-  float n111 = grad3(hash3(uvec3(b.x, b.y, b.z)), f - vec3(1.0, 1.0, 1.0));
+  // Corner hashes: hash3(x, y, z) = pcg(x + pcg(y + pcg(z))) with the inner levels shared.
+  uvec3 ua = uvec3(a);
+  uvec3 ub = uvec3(b);
+  uint za = pcg(ua.z);
+  uint zb = pcg(ub.z);
+  uint yaa = pcg(ua.y + za);
+  uint yba = pcg(ub.y + za);
+  uint yab = pcg(ua.y + zb);
+  uint ybb = pcg(ub.y + zb);
+  float n000 = grad3(pcg(ua.x + yaa), f);
+  float n100 = grad3(pcg(ub.x + yaa), f - vec3(1.0, 0.0, 0.0));
+  float n010 = grad3(pcg(ua.x + yba), f - vec3(0.0, 1.0, 0.0));
+  float n110 = grad3(pcg(ub.x + yba), f - vec3(1.0, 1.0, 0.0));
+  float n001 = grad3(pcg(ua.x + yab), f - vec3(0.0, 0.0, 1.0));
+  float n101 = grad3(pcg(ub.x + yab), f - vec3(1.0, 0.0, 1.0));
+  float n011 = grad3(pcg(ua.x + ybb), f - vec3(0.0, 1.0, 1.0));
+  float n111 = grad3(pcg(ub.x + ybb), f - vec3(1.0, 1.0, 1.0));
   return mix(
     mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
     mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),

@@ -50,6 +50,10 @@ const fake = vi.hoisted(() => {
     }
     /** Programs still linking: render() draws nothing yet. */
     static compiling = false;
+    /** Field variants (Engine.prepare): nothing to compile here. */
+    prepare(): boolean {
+      return true;
+    }
     render(f: FrameInputs): boolean {
       if (this.disposed || this.error || FakeEngine.compiling) return false;
       if (this.failOnRender) {

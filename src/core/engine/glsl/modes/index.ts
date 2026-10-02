@@ -51,13 +51,31 @@ struct ModeIn {
 };
 `;
 
-/** All mode functions (expects ModeIn, the noise chunk and `uniform sampler2D u_life`). */
-export const MODES_GLSL = ENGINE_MODE_IDS.map((id) => MODE_SOURCES[id]).join('\n');
+/** Every mode in a feature mask (bit i = ENGINE_MODE_IDS[i], see field-variants.ts). */
+export const ALL_MODES = (1 << ENGINE_MODE_IDS.length) - 1;
+
+const included = (modes: number) => ENGINE_MODE_IDS.filter((_, i) => (modes & (1 << i)) !== 0);
 
 /**
- * GLSL statements that evaluate every mode whose weight is positive (a uniform branch, so
- * disabled modes cost nothing) and accumulate into `Mix x` via addMode().
+ * The functions of the modes in `modes` (expects ModeIn, the noise chunk and
+ * `uniform sampler2D u_life`).
  */
-export const MODES_EVAL_GLSL = ENGINE_MODE_IDS.map(
-  (id) => `  if (P_modes_${id}_weight > 0.001) addMode(x, P_modes_${id}_weight, mode_${id}(m));`,
-).join('\n');
+export function modesGlsl(modes = ALL_MODES): string {
+  return included(modes)
+    .map((id) => MODE_SOURCES[id])
+    .join('\n');
+}
+
+/**
+ * GLSL statements that evaluate each mode of `modes` whose weight is above 0.001 (a uniform
+ * branch, so disabled modes cost nothing) and accumulate into `Mix x` via addMode(), in
+ * ENGINE_MODE_IDS order whatever the subset. The threshold is MODE_WEIGHT_MIN (field-variants.ts).
+ */
+export function modesEvalGlsl(modes = ALL_MODES): string {
+  return included(modes)
+    .map(
+      (id) =>
+        `  if (P_modes_${id}_weight > 0.001) addMode(x, P_modes_${id}_weight, mode_${id}(m));`,
+    )
+    .join('\n');
+}

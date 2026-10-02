@@ -25,6 +25,7 @@
  * Nothing runs at import: the budget is created on first use (SSR-safe).
  */
 
+import { readyForContext } from '../engine/warmup';
 import { onFrameEnd } from '../ticker';
 import type { ConfigureOptions, RendererMode } from '../types';
 import { DEFAULT_PROMOTE_AREA } from './auto-renderer';
@@ -182,8 +183,10 @@ function serve(now: number): void {
     unkick();
     return;
   }
-  // This frame already paid for an engine's first draw: create in the next one.
-  if (now === firstDrawAt) return;
+  // This frame already paid for an engine's first draw: create in the next one. Creating a
+  // context is a synchronous call: not while a shader warm-up compiles, nor before the GPU
+  // process caught up with the page's first paint (engine/warmup.ts, readyForContext).
+  if (now === firstDrawAt || !readyForContext()) return;
   dirty = false;
   const b = getBudget();
   // Sizes matter only when members compete for slots; otherwise everyone is served anyway.
@@ -314,8 +317,9 @@ export function sharedBudgetPx(): number {
 
 /**
  * Asks to create one context in the frame stamped `now` (the shared renderer's device): allowed
- * within `createPerFrame` creations per frame, own engines included, and never in a frame in
- * which an engine drew its first frame. Recorded when allowed.
+ * within `createPerFrame` creations per frame, own engines included, never in a frame in which an
+ * engine drew its first frame, nor while the GPU process is busy (readyForContext). Recorded when
+ * allowed.
  */
 export function claimContextCreation(now: number): boolean {
   if (now === firstDrawAt || createdIn(now) >= settings.createPerFrame) {
@@ -323,6 +327,9 @@ export function claimContextCreation(now: number): boolean {
     sharedClaim = true;
     return false;
   }
+  // Not while the GPU process is busy, a wait that takes nobody's turn. The page's first creation
+  // is paced by serve() while own engines wait for one (the order of a page that needs no pacing).
+  if (!readyForContext(queue.size === 0)) return false;
   sharedClaim = false;
   noteCreated(now);
   return true;

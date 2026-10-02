@@ -126,6 +126,11 @@ export interface PendingProgram {
   readonly label: string;
   /** Returns the linked program, null while still compiling; throws ShaderError on failure. */
   poll(): Program | null;
+  /**
+   * Whether the link is done, without reading its result (non-blocking; true without
+   * KHR_parallel_shader_compile, where a link is done once a status query returns).
+   */
+  completed(): boolean;
   /** Deletes GL objects if the program never got handed out. */
   dispose(): void;
 }
@@ -183,6 +188,11 @@ export function createProgramAsync(
 
   return {
     label,
+    completed() {
+      if (result) return true;
+      if (done || gl.isContextLost()) return false;
+      return !parallel || gl.getProgramParameter(handle, parallel.COMPLETION_STATUS_KHR) === true;
+    },
     poll() {
       if (result) return result;
       if (done) return null;

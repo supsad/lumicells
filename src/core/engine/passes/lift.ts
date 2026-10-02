@@ -28,6 +28,7 @@ import {
   UNIT_FIELD_A,
   UNIT_FIELD_B,
   UNIT_LUT,
+  type WarmTargets,
 } from './shared';
 
 function liftVs(header: string): string {
@@ -201,6 +202,25 @@ export class LiftPass {
 
   poll(): boolean {
     return this.prog.poll();
+  }
+
+  /**
+   * The warm-up draw (see GpuDevice): one instance from `buffer` (zeros: alpha 0, so the quad
+   * lands outside the clip volume), drawn like run() draws. On Direct3D 11 ANGLE builds this
+   * program's vertex input layout and its flat-varying geometry shader on the first draw.
+   */
+  warm(targets: WarmTargets, buffer: WebGLBuffer): void {
+    const gl = this.ctx.gl;
+    this.prog.use();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer([this.ctx.caps.rgba8]));
+    gl.viewport(0, 0, 1, 1);
+    gl.bindVertexArray(this.vao);
+    this.attach(buffer);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
   }
 
   /** Points the vertex array at `buffer` (only when it changed). The VAO must be bound. */

@@ -8,7 +8,7 @@
  */
 
 import type { GLCaps, TextureFormat } from '../gl/caps';
-import { bucketSize, createMrtFramebuffer, createTexture, needsRealloc } from '../gl/target';
+import { bucketSize, createMrtFramebuffer, createTargetTexture, needsRealloc } from '../gl/target';
 
 export interface Target {
   readonly tex: WebGLTexture;
@@ -55,6 +55,13 @@ export class CellTargets {
   bloomTmp: Target | null = null;
   /** Combined bloom + haze, the composite's only glow input (caps.glowFormat). */
   glow: Target | null = null;
+  /**
+   * The field pass's intermediate texels (caps.stageFormat; staged pass only, see
+   * passes/field.ts): the first stage's, then (base, I) and (t, hot, dead, Ipre).
+   */
+  stage: Target | null = null;
+  restColor: Target | null = null;
+  restScalar: Target | null = null;
   haze: Target | null = null;
   hazeTmp: Target | null = null;
   /** Life ping-pong; `life[lifeCur]` holds the current state. */
@@ -66,6 +73,8 @@ export class CellTargets {
   constructor(
     private readonly gl: WebGL2RenderingContext,
     private readonly caps: GLCaps,
+    /** First color attachment of the field framebuffer (1 behind the MRT_PAD output). */
+    readonly fieldFirst = 0,
   ) {}
 
   private target(
@@ -76,7 +85,7 @@ export class CellTargets {
     format?: TextureFormat,
   ): Target {
     const gl = this.gl;
-    const tex = createTexture(gl, w, h, {
+    const tex = createTargetTexture(gl, w, h, {
       filter,
       format: format ?? (hdr ? this.caps.hdrFormat : this.caps.rgba8),
     });
@@ -128,12 +137,22 @@ export class CellTargets {
       this.orphanLife = this.life[this.lifeCur] ?? null;
       this.free(this.life[1 - this.lifeCur] ?? null);
       this.freeCellTargets();
-      this.fieldA = createTexture(gl, aw, ah, { format: this.caps.hdrFormat });
-      this.fieldB = createTexture(gl, aw, ah, { format: this.caps.rgba8 });
+      this.fieldA = createTargetTexture(gl, aw, ah, { format: this.caps.hdrFormat });
+      this.fieldB = createTargetTexture(gl, aw, ah, { format: this.caps.rgba8 });
       this.bloom = this.target(aw, ah, true, gl.LINEAR);
-      this.fieldFb = createMrtFramebuffer(gl, [this.fieldA, this.fieldB, this.bloom.tex]);
+      this.fieldFb = createMrtFramebuffer(
+        gl,
+        [this.fieldA, this.fieldB, this.bloom.tex],
+        this.fieldFirst,
+      );
       this.bloomTmp = this.target(aw, ah, true, gl.LINEAR);
       this.glow = this.target(aw, ah, true, gl.LINEAR, this.caps.glowFormat);
+      const stageFormat = this.caps.stageFormat;
+      if (stageFormat) {
+        this.stage = this.target(aw, ah, true, gl.NEAREST, stageFormat);
+        this.restColor = this.target(aw, ah, true, gl.NEAREST, stageFormat);
+        this.restScalar = this.target(aw, ah, true, gl.NEAREST, stageFormat);
+      }
       this.life = [this.target(aw, ah, false, gl.NEAREST), this.target(aw, ah, false, gl.NEAREST)];
       this.lifeCur = 0;
       this.aw = aw;
@@ -176,9 +195,15 @@ export class CellTargets {
     this.free(this.bloom);
     this.free(this.bloomTmp);
     this.free(this.glow);
+    this.free(this.stage);
+    this.free(this.restColor);
+    this.free(this.restScalar);
     this.bloom = null;
     this.bloomTmp = null;
     this.glow = null;
+    this.stage = null;
+    this.restColor = null;
+    this.restScalar = null;
   }
 
   dispose(): void {

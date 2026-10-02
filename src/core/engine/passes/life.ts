@@ -18,6 +18,8 @@ import {
   type PassContext,
   setSampler,
   UNIT_SRC,
+  type WarmTargets,
+  warmDraw,
 } from './shared';
 
 export const LIFE_MODE_STEP = 0;
@@ -112,6 +114,11 @@ export class LifePass {
 
   poll(): boolean {
     return this.prog.poll();
+  }
+
+  /** The warm-up draw (see GpuDevice), into a scratch target of the real format. */
+  warm(targets: WarmTargets): void {
+    warmDraw(this.ctx, this.prog, targets.framebuffer([this.ctx.caps.rgba8]));
   }
 
   /**

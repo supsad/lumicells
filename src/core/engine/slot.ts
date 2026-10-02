@@ -13,8 +13,10 @@
 
 import { createTexture } from '../gl/target';
 import type { DevicePasses, GpuDevice } from './device';
+import { neededFeatures, wantedFeatures } from './field-variants';
 import { FRAME_BYTES, frameUploadRanges, OFF_GRID } from './frame-block';
 import type { GpuTimer } from './gpu-timer';
+import type { FieldVariant } from './passes/field';
 import { LIFE_MODE_REMAP, LIFE_MODE_RESET, LIFE_MODE_STEP } from './passes/life';
 import { createLiftBuffer } from './passes/lift';
 import {
@@ -26,7 +28,10 @@ import {
   UNIT_GLOW,
   UNIT_HAZE,
   UNIT_LUT,
+  UNIT_REST_COLOR,
+  UNIT_REST_SCALAR,
   UNIT_SRC,
+  UNIT_STAGE,
   UNIT_STAMP_A,
   UNIT_STAMP_B,
 } from './passes/shared';
@@ -35,6 +40,7 @@ import { coversFramebuffer, createRegion, scissorRegion } from './region';
 import { CellTargets, paramsFloatCount } from './resources';
 import { createSurfaceFrame, type Surface } from './surface';
 import { type FrameInputs, MAX_LIFE_STEPS, type RenderQuality } from './types';
+import { gpuBusy } from './warmup';
 
 const LUT_WIDTH = 256;
 const LUT_ROWS = 2;
@@ -71,6 +77,10 @@ export class RenderSlot {
   /** Handed to another instance (recycle()): the next draw restarts the automaton. */
   private lifeFresh = false;
   private disposed = false;
+  /** Field features the last prepared frame needs (see field-variants.ts). */
+  private needed = 0;
+  /** The field variant the slot drew with last. */
+  private variant: FieldVariant | null = null;
 
   /** Use GpuDevice.createSlot(), which checks the params prelude. */
   constructor(device: GpuDevice, opts: RenderSlotOptions) {
@@ -78,7 +88,8 @@ export class RenderSlot {
     const gl = device.gl;
     this.gl = gl;
     this.paramsFloats = paramsFloatCount(device.declaredParamVec4, opts.paramsVec4Count);
-    this.res = new CellTargets(gl, device.caps);
+    // MRT targets start behind the pad output on Direct3D (see MRT_PAD in passes/shared.ts).
+    this.res = new CellTargets(gl, device.caps, device.caps.d3d ? 1 : 0);
     this.stamp = new StampTarget(gl, device.caps.hdrFormat);
     try {
       this.paramsUbo = gl.createBuffer();
@@ -130,6 +141,12 @@ export class RenderSlot {
     bindTexture(gl, UNIT_FIELD_B, res.fieldB);
     bindTexture(gl, UNIT_GLOW, res.glow?.tex ?? null);
     bindTexture(gl, UNIT_HAZE, res.haze?.tex ?? null);
+    // The staged field pass's intermediate texels (only its programs sample these units).
+    if (this.device.caps.stageFormat) {
+      bindTexture(gl, UNIT_STAGE, res.stage?.tex ?? null);
+      bindTexture(gl, UNIT_REST_SCALAR, res.restScalar?.tex ?? null);
+      bindTexture(gl, UNIT_REST_COLOR, res.restColor?.tex ?? null);
+    }
   }
 
   /**
@@ -141,6 +158,19 @@ export class RenderSlot {
   draw(f: FrameInputs, surface: Surface, timer: GpuTimer | null = null): boolean {
     const p = this.device.passes;
     if (this.disposed || !p || this.device.isContextLost()) return false;
+    this.prepare(f);
+    // The smallest ready field variant for this frame; until the slot has one, nothing is drawn.
+    const device = this.device;
+    let variant = p.field.select(this.needed, this.variant, device.frameCount);
+    if (!variant) {
+      // Requested just now, or linked since the device last polled: one more step.
+      device.progress();
+      variant = p.field.select(this.needed, this.variant, device.frameCount);
+      if (!variant) return false;
+    }
+    // Target allocation and canvas resizes are synchronous calls: not while a warm-up compiles.
+    if (gpuBusy() && this.needsSyncWork(f, surface, p)) return false;
+    this.variant = variant;
     const target = this.target;
     if (!surface.begin(f.canvasWidth, f.canvasHeight, target)) return false;
     const gl = this.gl;
@@ -199,7 +229,7 @@ export class RenderSlot {
     if (!fieldFb || !lifeCur || !bloom || !bloomTmp || !haze || !hazeTmp || !glow) {
       throw new Error('[lumicells] cell targets missing');
     }
-    p.field.run(fieldFb, W, H, lifeCur.tex);
+    p.field.run(fieldFb, res, W, H, lifeCur.tex, variant);
     // The glow passes run only when the composite shows their result: not with both strengths
     // at 0, and not in the field / halo / cells debug views. `f.lite`: the lite pipeline (2 glow
     // passes instead of 5, see BloomPass), chosen by the slot's owner.
@@ -240,6 +270,48 @@ export class RenderSlot {
     if (clip) gl.disable(gl.SCISSOR_TEST);
     timer?.end();
     return true;
+  }
+
+  /**
+   * Works out which field features `f` needs and asks the device for a variant covering them
+   * (and the modes tweening in): call it for every frame, before GpuDevice.poll() too, so the
+   * variant compiles alongside the other programs. Returns whether a ready variant covers them.
+   * Allocation-free.
+   */
+  prepare(f: FrameInputs): boolean {
+    if (this.disposed) return false;
+    const src = this.device.features;
+    this.needed = neededFeatures(f.params, f.frame, src);
+    // Plus the features tweens are about to turn on (held until they can be drawn).
+    const pending = f.fieldPending ?? 0;
+    this.device.requestField(wantedFeatures(f.params, src, this.needed) | pending);
+    return this.device.passes?.field.covers(this.needed) ?? false;
+  }
+
+  /**
+   * Whether the slot can draw the look with the field features in `pending` turned on (see
+   * Controller.setFieldGate): a ready variant covers them along with what the last prepared
+   * frame needs. Also true when holding them back would keep nothing on screen exact: before
+   * the slot's first field draw (nothing drawn yet: the first frame waits for its variant
+   * anyway), and on a lost, failed or disposed device. The variant itself is requested by
+   * prepare() (FrameInputs.fieldPending).
+   */
+  fieldReady(pending: number): boolean {
+    const d = this.device;
+    const p = d.passes;
+    if (this.disposed || !p || !this.variant || d.error || d.isContextLost()) return true;
+    return p.field.covers(this.needed | pending);
+  }
+
+  /** Whether drawing `f` would allocate targets or resize the surface's canvas. */
+  private needsSyncWork(f: FrameInputs, surface: Surface, p: DevicePasses): boolean {
+    const W = Math.max(1, f.cols + 2 * f.pad);
+    const H = Math.max(1, f.rows + 2 * f.pad);
+    return (
+      !this.res.holds(W, H) ||
+      p.stamp.needsAllocation(this.stamp, f.frame[OFF_GRID + 2] ?? f.pitchPx) ||
+      surface.resizes(f.canvasWidth, f.canvasHeight)
+    );
   }
 
   private lifeRun(p: DevicePasses, mode: number, f: FrameInputs): void {
@@ -320,8 +392,9 @@ export class RenderSlot {
     const { w, h } = res;
     const a = new Float32Array(w * h * 4);
     const b = new Uint8Array(w * h * 4);
+    const first = gl.COLOR_ATTACHMENT0 + res.fieldFirst;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, res.fieldFb);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readBuffer(first);
     if (this.device.caps.hdr) {
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.FLOAT, a);
     } else {
@@ -332,9 +405,9 @@ export class RenderSlot {
         a[i] = v * v * 4;
       }
     }
-    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readBuffer(first + 1);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, b);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readBuffer(first);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
     return { w, h, a, b };
   }

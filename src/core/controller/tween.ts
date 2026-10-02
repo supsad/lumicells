@@ -166,6 +166,8 @@ export class ParamStore {
   /** Per entry: tween duration, ms, and whether it is tweening (1) right now. */
   private readonly dur: Float64Array;
   private readonly on: Uint8Array;
+  /** Per entry: its tween is held where it is (1, see hold()). */
+  private readonly held: Uint8Array;
   /** Per entry: its modulators (a sparse array: absent without any). */
   private readonly mods: (Modulator[] | undefined)[] = [];
   private readonly active: Int32Array;
@@ -195,6 +197,7 @@ export class ParamStore {
     this.prev = new Int32Array(n);
     this.dur = new Float64Array(n);
     this.on = new Uint8Array(n);
+    this.held = new Uint8Array(n);
     this.active = new Int32Array(n);
     this.modIds = new Int32Array(8);
     if (from) this.restore(from);
@@ -330,6 +333,11 @@ export class ParamStore {
     let w = 0;
     for (let i = 0; i < this.activeCount; i++) {
       const id = this.active[i] as number;
+      if (this.held[id]) {
+        // Held: still tweening (animating stays true), not moving.
+        this.active[w++] = id;
+        continue;
+      }
       const e = entries[id] as ParamEntry;
       const done = this.step(e, dt);
       if (!this.mods[id]) this.refresh(e);
@@ -407,6 +415,31 @@ export class ParamStore {
   /** Tweening or modulated right now (its effective value may change this frame). */
   isLive(id: number): boolean {
     return this.on[id] === 1 || this.mods[id] !== undefined;
+  }
+
+  /** Has modulators of its own. */
+  hasModulators(id: number): boolean {
+    return this.mods[id] !== undefined;
+  }
+
+  /** Tweening right now (held or not; modulators are not counted). */
+  isTweening(id: number): boolean {
+    return this.on[id] === 1;
+  }
+
+  /** Where the tween of a number (or angle) entry goes: its first tweened component. */
+  target(id: number): number {
+    const e = this.entries[id] as ParamEntry;
+    return e.n > 0 ? (this.tgt[e.off] as number) : (this.eff[id] as number);
+  }
+
+  /**
+   * Holds the tween of `id` where it is (`on`), or lets it go on from there: a held tween keeps
+   * its value, its target and its duration, so once released it runs its whole course. Used
+   * while the renderer cannot draw what the tween is about to turn on (see Controller).
+   */
+  hold(id: number, on: boolean): void {
+    this.held[id] = on ? 1 : 0;
   }
 
   getEffective(path: string): number {

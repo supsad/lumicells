@@ -6,9 +6,9 @@
  * (four SDFs, eight exp2). All of it depends only on the pixel's position inside its cell and on
  * a few grid / glow parameters. The pitch is a whole number of device pixels and the grid origin
  * is pixel-snapped (see controller/geometry.ts), so that position is one of pitch x pitch values:
- * this pass evaluates them once into a pitch x pitch MRT pair and the composite fetches them.
+ * this pass evaluates them once into a pitch x pitch texture pair and the composite fetches them.
  *
- * Re-baked only when the pitch changes or the params block was uploaded (a pitch^2 draw, at most
+ * Re-baked only when the pitch changes or the params block was uploaded (pitch^2 draws, at most
  * a few thousand texels). Texel (x, y) holds the pixel at offset (x, y) from the cell's top-left
  * corner, canvas orientation (y down), exactly the composite's in-cell offset.
  *
@@ -18,12 +18,22 @@
  *         the same neighbours from the same offset).
  * Both are RGBA16F when float targets render (the values are then exact to ~1e-3), else RGBA8.
  *
- * The program belongs to the device (StampPass); the baked textures depend on the slot's params
+ * Each texture has a program of its own (one output each), not one program with two outputs:
+ * on Direct3D, ANGLE compiles a program with several outputs again on its first draw, on the GPU
+ * process's main thread (see MRT_PAD in shared.ts), while a single-output program is compiled at
+ * link time, in the background. A bake is rare, so the second draw costs nothing that matters.
+ *
+ * The programs belong to the device (StampPass); the baked textures depend on the slot's params
  * and pitch, so every slot owns a StampTarget.
  */
 
 import type { TextureFormat } from '../../gl/caps';
-import { bucketSize, createMrtFramebuffer, createTexture, needsRealloc } from '../../gl/target';
+import {
+  bucketSize,
+  createMrtFramebuffer,
+  createTargetTexture,
+  needsRealloc,
+} from '../../gl/target';
 import { FULLSCREEN_VS } from '../glsl/common';
 import {
   bindTexture,
@@ -33,14 +43,20 @@ import {
   UNIT_SRC,
   UNIT_STAMP_A,
   UNIT_STAMP_B,
+  type WarmTargets,
+  warmDraw,
 } from './shared';
 
 const STAMP_STEP = 16;
 
-function stampFs(header: string): string {
+/** The stamp program writing stampA (`a`) or stampB (`b`): the same code, one output. */
+function stampFs(header: string, out: 'a' | 'b'): string {
+  const value =
+    out === 'a'
+      ? 'vec4(emit * body, core, 0.5 + 0.5 * bevel, 1.0)'
+      : 'vec4(k0, kx, ky, kd) * (1.0 - body)';
   return `${header}
-layout(location = 0) out vec4 o_a;
-layout(location = 1) out vec4 o_b;
+out vec4 o_stamp;
 
 // d: distance from a body edge in pitch units (>= 0). Tight rim lobe + soft lobe; the window is
 // flat across the gap and reaches exactly 0 at half a pitch (what makes the 2x2 quadrant exact).
@@ -75,17 +91,17 @@ void main() {
   float kx = haloKernel(max(sdRoundBox(lc - vec2(o.x, 0.0), vec2(hb), rad), 0.0) * ip, invR2);
   float ky = haloKernel(max(sdRoundBox(lc - vec2(0.0, o.y), vec2(hb), rad), 0.0) * ip, invR2);
   float kd = haloKernel(max(sdRoundBox(lc - o, vec2(hb), rad), 0.0) * ip, invR2);
-  o_a = vec4(emit * body, core, 0.5 + 0.5 * bevel, 1.0);
-  o_b = vec4(k0, kx, ky, kd) * (1.0 - body);
+  o_stamp = ${value};
 }
 `;
 }
 
-/** A slot's baked stamp: the MRT pair, its bucketed allocation and what it was baked for. */
+/** A slot's baked stamp: the texture pair, its bucketed allocation and what it was baked for. */
 export class StampTarget {
   texA: WebGLTexture | null = null;
   texB: WebGLTexture | null = null;
-  fb: WebGLFramebuffer | null = null;
+  fbA: WebGLFramebuffer | null = null;
+  fbB: WebGLFramebuffer | null = null;
   alloc = 0;
   /** Pitch the stamp was baked for (0 = nothing baked yet). */
   pitch = 0;
@@ -106,9 +122,10 @@ export class StampTarget {
     this.free();
     // New textures bind to the active unit: use the scratch one, then bind them to their own.
     gl.activeTexture(gl.TEXTURE0 + UNIT_SRC);
-    this.texA = createTexture(gl, size, size, { format: this.format });
-    this.texB = createTexture(gl, size, size, { format: this.format });
-    this.fb = createMrtFramebuffer(gl, [this.texA, this.texB]);
+    this.texA = createTargetTexture(gl, size, size, { format: this.format });
+    this.texB = createTargetTexture(gl, size, size, { format: this.format });
+    this.fbA = createMrtFramebuffer(gl, [this.texA]);
+    this.fbB = createMrtFramebuffer(gl, [this.texB]);
     bindTexture(gl, UNIT_SRC, null);
     bindTexture(gl, UNIT_STAMP_A, this.texA);
     bindTexture(gl, UNIT_STAMP_B, this.texB);
@@ -117,10 +134,12 @@ export class StampTarget {
 
   free(): void {
     const gl = this.gl;
-    gl.deleteFramebuffer(this.fb);
+    gl.deleteFramebuffer(this.fbA);
+    gl.deleteFramebuffer(this.fbB);
     gl.deleteTexture(this.texA);
     gl.deleteTexture(this.texB);
-    this.fb = null;
+    this.fbA = null;
+    this.fbB = null;
     this.texA = null;
     this.texB = null;
     this.alloc = 0;
@@ -129,14 +148,30 @@ export class StampTarget {
 }
 
 export class StampPass {
-  private readonly prog: LazyProgram;
+  private readonly progA: LazyProgram;
+  private readonly progB: LazyProgram;
 
   constructor(private readonly ctx: PassContext) {
-    this.prog = new LazyProgram(ctx, FULLSCREEN_VS, stampFs(ctx.header), 'cell-stamp', () => {});
+    const vs = FULLSCREEN_VS;
+    this.progA = new LazyProgram(ctx, vs, stampFs(ctx.header, 'a'), 'cell-stamp-a', () => {});
+    this.progB = new LazyProgram(ctx, vs, stampFs(ctx.header, 'b'), 'cell-stamp-b', () => {});
   }
 
   poll(): boolean {
-    return this.prog.poll();
+    const a = this.progA.poll();
+    return this.progB.poll() && a;
+  }
+
+  /** The warm-up draws (see GpuDevice), into a scratch target of the real format. */
+  warm(targets: WarmTargets): void {
+    const fb = targets.framebuffer([this.ctx.caps.hdrFormat]);
+    warmDraw(this.ctx, this.progA, fb);
+    warmDraw(this.ctx, this.progB, fb);
+  }
+
+  /** Whether update() would (re)allocate `t` (a synchronous framebuffer check). */
+  needsAllocation(t: StampTarget, pitch: number): boolean {
+    return !t.fbA || needsRealloc(t.alloc, Math.max(1, Math.round(pitch)), STAMP_STEP);
   }
 
   /**
@@ -145,19 +180,25 @@ export class StampPass {
    */
   update(t: StampTarget, pitch: number): void {
     const p = Math.max(1, Math.round(pitch));
-    if (!t.dirty && p === t.pitch && t.fb) return;
-    const gl = this.ctx.gl;
-    if (!t.fb || needsRealloc(t.alloc, p, STAMP_STEP)) t.allocate(bucketSize(p, STAMP_STEP));
-    this.prog.use();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-    discardTargets(this.ctx, 2);
-    gl.viewport(0, 0, p, p);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (!t.dirty && p === t.pitch && t.fbA) return;
+    if (!t.fbA || needsRealloc(t.alloc, p, STAMP_STEP)) t.allocate(bucketSize(p, STAMP_STEP));
+    this.bake(this.progA, t.fbA as WebGLFramebuffer, p);
+    this.bake(this.progB, t.fbB as WebGLFramebuffer, p);
     t.pitch = p;
     t.dirty = false;
   }
 
+  private bake(prog: LazyProgram, fb: WebGLFramebuffer, p: number): void {
+    const gl = this.ctx.gl;
+    prog.use();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    discardTargets(this.ctx);
+    gl.viewport(0, 0, p, p);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
   dispose(): void {
-    this.prog.dispose();
+    this.progA.dispose();
+    this.progB.dispose();
   }
 }

@@ -17,21 +17,14 @@ export interface MultiSlotWaiver {
 }
 
 /**
- * Library bug, not test noise (no issue filed yet; file one and link it here): on ANGLE/D3D11
- * (Windows), in scenario rgba8+debug, slot 'D2 halo @1.25x' (debug view 2, dpr 1.25,
- * overflow 14) differs from its own-context engine by up to ~160 LSB on ~12k pixels at every
- * checkpoint, with the same numbers each time, in about 1 run in 4. Never seen on SwiftShader
- * (CI) or on the other slots. Only its region-vs-own comparison is waived; its draw count, the
- * pixels outside the regions and every other slot and scenario still decide the verdict.
+ * None at the moment. The last one, 'rgba8+debug/D2' on ANGLE/D3D11 ('D2 halo @1.25x' off by
+ * ~150 LSB on ~12k pixels in about 1 run in 4), was fixed in the library: with its render
+ * targets lazily initialized by a clear right before the cell stamp bake, NVIDIA's D3D11 driver
+ * could drop the bake's second MRT output, leaving the halo layer empty. Render targets now get
+ * zero texels by upload when they are created (createTargetTexture in src/core/gl/target.ts), and
+ * the stamp is baked by two single-output programs (src/core/engine/passes/stamp.ts).
  */
-export const MULTI_SLOT_WAIVERS: readonly MultiSlotWaiver[] = [
-  {
-    scenario: 'rgba8+debug',
-    slot: 'D2',
-    renderer: /\bD3D11\b|Direct3D11/i,
-    note: "ANGLE/D3D11: 'D2 halo @1.25x' differs from its own-context engine by ~160 LSB on ~12k pixels in ~1 run in 4 (library bug)",
-  },
-];
+export const MULTI_SLOT_WAIVERS: readonly MultiSlotWaiver[] = [];
 
 /** The waivers for this renderer, as `scenario/slot` keys for the page's `waive` parameter. */
 export function multiSlotWaivers(renderer: string): string[] {

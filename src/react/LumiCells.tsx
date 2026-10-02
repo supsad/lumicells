@@ -7,6 +7,7 @@ import {
   type Ref,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -147,6 +148,13 @@ export function LumiCells({
       onStats,
     };
   });
+
+  // The WebGL2 support probe (it creates a context, a call that waits for the GPU process) runs
+  // before the browser paints this commit: right after a paint the GPU process rasterizes it,
+  // which takes hundreds of milliseconds on a first visit, and the probe would wait for that.
+  useLayoutEffect(() => {
+    LumiCellsCore.isSupported();
+  }, []);
 
   // Created after mount (never during render), destroyed in cleanup: safe under StrictMode,
   // which runs mount -> cleanup -> mount and therefore builds two instances in a row.

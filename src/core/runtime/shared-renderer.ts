@@ -88,6 +88,7 @@ import { GpuDevice, toEngineError } from '../engine/device';
 import type { RenderSlot } from '../engine/slot';
 import { RegionSurface } from '../engine/surface';
 import type { EngineError, FrameInputs } from '../engine/types';
+import { gpuBusy } from '../engine/warmup';
 import { bucketSize, needsRealloc } from '../gl/target';
 import { frameWorkMs, noteGpuWork, onFrameEnd, subscribeTicker } from '../ticker';
 import type { SharedReducerReason, SharedRendererStats } from '../types';
@@ -724,6 +725,8 @@ export class SharedRenderer {
         paramsPrelude: g.layout.glslPrelude,
         paramsVec4Count: g.layout.vec4Count,
       });
+      // Its field variant starts compiling now (see RenderSlot.prepare).
+      seat.slot.prepare(g.frame);
     } catch {
       g.destroy();
       if (device.isContextLost()) this.enterLost();
@@ -769,6 +772,7 @@ export class SharedRenderer {
         paramsPrelude: seat.client.layout.glslPrelude,
         paramsVec4Count: seat.client.layout.vec4Count,
       });
+      seat.slot.prepare(seat.client.frame);
     } catch (err) {
       if (device.isContextLost()) {
         this.enterLost();
@@ -949,6 +953,7 @@ export class SharedRenderer {
           paramsPrelude: c.layout.glslPrelude,
           paramsVec4Count: c.layout.vec4Count,
         });
+        slot.prepare(c.frame);
       }
     } catch (err) {
       if (device.isContextLost()) {
@@ -1184,6 +1189,7 @@ export class SharedRenderer {
             paramsPrelude: s.client.layout.glslPrelude,
             paramsVec4Count: s.client.layout.vec4Count,
           });
+          s.slot.prepare(s.client.frame);
         } catch (err) {
           if (device.isContextLost()) {
             this.enterLost();
@@ -1554,8 +1560,18 @@ export class SharedRenderer {
         this.enterLost();
         return;
       }
+      // The field variants these frames need compile alongside the other programs.
+      for (let i = 0; i < n; i++) {
+        const s = due[i] as SharedSeat;
+        if (!s.released) s.slot?.prepare(s.client.frame);
+      }
       if (!device.poll()) return; // compiling, or failed (fail() released every seat)
-      if (this.layoutDirty || this.regionsStale(n)) this.relayout(device);
+      if (this.layoutDirty || this.regionsStale(n)) {
+        // Resizing the atlas is a synchronous call: not while a warm-up compiles (see
+        // engine/warmup.ts). The instances keep their last frame meanwhile.
+        if (gpuBusy()) return;
+        this.relayout(device);
+      }
       noteGpuWork();
       this.draw(device, n, now);
       // Released while drawing (its last seat failed): nothing left to copy or to lose.

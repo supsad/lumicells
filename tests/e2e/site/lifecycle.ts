@@ -41,6 +41,31 @@ const lifecycle = {
     return { live, total: instances.length, ms: Math.round(performance.now() - start) };
   },
 
+  /**
+   * Sets a mode weight of the first instance (with its config transition, default 600 ms) and
+   * records every animation frame for `ms`: [ms since the change, gap to the previous frame,
+   * effective weight]. For the live-change spec.
+   */
+  async setModeWeight(
+    mode: string,
+    weight: number,
+    ms = 2500,
+  ): Promise<[number, number, number][]> {
+    const c = instances[0];
+    if (!c) return [];
+    const path = `modes.${mode}.weight` as Parameters<LumiCells['getEffective']>[0];
+    const log: [number, number, number][] = [];
+    const t0 = performance.now();
+    c.setConfig({ modes: { [mode]: { weight } } } as Parameters<LumiCells['setConfig']>[0]);
+    let last = t0;
+    while (performance.now() - t0 < ms) {
+      const t = await nextFrame();
+      log.push([Math.round(t - t0), Math.round(t - last), c.getEffective(path)]);
+      last = t;
+    }
+    return log;
+  },
+
   /** Destroys every instance and removes the cards. */
   destroyAll(): void {
     for (const c of instances) c.destroy();

@@ -56,6 +56,11 @@ export interface FrameInputs {
   opaque: boolean;
   /** 0 final, 1 field, 2 halo, 3 bloom, 4 haze, 5 cells (no glow). */
   debugView: number;
+  /**
+   * Field features (engine/field-variants.ts) that tweens are about to turn on: the slot asks
+   * for a field variant with them ahead of time (see Controller.setFieldGate). Omitted = none.
+   */
+  fieldPending?: number;
 }
 
 /** Floats per lift instance. */

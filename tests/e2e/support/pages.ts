@@ -57,8 +57,9 @@ export const LIFECYCLE = devPage('tests/e2e/site/lifecycle.html');
  * Most WebGL contexts a page with default settings may hold at once on a desktop (fine pointer:
  * maxContexts 'auto' is DESKTOP_MAX_CONTEXTS): the budget of own contexts plus the shared
  * renderer's device (on top of the budget). The library's support probe (LumiCells.isSupported(),
- * memoized) adds nothing: it runs before the first engine exists and loses its context right
- * after creating it, so it is never live next to another one. The own contexts alone are checked
+ * memoized) adds nothing: it runs before the first engine exists and loses its context before the
+ * first engine's is created (it paces that creation, see src/core/engine/warmup.ts), so it is
+ * never live next to another one. The own contexts alone are checked
  * against DESKTOP_MAX_CONTEXTS (window.__glProbe.counters.peakLiveOwn), so an off-by-one in the
  * budget fails even where the shared device is absent.
  */

@@ -82,6 +82,7 @@ import { ElementTracker } from './dom/tracking';
 import { viewportSize, watchViewport } from './dom/viewport';
 import { Engine } from './engine/engine';
 import { DEBUG_VIEW, EngineError } from './engine/types';
+import { adoptPacer } from './engine/warmup';
 import { AutoDwell, type AutoSize, autoScore, autoWants } from './runtime/auto-renderer';
 import { areaBucket } from './runtime/context-budget';
 import {
@@ -223,9 +224,12 @@ export class LumiCells {
     if (typeof document === 'undefined') return false;
     try {
       const probe = document.createElement('canvas');
+      probe.width = 1;
+      probe.height = 1;
       const gl = probe.getContext('webgl2');
       supportedMemo = !!gl;
-      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      // Lost once it has paced the page's first context creation (see engine/warmup.ts).
+      if (gl) adoptPacer(gl, () => gl.getExtension('WEBGL_lose_context')?.loseContext());
     } catch {
       supportedMemo = false;
     }
@@ -551,6 +555,13 @@ export class LumiCells {
     this.#controller = new Controller({
       config: input,
       onWarn: (code, message) => this.#emit('warn', { code, message }),
+    });
+    // A tween that turns a field feature on (a mode, the noise mapping, the warp) starts once the
+    // renderer can draw it (its field variant is ready): own engine, else the shared seat's slot.
+    this.#controller.setFieldGate((pending) => {
+      const engine = this.#engine;
+      if (engine) return engine.fieldReady(pending);
+      return this.#seat?.slot?.fieldReady(pending) ?? true;
     });
     this.#lookSpec = {
       hostW: 0,
@@ -1020,6 +1031,9 @@ export class LumiCells {
     }
     this.#engine = engine;
     this.#engineOpaque = cfg.render.overflow <= 0;
+    // The field variant of the look compiles alongside the other programs (see
+    // engine/field-variants.ts), not from the first frame the instance renders.
+    engine.prepare(this.#controller.frame);
     this.#drawnSinceMount = false;
     this.#controller.setMaxDrawableSize(engine.caps.maxDrawableSize);
     if (this.#hookedCanvas !== canvas) {

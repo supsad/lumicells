@@ -15,11 +15,18 @@ vec3 mode_flow(ModeIn m) {
   float fw = sc * m.cs;
   // Octave 0 carries the structure: it fades only once the noise itself gets finer than a cell
   // (e.g. a large scale at low zoom), instead of turning into shimmering salt-and-pepper.
-  float n = 0.5 * noiseBand(fw) * gnoise3(vec3(q.x - ph, q.y, ph * 0.25));
-  vec2 q1 = NOISE_ROT * q * 2.0 + vec2(19.0, 7.0);
-  n += 0.25 * bandLimit(2.0 * fw) * gnoise3(vec3(q1.x - ph * 1.5, q1.y, ph * 0.5));
-  vec2 q2 = NOISE_ROT * q1 * 2.0 + vec2(-11.0, 23.0);
-  n += 0.125 * bandLimit(4.0 * fw) * gnoise3(vec3(q2.x - ph * 2.25, q2.y, ph * 0.75));
+  // Octave k: amplitude 0.5 / 2^k, drift ph * (1, 1.5, 2.25), time ph * (0.25, 0.5, 0.75).
+  // One noise call in a loop (see RUNTIME_COUNT).
+  float n = 0.0;
+  vec2 qk = q;
+  for (int k = 0; k < RUNTIME_COUNT(3); k++) {
+    float amp = k == 0 ? 0.5 : (k == 1 ? 0.25 : 0.125);
+    float band = bandLimit((k == 0 ? 0.5 : (k == 1 ? 2.0 : 4.0)) * fw);
+    float sx = k == 0 ? 1.0 : (k == 1 ? 1.5 : 2.25);
+    float sz = k == 0 ? 0.25 : (k == 1 ? 0.5 : 0.75);
+    n += amp * band * gnoise3(vec3(qk.x - ph * sx, qk.y, ph * sz));
+    qk = NOISE_ROT * qk * 2.0 + (k == 0 ? vec2(19.0, 7.0) : vec2(-11.0, 23.0));
+  }
   float v = 0.42 + 1.3 * n;
   // Widen the threshold edge to the cell footprint so contours do not crawl cell to cell.
   float soft = sqrt(sq(P_modes_flow_softness) + sq(0.35 * fw));

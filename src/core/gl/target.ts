@@ -4,6 +4,9 @@
  * The default format is RGBA8 (color-renderable and filterable everywhere). Callers that probed
  * float support (see caps.ts) pass an RGBA16F format explicitly. Targets are created with
  * texImage2D (not texStorage2D) so they can be resized in place.
+ *
+ * Render targets get their initial (zero) contents by upload, never from WebGL's lazy
+ * initialization (see createTargetTexture).
  */
 
 import type { TextureFormat } from './caps';
@@ -13,6 +16,42 @@ export interface TextureOptions {
   wrap?: GLenum;
   /** Defaults to RGBA8 / RGBA / UNSIGNED_BYTE. */
   format?: TextureFormat;
+}
+
+/** Uploads up to this size share one zero buffer (never written); larger ones get their own. */
+const SHARED_ZEROS_MAX = 1 << 20;
+let sharedZeros: ArrayBuffer | null = null;
+
+/**
+ * Zero texels for a `width x height` texImage2D of `format` (default RGBA8), typed as WebGL
+ * requires for its component type: Uint8Array (UNSIGNED_BYTE), Uint16Array (HALF_FLOAT) or
+ * Float32Array (FLOAT). Null for any other type (the texture is then left to lazy
+ * initialization). Uploads with UNPACK_ALIGNMENT 1, so rows are tightly packed.
+ */
+export function zeroTexels(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  format?: TextureFormat,
+): ArrayBufferView | null {
+  const type = format?.type ?? gl.UNSIGNED_BYTE;
+  const layout = format?.format ?? gl.RGBA;
+  const size =
+    type === gl.UNSIGNED_BYTE ? 1 : type === gl.HALF_FLOAT ? 2 : type === gl.FLOAT ? 4 : 0;
+  if (size === 0) return null;
+  const channels = layout === gl.RGBA ? 4 : layout === gl.RGB ? 3 : layout === gl.RG ? 2 : 1;
+  const count = Math.max(1, width) * Math.max(1, height) * channels;
+  const bytes = count * size;
+  let buffer: ArrayBuffer;
+  if (bytes > SHARED_ZEROS_MAX) {
+    buffer = new ArrayBuffer(bytes);
+  } else {
+    if (!sharedZeros || sharedZeros.byteLength < bytes) sharedZeros = new ArrayBuffer(bytes);
+    buffer = sharedZeros;
+  }
+  if (size === 1) return new Uint8Array(buffer, 0, count);
+  if (size === 2) return new Uint16Array(buffer, 0, count);
+  return new Float32Array(buffer, 0, count);
 }
 
 export function createTexture(
@@ -44,6 +83,34 @@ export function createTexture(
   return tex;
 }
 
+/**
+ * A texture to render into, created with defined (zero) contents.
+ *
+ * WebGL guarantees that a texture created without data reads as zero, but leaves it to the
+ * implementation how. ANGLE initializes such a texture lazily, right before the first draw that
+ * renders into it, and on Direct3D 11 it does that with a ClearRenderTargetView of the whole
+ * texture (allowClearForRobustResourceInit). On NVIDIA's D3D11 driver (seen with an RTX 5090,
+ * driver 32.0.16.1074) a draw into a framebuffer whose color attachments were all just cleared
+ * that way intermittently drops what it writes to COLOR_ATTACHMENT1: the texture keeps the clear
+ * value while attachments 0 and 2 receive the draw. Whether it happens depends on how the
+ * commands around that draw are batched (an extra flush next to it avoids it), so it came and
+ * went with unrelated changes. An engine-free WebGL page reproduces it there and nowhere else
+ * (not on WARP with the same ANGLE code, not with ANGLE's Vulkan or GL backends on the same GPU),
+ * and never when at least one of the attachments had its contents uploaded. For the engine it
+ * meant a cell stamp (baked once) whose halo layer stayed empty for good.
+ *
+ * Uploaded contents need no lazy initialization, so no clear ever precedes a target's first draw.
+ * The upload happens only when a target is (re)allocated, never per frame.
+ */
+export function createTargetTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  options: TextureOptions = {},
+): WebGLTexture {
+  return createTexture(gl, width, height, options, zeroTexels(gl, width, height, options.format));
+}
+
 export interface RenderTarget {
   readonly texture: WebGLTexture;
   readonly framebuffer: WebGLFramebuffer;
@@ -67,7 +134,7 @@ export function createRenderTarget(
 ): RenderTarget {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
-  const texture = createTexture(gl, w, h, options);
+  const texture = createTargetTexture(gl, w, h, options);
   const framebuffer = gl.createFramebuffer();
   if (!framebuffer) throw new Error('[lumicells] cannot create framebuffer');
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
@@ -83,22 +150,30 @@ export function disposeRenderTarget(gl: WebGL2RenderingContext, target: RenderTa
   gl.deleteTexture(target.texture);
 }
 
-/** A framebuffer with several color attachments (MRT). Textures are owned by the caller. */
+/**
+ * A framebuffer with several color attachments (MRT). Textures are owned by the caller and come
+ * from createTargetTexture (see there why). They are attached from COLOR_ATTACHMENT0 + `first`
+ * on, with no draw buffer below (see MRT_PAD in engine/passes/shared.ts). `check`: verify
+ * completeness (a synchronous call, which waits for the GPU process).
+ */
 export function createMrtFramebuffer(
   gl: WebGL2RenderingContext,
   textures: readonly WebGLTexture[],
+  first = 0,
+  check = true,
 ): WebGLFramebuffer {
   const fb = gl.createFramebuffer();
   if (!fb) throw new Error('[lumicells] cannot create framebuffer');
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   const buffers: GLenum[] = [];
+  for (let i = 0; i < first; i++) buffers.push(gl.NONE);
   for (let i = 0; i < textures.length; i++) {
-    const attachment = gl.COLOR_ATTACHMENT0 + i;
+    const attachment = gl.COLOR_ATTACHMENT0 + first + i;
     gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, textures[i] ?? null, 0);
     buffers.push(attachment);
   }
   gl.drawBuffers(buffers);
-  checkComplete(gl);
+  if (check) checkComplete(gl);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return fb;
 }

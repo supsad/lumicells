@@ -28,6 +28,14 @@ import {
   stableStringify,
 } from '../../schema';
 import {
+  FEATURE_LEAVES,
+  FEATURE_NOISE_MAP,
+  FEATURE_WARP,
+  MODE_COUNT,
+  MODE_WEIGHT_MIN,
+  NOISE_MAPPING_FROM,
+} from '../engine/field-variants';
+import {
   FRAME_FLOATS,
   OFF_CLOCK,
   OFF_COUNTS,
@@ -131,6 +139,11 @@ export interface LiftRequest {
 }
 
 const FORCED_QUEUE = 32;
+/**
+ * Longest a tween waits for the renderer to draw the field feature it turns on, s (see
+ * setFieldGate): past it, the tween runs and the feature joins once its variant is ready.
+ */
+const FIELD_HOLD_MAX_S = 10;
 
 /**
  * Lowest share scale that keeps the grid (see Controller.setShareScale): the lowest factor the
@@ -342,6 +355,12 @@ export class Controller {
   private lookKeyText = '';
   /** A change of this instance's own (see takeActivity) since the owner last took it. */
   private activity = true;
+  /** See setFieldGate. */
+  private fieldGate: ((pending: number) => boolean) | null = null;
+  /** Field features whose tweens are held this frame (see holdFieldTweens). */
+  private fieldHeld = 0;
+  /** How long the current hold has lasted, s (see FIELD_HOLD_MAX_S). */
+  private fieldHeldS = 0;
 
   // Resolved entry ids of the parameters read every frame.
   private readonly ids: ParamIds;
@@ -438,6 +457,7 @@ export class Controller {
       quality: 'high',
       opaque: true,
       debugView: 0,
+      fieldPending: 0,
     };
     this.updateGeometry();
   }
@@ -825,6 +845,18 @@ export class Controller {
     this.frame.debugView = v | 0;
   }
 
+  /**
+   * `ready(pending)`: whether the renderer can draw the field features in `pending` (a feature
+   * mask, see engine/field-variants.ts), which tweens are about to turn on. While it cannot
+   * (their field variant is still compiling), those tweens are held at their start, so the
+   * renderer keeps drawing the exact look without them, and they run their whole transition
+   * once it can. Null (the default): never held.
+   */
+  setFieldGate(ready: ((pending: number) => boolean) | null): void {
+    this.fieldGate = ready;
+    if (!ready) this.holdFieldTweens(0);
+  }
+
   /** Feeds frame timing to the adaptive quality controller. */
   samplePerf(deltaMs: number, cpuMs: number, gpuMs: number | null, now: number): PerfChange | null {
     const ch = this.perf.sample(deltaMs, cpuMs, gpuMs, now);
@@ -890,6 +922,49 @@ export class Controller {
   // Frame
 
   /**
+   * Field features (engine/field-variants.ts) a running tween is about to turn on: off now, on
+   * at its target. A mode weight at or below MODE_WEIGHT_MIN tweening above it, the warp
+   * tweening up from 0, a mapping crossfade into the noise mapping that has not started yet
+   * (mix 0: the previous mapping alone is on screen). Modulated leaves are left out: their
+   * modulators move them whatever the tween does. Allocation-free.
+   */
+  private pendingFeatures(): number {
+    const s = this.store;
+    const ids = this.ids.features;
+    let mask = 0;
+    for (let bit = 0; bit < ids.length; bit++) {
+      const id = ids[bit] as number;
+      if (id < 0 || !s.isTweening(id) || s.hasModulators(id)) continue;
+      const flag = 1 << bit;
+      if (flag === FEATURE_NOISE_MAP) {
+        if (
+          s.crossfadeMix(id) <= 0 &&
+          !(s.num(id) < NOISE_MAPPING_FROM) &&
+          s.crossfadePrev(id) < NOISE_MAPPING_FROM
+        ) {
+          mask |= flag;
+        }
+        continue;
+      }
+      const off = flag === FEATURE_WARP ? 0 : MODE_WEIGHT_MIN;
+      if (Math.fround(s.num(id)) <= off && Math.fround(s.target(id)) > off) mask |= flag;
+    }
+    return mask;
+  }
+
+  /** Holds the tweens behind the features in `mask`, releases the others (see setFieldGate). */
+  private holdFieldTweens(mask: number): void {
+    const changed = mask ^ this.fieldHeld;
+    if (changed === 0) return;
+    this.fieldHeld = mask;
+    const ids = this.ids.features;
+    for (let bit = 0; bit < ids.length; bit++) {
+      const id = ids[bit] as number;
+      if (id >= 0 && (changed & (1 << bit)) !== 0) this.store.hold(id, (mask & (1 << bit)) !== 0);
+    }
+  }
+
+  /**
    * Advances everything by `dt` seconds and fills the preallocated FrameInputs. `maxDt`: the
    * longest step taken (a stall must not fast-forward the animation); a caller that presents
    * every few display frames passes the interval it presents at (or more), so a lower frame rate
@@ -904,6 +979,17 @@ export class Controller {
     const s = this.store;
     const ids = this.ids;
 
+    // Tweens that would turn on a field feature the renderer cannot draw yet wait for it.
+    const pending = this.pendingFeatures();
+    f.fieldPending = pending;
+    let held = 0;
+    if (pending === 0) {
+      this.fieldHeldS = 0;
+    } else if (this.fieldGate && this.fieldHeldS < FIELD_HOLD_MAX_S && !this.fieldGate(pending)) {
+      held = pending;
+      this.fieldHeldS += step;
+    }
+    this.holdFieldTweens(held);
     // A modulated value or a tween that moved is a change of this instance's own.
     if (s.update(step)) this.activity = true;
     if (s.dirty) {
@@ -1198,7 +1284,13 @@ export class Controller {
 
 /** Store ids of the parameters read every frame (resolved once per instance). */
 function resolveIds(s: ParamStore) {
+  const features = new Int32Array(MODE_COUNT + 2);
+  for (let bit = 0; bit < features.length; bit++) {
+    features[bit] = s.entry(FEATURE_LEAVES[bit] as string)?.id ?? -1;
+  }
   return {
+    /** Entry per field feature bit (see engine/field-variants.ts), -1 when absent. */
+    features,
     speed: s.id('animation.speed'),
     energy: s.id('animation.energy'),
     flowSpeed: s.id('modes.flow.speed'),
