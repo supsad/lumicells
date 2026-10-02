@@ -1,9 +1,10 @@
 /**
  * Search and link-preview metadata of the published demo site (GitHub Pages, base /lumicells/):
  * the pages carry a description, a canonical URL and an Open Graph image that exists, the sitemap
- * lists exactly the pages vite.config.ts builds.
+ * lists exactly the pages vite.config.ts builds, and the IndexNow key file holds its own name and
+ * is the key the Pages workflow pings IndexNow with after a deployment.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -121,5 +122,34 @@ describe('sitemap.xml', () => {
     const xml = read('public/sitemap.xml');
     const locs = [...xml.matchAll(/<loc>([^<]*)<\/loc>/g)].map((m) => m[1]).sort();
     expect(locs).toEqual(pageInputs().map(urlOf).sort());
+  });
+});
+
+describe('IndexNow key file', () => {
+  it('is the only one and contains exactly its own name', () => {
+    const keys = readdirSync(resolve(root, 'public')).filter((f) => /^[0-9a-f]{32}\.txt$/.test(f));
+    expect(keys).toHaveLength(1);
+    const [file] = keys;
+    expect(read(`public/${file}`)).toBe(file?.replace(/\.txt$/, ''));
+  });
+
+  it('is what the Pages workflow pings IndexNow with, for every page of the sitemap', () => {
+    const [file] = readdirSync(resolve(root, 'public')).filter((f) =>
+      /^[0-9a-f]{32}\.txt$/.test(f),
+    );
+    const yml = read('.github/workflows/pages.yml');
+    const step = yml.slice(yml.indexOf('name: Notify search engines (IndexNow)'));
+    expect(step).toContain('continue-on-error: true');
+    expect(step).toContain(`KEY: ${file?.replace(/\.txt$/, '')}`);
+    expect(step).toContain(`SITE: ${SITE}`);
+    // The shell of the step expands these; in the workflow file they are literal text.
+    const site = `\${SITE}`;
+    const key = `\${KEY}`;
+    expect(step).toContain(`\\"keyLocation\\":\\"${site}${key}.txt\\"`);
+    const urls = [...step.matchAll(/\\"(\$\{SITE\}[^\\]*)\\"/g)]
+      .map((m) => m[1]?.replace(site, SITE))
+      .filter((u) => !u?.endsWith('.txt'))
+      .sort();
+    expect(urls).toEqual(pageInputs().map(urlOf).sort());
   });
 });

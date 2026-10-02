@@ -49,3 +49,17 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+      # Tells the search engines that take IndexNow (Bing, Yandex and others) that the pages of
+      # public/sitemap.xml changed. The key file (public/<key>.txt) is not at the host root, so
+      # keyLocation names it. A failed ping never fails the deployment.
+      - name: Notify search engines (IndexNow)
+        continue-on-error: true
+        env:
+          KEY: 7a24820034906255d0e6f20275a37491
+          SITE: https://supsad.github.io/lumicells/
+        run: >-
+          curl -sS --fail-with-body -X POST https://api.indexnow.org/indexnow
+          -H 'Content-Type: application/json; charset=utf-8'
+          --data "{\"host\":\"supsad.github.io\",\"key\":\"$KEY\",\"keyLocation\":\"${SITE}${KEY}.txt\",
+          \"urlList\":[\"${SITE}\",\"${SITE}examples/web-component.html\",\"${SITE}examples/core-basic.html\"]}"
