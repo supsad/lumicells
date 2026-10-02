@@ -12,21 +12,14 @@
  */
 
 import {
-  cloneData,
-  deepMerge,
-  diffConfigs,
   getField,
   getPath,
-  isPlainObject,
   type LumiCellsConfig,
   type LumiCellsConfigInput,
   type ModulatablePath,
-  normalizeConfig,
-  normalizePatch,
   type ParamPath,
-  posterCss,
-  stableStringify,
 } from '../../schema';
+import { type ConfigCommit, type ConfigStart, ConfigState } from '../config-state';
 import {
   FEATURE_LEAVES,
   FEATURE_NOISE_MAP,
@@ -81,10 +74,24 @@ import { type PerfChange, PerfController, type QualityMode } from './perf';
 import { type PulseInit, PulseList } from './pulses';
 import { ParamStore, ScalarTween, type StoreSnapshot } from './tween';
 
+export { initMissCount, lookKeyOf } from '../config-state';
+
 export interface ControllerOptions {
   config?: LumiCellsConfigInput;
+  /**
+   * The config layer to start from instead of `config` (the facade's own, see config-state.ts):
+   * the controller starts from its first config and does not follow its commits until follow()
+   * (the caller replays the commits made before, see applyCommit).
+   */
+  state?: ConfigState;
   /** Deterministic randomness for tests. */
   random?: () => number;
+  /**
+   * Seed of the controller's own generator (when `random` is not given): the facade draws it from
+   * Math.random when the instance is constructed, which may be long before its controller is.
+   * Default: drawn from Math.random now.
+   */
+  seed?: number;
   /** Reuse a layout (it is pure and identical for every instance). */
   layout?: ParamLayout;
   onWarn?: (code: string, message: string) => void;
@@ -160,104 +167,10 @@ export function getSharedLayout(): ParamLayout {
 }
 
 /**
- * What a controller starts from for one config input (see the header): never handed out, each
- * controller gets a copy of `config`.
+ * ParamStore values right after a reset from a cached config start (see config-state.ts), per
+ * layout: controllers started from the same input copy them instead of resetting.
  */
-interface InitState {
-  readonly config: LumiCellsConfig;
-  /**
-   * `config` as JSON when that round trip is exact (it is for normalized configs: finite
-   * numbers, strings, booleans, arrays, plain objects): JSON.parse copies it faster than a walk,
-   * mostly while the code is still cold (a page mounting its backgrounds).
-   */
-  readonly json: string | null;
-  readonly store: StoreSnapshot;
-  /** posterCss(config), computed on first use. */
-  poster: string | null;
-  /** lookKeyOf(config), computed on first use. */
-  lookKey: string | null;
-}
-
-/** Inputs kept per layout (least recently used first out). */
-const INIT_MAX = 32;
-const initStates = new WeakMap<ParamLayout, Map<string, InitState>>();
-let initMisses = 0;
-
-/** How many controllers normalized and reset their config themselves (a cached input does not). */
-export function initMissCount(): number {
-  return initMisses;
-}
-
-/**
- * Exact content key of a config input, or null when it holds anything but plain data (plain
- * objects, arrays, strings, numbers, booleans, null): normalization treats class instances and
- * the like differently from plain objects with the same fields, so those are never cached.
- */
-function inputKey(v: unknown, depth = 0): string | null {
-  if (v === null) return 'n';
-  switch (typeof v) {
-    case 'string':
-      return JSON.stringify(v);
-    case 'number':
-      return String(v);
-    case 'boolean':
-      return v ? 't' : 'f';
-    case 'object':
-      break;
-    default:
-      return null;
-  }
-  if (depth > 16) return null;
-  if (Array.isArray(v)) {
-    let out = '[';
-    for (let i = 0; i < v.length; i++) {
-      const k = inputKey(v[i], depth + 1);
-      if (k === null) return null;
-      out += i > 0 ? `,${k}` : k;
-    }
-    return `${out}]`;
-  }
-  if (!isPlainObject(v)) return null;
-  const keys = Object.keys(v).sort();
-  let out = '{';
-  let first = true;
-  for (const key of keys) {
-    const val = v[key];
-    // Normalization ignores undefined values like absent keys.
-    if (val === undefined) continue;
-    const k = inputKey(val, depth + 1);
-    if (k === null) return null;
-    out += `${first ? '' : ','}${JSON.stringify(key)}:${k}`;
-    first = false;
-  }
-  return `${out}}`;
-}
-
-/** Whether JSON.parse(JSON.stringify(v)) gives back exactly `v` (see InitState.json). */
-function jsonExact(v: unknown, depth = 0): boolean {
-  if (v === null || typeof v === 'string' || typeof v === 'boolean') return true;
-  if (typeof v === 'number') return Number.isFinite(v) && !Object.is(v, -0);
-  if (depth > 16) return false;
-  if (Array.isArray(v)) return v.every((x) => jsonExact(x, depth + 1));
-  if (!isPlainObject(v)) return false;
-  for (const key of Object.keys(v)) {
-    if (key === '__proto__' || !jsonExact(v[key], depth + 1)) return false;
-  }
-  return true;
-}
-
-/**
- * Key of the picture a config draws (`look: 'shared'` groups cards by it): the canonical
- * serialization of the normalized config without the paths that never change a frame on their
- * own. `interaction` (pointer, clicks and the defaults of influences and pulses) acts only through
- * runtime layers, which take a card out of its group anyway; `render.pauseOffscreen` only decides
- * when an instance draws; `transition` only shapes a config change, which changes the key.
- */
-export function lookKeyOf(config: Readonly<LumiCellsConfig>): string {
-  const { interaction: _i, transition: _t, render, ...rest } = config;
-  const { pauseOffscreen: _p, ...visual } = render;
-  return stableStringify({ ...rest, render: visual });
-}
+const snapshots = new WeakMap<ParamLayout, WeakMap<ConfigStart, StoreSnapshot>>();
 
 /** Store ids of the parameters read every frame, per layout (they depend on the schema only). */
 const idsByLayout = new WeakMap<ParamLayout, ParamIds>();
@@ -276,12 +189,13 @@ export class Controller {
   /** Set when the geometry changed; the facade clears it after emitting 'resize'. */
   geometryChanged = true;
   destroyed = false;
+  /** The config layer (the facade's own, or one of this controller's). */
+  readonly state: ConfigState;
 
-  private config: LumiCellsConfig;
-  private readonly random: () => number;
-  private readonly onWarn: ((code: string, message: string) => void) | undefined;
-  private readonly sizingMix: ScalarTween;
-  private readonly rates: ClockRates = {
+  readonly #random: () => number;
+  readonly #onWarn: ((code: string, message: string) => void) | undefined;
+  readonly #sizingMix: ScalarTween;
+  readonly #rates: ClockRates = {
     speed: 1,
     flow: 0,
     sphereRotation: 0,
@@ -297,8 +211,8 @@ export class Controller {
     sparkle: 0,
     ripple: 0,
   };
-  private readonly liftParams: LiftParams = createLiftParams();
-  private readonly geoIn: GeometryInput = {
+  readonly #liftParams: LiftParams = createLiftParams();
+  readonly #geoIn: GeometryInput = {
     hostCssW: 300,
     hostCssH: 150,
     overflowCss: 0,
@@ -311,10 +225,10 @@ export class Controller {
     cssPitch: 10,
     maxDim: 0,
   };
-  private readonly infCtx: InfluenceContext;
-  private readonly forced = new Float64Array(FORCED_QUEUE * 5);
-  private forcedCount = 0;
-  private readonly pulseInit: PulseInit = {
+  readonly #infCtx: InfluenceContext;
+  readonly #forced = new Float64Array(FORCED_QUEUE * 5);
+  #forcedCount = 0;
+  readonly #pulseInit: PulseInit = {
     space: 0,
     x: 0,
     y: 0,
@@ -328,94 +242,65 @@ export class Controller {
     duration: 1,
     minor: false,
   };
-  private readonly tmp = new Float64Array(3);
-  private pixelCap = Number.POSITIVE_INFINITY;
+  readonly #tmp = new Float64Array(3);
+  #pixelCap = Number.POSITIVE_INFINITY;
   /** Resolution factor of the shared renderer's pixel budget (1 = full resolution). */
-  private shareScale = 1;
+  #shareScale = 1;
   /** Geometry at the adaptive scale alone (share scale 1): the grid the share scale keeps. */
-  private readonly baseGeo: Geometry = createGeometry();
+  readonly #baseGeo: Geometry = createGeometry();
   /**
    * Geometry at full resolution (adaptive and share scale 1): the natural size the shared budget
    * plans with. Only computed while either scale is below 1 (`geo` is it otherwise).
    */
-  private readonly natGeo: Geometry = createGeometry();
-  private natSeparate = false;
+  readonly #natGeo: Geometry = createGeometry();
+  #natSeparate = false;
   /** Shorter side 'count' sizing divides, CSS px (0: the host's own; see setCountBasis). */
-  private countBasis = 0;
-  private reducedMotion = false;
-  private software = false;
-  private clientX = 0;
-  private clientY = 0;
-  private hasViewport = false;
-  /** The cached start this config came from (its poster is known), until the first change. */
-  private init: InitState | null = null;
-  private posterFor: LumiCellsConfig | null = null;
-  private posterText = '';
-  private lookKeyFor: LumiCellsConfig | null = null;
-  private lookKeyText = '';
+  #countBasis = 0;
+  #reducedMotion = false;
+  #software = false;
+  #clientX = 0;
+  #clientY = 0;
+  #hasViewport = false;
+  readonly #follower = (c: ConfigCommit): void => this.applyCommit(c);
   /** A change of this instance's own (see takeActivity) since the owner last took it. */
-  private activity = true;
+  #activity = true;
   /** See setFieldGate. */
-  private fieldGate: ((pending: number) => boolean) | null = null;
+  #fieldGate: ((pending: number) => boolean) | null = null;
   /** Field features whose tweens are held this frame (see holdFieldTweens). */
-  private fieldHeld = 0;
+  #fieldHeld = 0;
   /** How long the current hold has lasted, s (see FIELD_HOLD_MAX_S). */
-  private fieldHeldS = 0;
+  #fieldHeldS = 0;
 
   // Resolved entry ids of the parameters read every frame.
-  private readonly ids: ParamIds;
+  readonly #ids: ParamIds;
 
   constructor(opts: ControllerOptions = {}) {
-    this.random = opts.random ?? mulberry32((Math.random() * 4294967296) >>> 0);
-    this.onWarn = opts.onWarn;
+    this.#random = opts.random ?? mulberry32(opts.seed ?? (Math.random() * 4294967296) >>> 0);
+    this.#onWarn = opts.onWarn;
     this.layout = opts.layout ?? getSharedLayout();
-    const input = opts.config ?? {};
-    let key: string | null = null;
-    try {
-      key = inputKey(input);
-    } catch {
-      // A getter that throws, or the like: normalization copes, the cache stays out of it.
+    const state = opts.state ?? new ConfigState(opts.config ?? {});
+    this.state = state;
+    // Everything starts from the first config; later commits are applied on top (see follow()).
+    const cfg = state.initial;
+    const start = state.start;
+    let cached = snapshots.get(this.layout);
+    if (!cached) {
+      cached = new WeakMap();
+      snapshots.set(this.layout, cached);
     }
-    let states = initStates.get(this.layout);
-    if (!states) {
-      states = new Map();
-      initStates.set(this.layout, states);
-    }
-    const hit = key === null ? undefined : states.get(key);
-    if (hit) {
-      states.delete(key as string);
-      states.set(key as string, hit);
-      this.config = hit.json !== null ? JSON.parse(hit.json) : cloneData(hit.config);
-      this.store = new ParamStore(this.layout, this.config, hit.store);
-      this.init = hit;
-    } else {
-      initMisses++;
-      this.config = normalizeConfig(input).config;
-      this.store = new ParamStore(this.layout, this.config);
-      if (key !== null) {
-        const config = cloneData(this.config);
-        const state: InitState = {
-          config,
-          json: jsonExact(config) ? JSON.stringify(config) : null,
-          store: this.store.snapshot(),
-          poster: null,
-          lookKey: null,
-        };
-        states.set(key, state);
-        if (states.size > INIT_MAX) states.delete(states.keys().next().value as string);
-        this.init = state;
-      }
-    }
-    this.lut = new PaletteLut(this.config.color.palette, this.config.color.interpolation);
-    this.lifts = new LiftScheduler(this.random, this.pulses);
-    this.sizingMix = new ScalarTween(this.config.grid.sizing === 'pitch' ? 1 : 0);
-    this.perf.setMode(this.config.render.quality);
+    const snap = start ? cached.get(start) : undefined;
+    this.store = new ParamStore(this.layout, cfg, snap);
+    if (start && !snap) cached.set(start, this.store.snapshot());
+    this.lut = new PaletteLut(cfg.color.palette, cfg.color.interpolation);
+    this.lifts = new LiftScheduler(this.#random, this.pulses);
+    this.#sizingMix = new ScalarTween(cfg.grid.sizing === 'pitch' ? 1 : 0);
+    this.perf.setMode(cfg.render.quality);
     this.influences.onOverflow = (alive) =>
-      this.warn(
+      this.#warn(
         'influence-overflow',
         `[lumicells] ${alive} influences are alive but only 64 fit on the GPU; lower-priority ones fade out.`,
       );
-    this.infCtx = {
+    this.#infCtx = {
       geo: this.geo,
       clientX: 0,
       clientY: 0,
@@ -428,7 +313,7 @@ export class Controller {
       ids = resolveIds(this.store);
       idsByLayout.set(this.layout, ids);
     }
-    this.ids = ids;
+    this.#ids = ids;
 
     this.frame = {
       canvasWidth: 1,
@@ -444,7 +329,7 @@ export class Controller {
       lutDirty: true,
       lifeSteps: 0,
       lifeReset: true,
-      lifeSeed: (this.random() * 4294967296) >>> 0,
+      lifeSeed: (this.#random() * 4294967296) >>> 0,
       lifeRule: 0,
       lifeBirth: 0,
       lifeSeedDensity: 0.3,
@@ -460,29 +345,24 @@ export class Controller {
       fieldPending: 0,
     };
     this.updateGeometry();
+    if (!opts.state) this.follow();
   }
 
   // -------------------------------------------------------------------------------------------
   // Config
 
+  /** The current config (the config layer's). */
+  get #config(): LumiCellsConfig {
+    return this.state.config;
+  }
+
   getConfig(): Readonly<LumiCellsConfig> {
-    return this.config;
+    return this.state.config;
   }
 
   /** CSS poster of the current config (posterCss), computed once per config. */
   get poster(): string {
-    const cfg = this.config;
-    if (this.posterFor !== cfg) {
-      const init = this.init;
-      if (init) {
-        init.poster ??= posterCss(cfg);
-        this.posterText = init.poster;
-      } else {
-        this.posterText = posterCss(cfg);
-      }
-      this.posterFor = cfg;
-    }
-    return this.posterText;
+    return this.state.poster;
   }
 
   /**
@@ -490,36 +370,33 @@ export class Controller {
    * string object until the config changes (cards started from one input share it).
    */
   get lookKey(): string {
-    const cfg = this.config;
-    if (this.lookKeyFor !== cfg) {
-      const init = this.init;
-      if (init) {
-        init.lookKey ??= lookKeyOf(cfg);
-        this.lookKeyText = init.lookKey;
-      } else {
-        this.lookKeyText = lookKeyOf(cfg);
-      }
-      this.lookKeyFor = cfg;
-    }
-    return this.lookKeyText;
+    return this.state.lookKey;
+  }
+
+  /**
+   * Applies every later change of the config layer as it happens. A controller created on a
+   * state of its own follows it from the start; one created on the facade's state calls this
+   * once it has replayed the changes made before it existed (applyCommit, in call order).
+   */
+  follow(): void {
+    this.state.onCommit = this.#follower;
   }
 
   /** Merges a partial config; returns the changed leaf paths (schema order). */
   setConfig(patch: LumiCellsConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
     if (this.destroyed) return [];
-    const { patch: clean } = normalizePatch(patch);
-    return this.commit(normalizeConfig(deepMerge(this.config, clean)).config, opts);
+    return this.state.setConfig(patch, opts.transition);
   }
 
   /** Replaces the whole config (missing keys fall back to defaults / `extends`). */
   replaceConfig(input: LumiCellsConfigInput, opts: ConfigChangeOptions = {}): ParamPath[] {
     if (this.destroyed) return [];
-    return this.commit(normalizeConfig(input).config, opts);
+    return this.state.replaceConfig(input, opts.transition);
   }
 
   getEffective(path: ModulatablePath): number {
     const v = this.store.getEffective(path);
-    return Number.isNaN(v) ? (getPath(this.config, path) as number) : v;
+    return Number.isNaN(v) ? (getPath(this.#config, path) as number) : v;
   }
 
   modulate(
@@ -554,9 +431,12 @@ export class Controller {
   // -------------------------------------------------------------------------------------------
   // Influences, pulses, lifts
 
-  /** Raw registry entry (the DOM trackers move it without allocating). */
-  createInfluence(init: InfluenceInit): Influence {
-    return this.influences.add(init);
+  /**
+   * Raw registry entry (the DOM trackers move it without allocating). `id`: an id handed out
+   * before this controller existed (the facade's handles made before the GPU side loaded).
+   */
+  createInfluence(init: InfluenceInit, id?: number): Influence {
+    return this.influences.add(init, id);
   }
 
   /** Public handle for an entry; `onDispose` runs once when the handle is disposed. */
@@ -591,16 +471,16 @@ export class Controller {
     };
   }
 
-  addInfluence(init: InfluenceInit, signal?: AbortSignal): ControllerInfluenceHandle {
+  addInfluence(init: InfluenceInit, signal?: AbortSignal, id?: number): ControllerInfluenceHandle {
     if (this.destroyed) return deadInfluence();
-    return this.influenceHandle(this.createInfluence(init), signal);
+    return this.influenceHandle(this.createInfluence(init, id), signal);
   }
 
   pulse(req: PulseRequest): void {
     if (this.destroyed) return;
     const s = this.store;
-    const ids = this.ids;
-    const p = this.pulseInit;
+    const ids = this.#ids;
+    const p = this.#pulseInit;
     p.space = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
     p.x = req.x;
     p.y = req.y;
@@ -608,10 +488,10 @@ export class Controller {
     p.speed = Math.max(0.01, req.speed ?? s.num(ids.rippleSpeed));
     p.width = Math.max(0.05, req.width ?? s.num(ids.rippleWidth));
     if (req.color) {
-      hexToLinearInto(req.color, this.tmp);
-      p.r = this.tmp[0] as number;
-      p.g = this.tmp[1] as number;
-      p.b = this.tmp[2] as number;
+      hexToLinearInto(req.color, this.#tmp);
+      p.r = this.#tmp[0] as number;
+      p.g = this.#tmp[1] as number;
+      p.b = this.#tmp[2] as number;
       p.colorMix = req.colorMix ?? 0.5;
     } else {
       p.r = 1;
@@ -625,7 +505,7 @@ export class Controller {
     p.duration = req.duration ?? clamp((1.2 * halfDiagCells) / p.speed, 0.8, 4);
     p.minor = false;
     this.pulses.add(p);
-    this.activity = true;
+    this.#activity = true;
   }
 
   /**
@@ -633,14 +513,14 @@ export class Controller {
    * Ignored under reduced motion: the user's accessibility preference wins over the caller.
    */
   lift(req: LiftRequest): void {
-    if (this.destroyed || this.reducedMotion || this.forcedCount >= FORCED_QUEUE) return;
-    const o = this.forcedCount++ * 5;
-    this.forced[o] = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
-    this.forced[o + 1] = req.x;
-    this.forced[o + 2] = req.y;
-    this.forced[o + 3] = Math.max(1, Math.min(32, Math.floor(req.count ?? 1)));
-    this.forced[o + 4] = req.radius ?? Number.NaN;
-    this.activity = true;
+    if (this.destroyed || this.#reducedMotion || this.#forcedCount >= FORCED_QUEUE) return;
+    const o = this.#forcedCount++ * 5;
+    this.#forced[o] = SPACE_CODE[req.space ?? 'host'] ?? SPACE_HOST;
+    this.#forced[o + 1] = req.x;
+    this.#forced[o + 2] = req.y;
+    this.#forced[o + 3] = Math.max(1, Math.min(32, Math.floor(req.count ?? 1)));
+    this.#forced[o + 4] = req.radius ?? Number.NaN;
+    this.#activity = true;
   }
 
   /** Cell (relative to the center cell) under a point, written into `out` [ci, cj]. */
@@ -658,8 +538,8 @@ export class Controller {
         out[1] = Math.round(y) - (g.rows - 1) / 2;
         return;
       case SPACE_CLIENT:
-        px = g.hostX + (x - this.clientX) * g.sx;
-        py = g.hostY + (y - this.clientY) * g.sy;
+        px = g.hostX + (x - this.#clientX) * g.sx;
+        py = g.hostY + (y - this.#clientY) * g.sy;
         break;
       default:
         px = g.hostX + x * g.sx;
@@ -672,8 +552,8 @@ export class Controller {
   /** Something lives in `client` space: the DOM layer must report the host's client origin. */
   get needsClientOrigin(): boolean {
     if (this.influences.needsClientOrigin || this.pulses.needsClientOrigin) return true;
-    for (let i = 0; i < this.forcedCount; i++) {
-      if (this.forced[i * 5] === SPACE_CLIENT) return true;
+    for (let i = 0; i < this.#forcedCount; i++) {
+      if (this.#forced[i * 5] === SPACE_CLIENT) return true;
     }
     return false;
   }
@@ -686,12 +566,12 @@ export class Controller {
    */
   get hasLayers(): boolean {
     return (
-      this.forcedCount > 0 ||
+      this.#forcedCount > 0 ||
       this.frame.debugView !== 0 ||
       this.store.modulated ||
       this.store.animating ||
       this.lut.transitioning ||
-      this.sizingMix.cur !== this.sizingMix.tgt ||
+      this.#sizingMix.cur !== this.#sizingMix.tgt ||
       this.pulses.majorCount > 0 ||
       this.lifts.forcedAlive > 0 ||
       this.influences.shownCount > 0
@@ -720,15 +600,15 @@ export class Controller {
 
   /** Host size (CSS px) and DPR of the last setViewport(). */
   get hostCssW(): number {
-    return this.geoIn.hostCssW;
+    return this.#geoIn.hostCssW;
   }
 
   get hostCssH(): number {
-    return this.geoIn.hostCssH;
+    return this.#geoIn.hostCssH;
   }
 
   get dpr(): number {
-    return this.geoIn.dpr;
+    return this.#geoIn.dpr;
   }
 
   /** Cell size in host CSS px (for converting cell-based sizes in DOM code). */
@@ -740,27 +620,27 @@ export class Controller {
   // Environment
 
   setViewport(v: ViewportInput): void {
-    const g = this.geoIn;
+    const g = this.#geoIn;
     g.hostCssW = Math.max(1, v.hostCssW);
     g.hostCssH = Math.max(1, v.hostCssH);
     g.dpr = v.dpr > 0 ? v.dpr : 1;
     g.deviceW = v.deviceW;
     g.deviceH = v.deviceH;
-    this.hasViewport = true;
+    this.#hasViewport = true;
     this.updateGeometry();
   }
 
   /** Host padding-box origin in client px (for `client` space); set in the DOM measure phase. */
   setClientOrigin(x: number, y: number): void {
-    this.clientX = x;
-    this.clientY = y;
+    this.#clientX = x;
+    this.#clientY = y;
   }
 
   /** Extra pixel budget cap in megapixels (coarse pointer 2.4, software GL 0.5). */
   setPixelCap(mpx: number): void {
     const v = mpx > 0 ? mpx : Number.POSITIVE_INFINITY;
-    if (v === this.pixelCap) return;
-    this.pixelCap = v;
+    if (v === this.#pixelCap) return;
+    this.#pixelCap = v;
     this.updateGeometry();
   }
 
@@ -775,8 +655,8 @@ export class Controller {
    */
   setShareScale(scale: number): void {
     const v = scale > 0 && scale < 1 ? scale : 1;
-    if (v === this.shareScale) return;
-    this.shareScale = v;
+    if (v === this.#shareScale) return;
+    this.#shareScale = v;
     this.updateGeometry();
   }
 
@@ -786,16 +666,16 @@ export class Controller {
    * budget plan a higher factor that takes the saving back.
    */
   get naturalWidth(): number {
-    return this.natSeparate ? this.natGeo.canvasW : this.geo.canvasW;
+    return this.#natSeparate ? this.#natGeo.canvasW : this.geo.canvasW;
   }
 
   get naturalHeight(): number {
-    return this.natSeparate ? this.natGeo.canvasH : this.geo.canvasH;
+    return this.#natSeparate ? this.#natGeo.canvasH : this.geo.canvasH;
   }
 
   /** Geometry at full resolution (without the adaptive and the share scale). */
   get naturalGeo(): Readonly<Geometry> {
-    return this.natSeparate ? this.natGeo : this.geo;
+    return this.#natSeparate ? this.#natGeo : this.geo;
   }
 
   /**
@@ -805,8 +685,8 @@ export class Controller {
    */
   setCountBasis(cssSide: number): void {
     const v = cssSide > 0 && Number.isFinite(cssSide) ? cssSide : 0;
-    if (v === this.countBasis) return;
-    this.countBasis = v;
+    if (v === this.#countBasis) return;
+    this.#countBasis = v;
     this.updateGeometry();
   }
 
@@ -816,8 +696,8 @@ export class Controller {
    */
   setMaxDrawableSize(px: number): void {
     const v = px > 0 && Number.isFinite(px) ? Math.floor(px) : 0;
-    if (v === this.geoIn.maxDim) return;
-    this.geoIn.maxDim = v;
+    if (v === this.#geoIn.maxDim) return;
+    this.#geoIn.maxDim = v;
     this.updateGeometry();
   }
 
@@ -826,18 +706,18 @@ export class Controller {
    * every lift is off, random ones and forced ones (lift() calls, pointer hover) alike.
    */
   setReducedMotion(on: boolean): void {
-    this.reducedMotion = on;
-    if (on) this.forcedCount = 0;
+    this.#reducedMotion = on;
+    if (on) this.#forcedCount = 0;
   }
 
   get isReducedMotion(): boolean {
-    return this.reducedMotion;
+    return this.#reducedMotion;
   }
 
   /** Software GL: lowest tier, no adaptation. */
   setSoftwareFallback(on: boolean): void {
-    this.software = on;
-    this.perf.setMode(on ? 'low' : this.config.render.quality);
+    this.#software = on;
+    this.perf.setMode(on ? 'low' : this.#config.render.quality);
     this.updateGeometry();
   }
 
@@ -853,8 +733,8 @@ export class Controller {
    * once it can. Null (the default): never held.
    */
   setFieldGate(ready: ((pending: number) => boolean) | null): void {
-    this.fieldGate = ready;
-    if (!ready) this.holdFieldTweens(0);
+    this.#fieldGate = ready;
+    if (!ready) this.#holdFieldTweens(0);
   }
 
   /** Feeds frame timing to the adaptive quality controller. */
@@ -880,12 +760,12 @@ export class Controller {
    */
   takeActivity(): boolean {
     const on =
-      this.activity ||
+      this.#activity ||
       this.influences.touched ||
       this.store.animating ||
       this.lut.transitioning ||
-      this.forcedCount > 0;
-    this.activity = false;
+      this.#forcedCount > 0;
+    this.#activity = false;
     this.influences.touched = false;
     return on;
   }
@@ -893,11 +773,11 @@ export class Controller {
   /** takeActivity() without forgetting. */
   get activityPending(): boolean {
     return (
-      this.activity ||
+      this.#activity ||
       this.influences.touched ||
       this.store.animating ||
       this.lut.transitioning ||
-      this.forcedCount > 0
+      this.#forcedCount > 0
     );
   }
 
@@ -912,10 +792,11 @@ export class Controller {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.state.onCommit === this.#follower) this.state.onCommit = null;
     this.influences.clear();
     this.pulses.clear();
     this.lifts.clear();
-    this.forcedCount = 0;
+    this.#forcedCount = 0;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -928,9 +809,9 @@ export class Controller {
    * (mix 0: the previous mapping alone is on screen). Modulated leaves are left out: their
    * modulators move them whatever the tween does. Allocation-free.
    */
-  private pendingFeatures(): number {
+  #pendingFeatures(): number {
     const s = this.store;
-    const ids = this.ids.features;
+    const ids = this.#ids.features;
     let mask = 0;
     for (let bit = 0; bit < ids.length; bit++) {
       const id = ids[bit] as number;
@@ -953,11 +834,11 @@ export class Controller {
   }
 
   /** Holds the tweens behind the features in `mask`, releases the others (see setFieldGate). */
-  private holdFieldTweens(mask: number): void {
-    const changed = mask ^ this.fieldHeld;
+  #holdFieldTweens(mask: number): void {
+    const changed = mask ^ this.#fieldHeld;
     if (changed === 0) return;
-    this.fieldHeld = mask;
-    const ids = this.ids.features;
+    this.#fieldHeld = mask;
+    const ids = this.#ids.features;
     for (let bit = 0; bit < ids.length; bit++) {
       const id = ids[bit] as number;
       if (id >= 0 && (changed & (1 << bit)) !== 0) this.store.hold(id, (mask & (1 << bit)) !== 0);
@@ -977,21 +858,25 @@ export class Controller {
     const cap = maxDt > 0.1 ? maxDt : 0.1;
     const step = dt > 0 ? (dt < cap ? dt : cap) : 0;
     const s = this.store;
-    const ids = this.ids;
+    const ids = this.#ids;
 
     // Tweens that would turn on a field feature the renderer cannot draw yet wait for it.
-    const pending = this.pendingFeatures();
+    const pending = this.#pendingFeatures();
     f.fieldPending = pending;
     let held = 0;
     if (pending === 0) {
-      this.fieldHeldS = 0;
-    } else if (this.fieldGate && this.fieldHeldS < FIELD_HOLD_MAX_S && !this.fieldGate(pending)) {
+      this.#fieldHeldS = 0;
+    } else if (
+      this.#fieldGate &&
+      this.#fieldHeldS < FIELD_HOLD_MAX_S &&
+      !this.#fieldGate(pending)
+    ) {
       held = pending;
-      this.fieldHeldS += step;
+      this.#fieldHeldS += step;
     }
-    this.holdFieldTweens(held);
+    this.#holdFieldTweens(held);
     // A modulated value or a tween that moved is a change of this instance's own.
-    if (s.update(step)) this.activity = true;
+    if (s.update(step)) this.#activity = true;
     if (s.dirty) {
       f.paramsDirty = true;
       s.dirty = false;
@@ -1002,7 +887,7 @@ export class Controller {
       this.lut.dirty = false;
     }
     // Geometry depends on a few values only; recompute while they move (not every frame).
-    const sizing = this.sizingMix.step(step);
+    const sizing = this.#sizingMix.step(step);
     if (
       sizing ||
       s.isLive(ids.count) ||
@@ -1015,8 +900,8 @@ export class Controller {
     const g = this.geo;
 
     // Clock
-    const r = this.rates;
-    const rm = this.reducedMotion;
+    const r = this.#rates;
+    const rm = this.#reducedMotion;
     r.speed = Math.max(0, s.num(ids.speed)) * (rm ? 0.15 : 1);
     r.flow = s.num(ids.flowSpeed);
     r.sphereRotation = s.num(ids.rotation);
@@ -1043,20 +928,20 @@ export class Controller {
     f.lifeSeedDensity = s.num(ids.lifeDensity);
 
     // Influences
-    const ic = this.infCtx;
-    ic.clientX = this.clientX;
-    ic.clientY = this.clientY;
+    const ic = this.#infCtx;
+    ic.clientX = this.#clientX;
+    ic.clientY = this.#clientY;
     ic.defaultStrength = s.num(ids.infStrength);
     ic.defaultFalloff = s.num(ids.infFalloff);
     const nInf = this.influences.step(step, ic, fr);
 
     // Lifts (forced first, then the random process), then pulses so landings show this frame.
-    const lp = this.fillLiftParams();
+    const lp = this.#fillLiftParams();
     // Reduced motion: lifts off, forced ones included (queued before it was switched on).
-    if (rm) this.forcedCount = 0;
-    else this.drainForced(lp);
+    if (rm) this.#forcedCount = 0;
+    else this.#drainForced(lp);
     const nLift = this.lifts.step(step, lp, g, fr);
-    const nPulse = this.pulses.step(step, g, this.clientX, this.clientY, fr);
+    const nPulse = this.pulses.step(step, g, this.#clientX, this.#clientY, fr);
 
     // Header
     fr[OFF_PHASE_A] = c.flow;
@@ -1093,7 +978,7 @@ export class Controller {
     fr[OFF_COUNTS + 3] = f.debugView;
     fr[OFF_MISC] = s.crossfadePrev(ids.mapping);
     fr[OFF_MISC + 1] = s.crossfadeMix(ids.mapping);
-    fr[OFF_MISC + 2] = this.software ? 1 : 0;
+    fr[OFF_MISC + 2] = this.#software ? 1 : 0;
     // Drift folds the palette with tri(); keyed on the rate as well as the phase, so a phase that
     // lands exactly on 0 does not switch to the unfolded mapping for a frame.
     fr[OFF_MISC + 3] = r.drift !== 0 || c.drift !== 0 ? 1 : 0;
@@ -1114,33 +999,24 @@ export class Controller {
     f.bloomStrength = s.num(ids.bloomStrength);
     f.hazeStrength = s.num(ids.hazeStrength);
     f.quality = this.perf.quality;
-    f.opaque = this.config.render.overflow <= 0;
+    f.opaque = this.#config.render.overflow <= 0;
     return f;
-  }
-
-  /** Whether anything still moves without new input (tweens, LUT, pulses, lifts). */
-  get settling(): boolean {
-    return (
-      this.store.animating ||
-      this.lut.transitioning ||
-      this.pulses.count > 0 ||
-      this.lifts.count > 0
-    );
   }
 
   // -------------------------------------------------------------------------------------------
 
-  private warn(code: string, message: string): void {
-    this.onWarn?.(code, message);
+  #warn(code: string, message: string): void {
+    this.#onWarn?.(code, message);
   }
 
-  private commit(next: LumiCellsConfig, opts: ConfigChangeOptions): ParamPath[] {
-    const changed = diffConfigs(this.config, next);
-    if (changed.length === 0) return changed;
-    this.config = next;
-    this.activity = true;
-    this.init = null;
-    const dur = Math.max(0, opts.transition ?? next.transition);
+  /**
+   * Tweens (or snaps) the parameters a config change touched (see ConfigState): called for every
+   * change while following, or by the owner for the changes made before this controller existed.
+   */
+  applyCommit(commit: ConfigCommit): void {
+    if (this.destroyed) return;
+    const { changed, next, transition: dur } = commit;
+    this.#activity = true;
     let lut = false;
     for (const path of changed) {
       const field = getField(path);
@@ -1156,26 +1032,25 @@ export class Controller {
           break;
         case 'static':
           this.store.setTarget(path, value, 0);
-          if (path === 'render.quality' && !this.software) {
+          if (path === 'render.quality' && !this.#software) {
             this.perf.setMode(value as QualityMode);
           }
           break;
         default:
           this.store.setTarget(path, value, dur);
-          if (path === 'grid.sizing') this.sizingMix.set(value === 'pitch' ? 1 : 0, dur);
+          if (path === 'grid.sizing') this.#sizingMix.set(value === 'pitch' ? 1 : 0, dur);
       }
     }
     if (lut) this.lut.setTarget(next.color.palette, next.color.interpolation, dur);
     this.updateGeometry();
-    return changed;
   }
 
-  private fillLiftParams(): LiftParams {
+  #fillLiftParams(): LiftParams {
     const s = this.store;
-    const ids = this.ids;
-    const p = this.liftParams;
-    const lift = this.config.lift;
-    p.enabled = lift.enabled && !this.reducedMotion;
+    const ids = this.#ids;
+    const p = this.#liftParams;
+    const lift = this.#config.lift;
+    p.enabled = lift.enabled && !this.#reducedMotion;
     p.style = lift.style === 'float' ? 1 : 0;
     p.amount = s.num(ids.liftAmount);
     p.max = s.num(ids.liftMax);
@@ -1200,12 +1075,12 @@ export class Controller {
     return p;
   }
 
-  private drainForced(p: LiftParams): void {
-    const n = this.forcedCount;
+  #drainForced(p: LiftParams): void {
+    const n = this.#forcedCount;
     if (n === 0) return;
-    this.forcedCount = 0;
-    const q = this.forced;
-    const cell = this.tmp;
+    this.#forcedCount = 0;
+    const q = this.#forced;
+    const cell = this.#tmp;
     for (let i = 0; i < n; i++) {
       const o = i * 5;
       this.cellAt(q[o] as number, q[o + 1] as number, q[o + 2] as number, cell);
@@ -1224,21 +1099,21 @@ export class Controller {
 
   private updateGeometry(): void {
     const s = this.store;
-    const ids = this.ids;
-    const gi = this.geoIn;
-    const cfg = this.config;
+    const ids = this.#ids;
+    const gi = this.#geoIn;
+    const cfg = this.#config;
     gi.overflowCss = cfg.render.overflow;
     gi.maxDpr = s.num(ids.maxDpr);
-    gi.maxPixels = Math.min(s.num(ids.maxPixels), this.pixelCap);
+    gi.maxPixels = Math.min(s.num(ids.maxPixels), this.#pixelCap);
     const perf = this.perf.scale;
-    const share = this.shareScale;
+    const share = this.#shareScale;
     gi.scale = perf;
     // Sizing blends between "N cells across the shorter side" and "fixed pitch" in log space,
     // so switching the mode mid-session is a smooth zoom rather than a jump.
-    const side = this.countBasis > 0 ? this.countBasis : Math.min(gi.hostCssW, gi.hostCssH);
+    const side = this.#countBasis > 0 ? this.#countBasis : Math.min(gi.hostCssW, gi.hostCssH);
     const countPitch = side / Math.max(1, s.num(ids.count));
     const fixedPitch = Math.max(1, s.num(ids.pitch));
-    const m = this.sizingMix.cur;
+    const m = this.#sizingMix.cur;
     gi.cssPitch =
       m <= 0
         ? countPitch
@@ -1251,7 +1126,7 @@ export class Controller {
     } else {
       // The shared budget lowers the resolution of the grid at the adaptive scale, not the grid
       // itself: joining or leaving shared instances must not re-grid the others.
-      const base = this.baseGeo;
+      const base = this.#baseGeo;
       computeGeometry(gi, base);
       if (share >= SHARE_GRID_MIN_SCALE) {
         // Never below the smallest pitch: cells already that small keep their resolution (the
@@ -1269,16 +1144,16 @@ export class Controller {
       }
     }
     if (changed) this.geometryChanged = true;
-    this.natSeparate = perf < 1 || share < 1;
-    if (this.natSeparate) {
+    this.#natSeparate = perf < 1 || share < 1;
+    if (this.#natSeparate) {
       gi.scale = 1;
-      computeGeometry(gi, this.natGeo);
+      computeGeometry(gi, this.#natGeo);
     }
   }
 
   /** Has the DOM layer reported a size yet? */
   get measured(): boolean {
-    return this.hasViewport;
+    return this.#hasViewport;
   }
 }
 

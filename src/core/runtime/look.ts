@@ -55,8 +55,8 @@ import type { InstancePriority, QualityTier } from '../types';
 import { displayEpoch, displayIntervalMs } from './display';
 import type { SharedClient, SharedSeat } from './shared-renderer';
 
-/** Largest window shift (LumiCellsOptions.lookOffset), share of the host size per axis. */
-export const MAX_LOOK_OFFSET = 0.5;
+export { lookOffset, MAX_LOOK_OFFSET } from '../options';
+
 /** Longest animation step of one frame, ms (as the facade). */
 const MAX_STEP_MS = 100;
 /**
@@ -96,11 +96,6 @@ export interface LookSpec {
    * its old group already ran in it) is not advanced twice.
    */
   stateAt: number;
-}
-
-/** Clamps a lookOffset value (non-numbers are 0). */
-export function lookOffset(v: unknown): number {
-  return typeof v === 'number' && v > 0 ? Math.min(MAX_LOOK_OFFSET, v) : 0;
 }
 
 /** Seeded shift direction of an instance (`order`: its creation number), -1..1 per axis. */
@@ -208,14 +203,14 @@ export class LookGroup implements SharedClient {
     reason: 'slow',
   };
   /** Frame the timing was last sampled in (see beginFrame), and the one last submitted. */
-  private frameAt = Number.NaN;
-  private submittedAt = Number.NaN;
-  private lastNow = -1;
+  #frameAt = Number.NaN;
+  #submittedAt = Number.NaN;
+  #lastNow = -1;
   /** Frame in which the members came back from a pause (see beginFrame; -1: none). */
-  private resumedAt = -1;
+  #resumedAt = -1;
   /** Exact device-pixel box the picture is laid out with (the starter's, see the constructor). */
-  private deviceW = 0;
-  private deviceH = 0;
+  #deviceW = 0;
+  #deviceH = 0;
 
   /**
    * A picture for `key` with the config of `spec`'s controller, laid out for the size that member
@@ -235,8 +230,8 @@ export class LookGroup implements SharedClient {
     // every card of that box) then shows exactly its solo frame.
     if (from.hostCssW === this.hostW && from.hostCssH === this.hostH) {
       const solo = from.naturalGeo;
-      this.deviceW = solo.canvasW;
-      this.deviceH = solo.canvasH;
+      this.#deviceW = solo.canvasW;
+      this.#deviceH = solo.canvasH;
     }
     const c = new Controller({ config: from.getConfig(), layout: from.layout });
     this.controller = c;
@@ -245,7 +240,7 @@ export class LookGroup implements SharedClient {
     c.setCountBasis(this.countSide);
     if (software) c.setSoftwareFallback(true);
     c.setReducedMotion(spec.reducedMotion);
-    this.applySize(spec.dpr);
+    this.#applySize(spec.dpr);
     this.pitch = c.naturalGeo.pitchPx;
   }
 
@@ -259,7 +254,7 @@ export class LookGroup implements SharedClient {
       this.hostH + 0.5 >= needH(spec) &&
       this.controller.dpr === spec.dpr &&
       lookPitch(spec, spec.hostW, spec.hostH, maxDim) === this.pitch &&
-      this.placeable(spec)
+      this.#placeable(spec)
     );
   }
 
@@ -267,7 +262,7 @@ export class LookGroup implements SharedClient {
    * The member's own canvas (full resolution) has a place in the frame where the crop's cell
    * lattice is its own (see cropOf), or is the frame give or take DEVICE_SLACK_PX.
    */
-  private placeable(spec: LookSpec): boolean {
+  #placeable(spec: LookSpec): boolean {
     const g = this.controller.naturalGeo;
     const solo = spec.controller.naturalGeo;
     const p = g.pitchPx;
@@ -302,40 +297,40 @@ export class LookGroup implements SharedClient {
     }
     const hostW = this.hostW;
     const hostH = this.hostH;
-    const devW = this.deviceW;
-    const devH = this.deviceH;
+    const devW = this.#deviceW;
+    const devH = this.#deviceH;
     if (w !== hostW || h !== hostH) {
       // Laid out for another size: the starter's device-pixel box no longer applies.
-      this.deviceW = 0;
-      this.deviceH = 0;
+      this.#deviceW = 0;
+      this.#deviceH = 0;
     }
     this.hostW = w;
     this.hostH = h;
-    this.applySize(spec.dpr);
-    let ok = this.controller.naturalGeo.pitchPx === this.pitch && this.placeable(spec);
+    this.#applySize(spec.dpr);
+    let ok = this.controller.naturalGeo.pitchPx === this.pitch && this.#placeable(spec);
     for (let i = 0; ok && i < this.members.length; i++) {
       const s = this.members[i]?.spec;
-      if (s) ok = this.placeable(s);
+      if (s) ok = this.#placeable(s);
     }
     if (!ok) {
       // The new size has no place on its own lattice for a card: keep the old one.
       this.hostW = hostW;
       this.hostH = hostH;
-      this.deviceW = devW;
-      this.deviceH = devH;
-      this.applySize(spec.dpr);
+      this.#deviceW = devW;
+      this.#deviceH = devH;
+      this.#applySize(spec.dpr);
       return false;
     }
     return true;
   }
 
-  private applySize(dpr: number): void {
+  #applySize(dpr: number): void {
     this.controller.setViewport({
       hostCssW: this.hostW,
       hostCssH: this.hostH,
       dpr,
-      deviceW: this.deviceW,
-      deviceH: this.deviceH,
+      deviceW: this.#deviceW,
+      deviceH: this.#deviceH,
     });
   }
 
@@ -410,8 +405,8 @@ export class LookGroup implements SharedClient {
    * follows the refresh it learns). Allocation-free.
    */
   beginFrame(now: number): void {
-    if (now === this.frameAt) return;
-    this.frameAt = now;
+    if (now === this.#frameAt) return;
+    this.#frameAt = now;
     const seat = this.seat;
     if (!seat || seat.released) return;
     const c = this.controller;
@@ -421,12 +416,12 @@ export class LookGroup implements SharedClient {
     // A long gap: every member was paused or away, not a slow frame. Every member runs this in
     // every frame it renders, presenting or not, so members paced down to a few presents per
     // second (render.maxFps, the secondary rate) never look like a pause here.
-    const paused = this.lastNow >= 0 && now - this.lastNow > RESUME_GAP_MS;
-    if (paused) this.resumedAt = now;
-    const resumed = this.lastNow < 0 || paused;
+    const paused = this.#lastNow >= 0 && now - this.#lastNow > RESUME_GAP_MS;
+    if (paused) this.#resumedAt = now;
+    const resumed = this.#lastNow < 0 || paused;
     if (resumed) perf.resetWindow();
-    const raw = resumed ? perf.vsyncMs : now - this.lastNow;
-    this.lastNow = now;
+    const raw = resumed ? perf.vsyncMs : now - this.#lastNow;
+    this.#lastNow = now;
     perf.setDisplayHint(displayIntervalMs(), displayEpoch());
     const busyMs = Math.max(this.updateMs, frameWorkMs() + frameLateMs());
     const change = c.samplePerf(raw, busyMs, seat.stats.gpuMs, now);
@@ -447,10 +442,10 @@ export class LookGroup implements SharedClient {
    * 0: unknown): the longest step is bounded by it like an instance's of its own.
    */
   update(now: number, pace = 0): void {
-    if (now === this.submittedAt) return;
+    if (now === this.#submittedAt) return;
     const seat = this.seat;
     if (!seat || seat.released) return;
-    this.submittedAt = now;
+    this.#submittedAt = now;
     const c = this.controller;
     const vsync = c.perf.cadenceMs;
     // A picture taken over in this very frame (from a group that already ran in it) is current:
@@ -460,7 +455,7 @@ export class LookGroup implements SharedClient {
     if (now !== this.updatedAt) {
       // Right after a pause (see beginFrame) the picture goes on by one refresh interval;
       // otherwise by the time since its last update, however rarely the members present.
-      const resumed = this.updatedAt < 0 || this.resumedAt === now;
+      const resumed = this.updatedAt < 0 || this.#resumedAt === now;
       deltaMs = resumed ? vsync : now - this.updatedAt;
       // Snap to vsync multiples: removes the rAF jitter from motion.
       ideal = Math.max(1, Math.round(deltaMs / vsync)) * vsync;

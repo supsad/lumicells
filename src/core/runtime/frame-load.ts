@@ -29,7 +29,7 @@
  * Pure: no clock, no DOM (tests feed simulated timelines).
  */
 
-import { VSYNC_CANDIDATES } from '../controller/perf';
+import { VSYNC_CANDIDATES } from './vsync';
 
 /** Highest level (see levelDivisor). */
 export const MAX_LEVEL = 3;
@@ -141,41 +141,41 @@ export class FrameLoad {
   missRatio = 0;
   /** The last sample found the frame over budget. */
   over = false;
-  private readonly deltas = new Float64Array(WINDOW);
-  private readonly cand = new Int8Array(WINDOW);
-  private readonly counts = new Int32Array(VSYNC_CANDIDATES.length);
-  private head = 0;
-  private n = 0;
+  readonly #deltas = new Float64Array(WINDOW);
+  readonly #cand = new Int8Array(WINDOW);
+  readonly #counts = new Int32Array(VSYNC_CANDIDATES.length);
+  #head = 0;
+  #n = 0;
   /** Fastest cadence seen since the current hint (or resetVsync), ms. */
-  private best = Number.POSITIVE_INFINITY;
+  #best = Number.POSITIVE_INFINITY;
   /** Calibrated display interval (setDisplayHint), ms; Infinity: none or rejected. */
-  private hint = Number.POSITIVE_INFINITY;
+  #hint = Number.POSITIVE_INFINITY;
   /** Epoch of the hint in use, and of the last one rejected by a rise (-1: none). */
-  private hintEpoch = -1;
-  private rejectedEpoch = -1;
-  private overSince = -1;
-  private underSince = -1;
-  private lastChange = Number.NEGATIVE_INFINITY;
-  private relaxMs = RELAX_MS;
+  #hintEpoch = -1;
+  #rejectedEpoch = -1;
+  #overSince = -1;
+  #underSince = -1;
+  #lastChange = Number.NEGATIVE_INFINITY;
+  #relaxMs = RELAX_MS;
   /** When the last relax happened (an over-budget soon after doubles the relax delay). */
-  private relaxedAt = Number.NEGATIVE_INFINITY;
+  #relaxedAt = Number.NEGATIVE_INFINITY;
   /** Probe (see the header): when it started (-1: none) and the misses before it. */
-  private probeAt = -1;
-  private probeMiss = 0;
-  private probeBackoff = PROBE_BACKOFF_MS;
-  private probeBlockedUntil = Number.NEGATIVE_INFINITY;
+  #probeAt = -1;
+  #probeMiss = 0;
+  #probeBackoff = PROBE_BACKOFF_MS;
+  #probeBlockedUntil = Number.NEGATIVE_INFINITY;
 
   /**
    * To level `up` (the next one above the effective level that lowers the rate, see levelAbove).
    * Soon after a relax, that relax did not hold: relax later next time.
    */
-  private raise(up: number, now: number): void {
-    if (now - this.relaxedAt < 2 * this.relaxMs) {
-      this.relaxMs = Math.min(MAX_RELAX_MS, this.relaxMs * 2);
+  #raise(up: number, now: number): void {
+    if (now - this.#relaxedAt < 2 * this.#relaxMs) {
+      this.#relaxMs = Math.min(MAX_RELAX_MS, this.#relaxMs * 2);
     }
     this.level = up;
-    this.lastChange = now;
-    this.overSince = -1;
+    this.#lastChange = now;
+    this.#overSince = -1;
   }
 
   /**
@@ -195,21 +195,21 @@ export class FrameLoad {
    */
   setDisplayHint(ms: number | null, epoch: number): void {
     if (ms === null || !(ms > 0)) {
-      this.hint = Number.POSITIVE_INFINITY;
+      this.#hint = Number.POSITIVE_INFINITY;
       return;
     }
-    if (epoch === this.rejectedEpoch) return;
-    if (epoch !== this.hintEpoch) {
-      this.hintEpoch = epoch;
-      this.best = Number.POSITIVE_INFINITY;
+    if (epoch === this.#rejectedEpoch) return;
+    if (epoch !== this.#hintEpoch) {
+      this.#hintEpoch = epoch;
+      this.#best = Number.POSITIVE_INFINITY;
       this.resetWindow();
     }
-    this.hint = ms;
+    this.#hint = ms;
   }
 
   /** The display hint in use (Infinity: none or rejected). */
   get displayHint(): number {
-    return this.hint;
+    return this.#hint;
   }
 
   /**
@@ -217,19 +217,19 @@ export class FrameLoad {
    * another display, the page resumes from a hidden tab: the refresh rate may have changed).
    */
   resetVsync(): void {
-    this.best = Number.POSITIVE_INFINITY;
-    this.probeBackoff = PROBE_BACKOFF_MS;
-    this.probeBlockedUntil = Number.NEGATIVE_INFINITY;
+    this.#best = Number.POSITIVE_INFINITY;
+    this.#probeBackoff = PROBE_BACKOFF_MS;
+    this.#probeBlockedUntil = Number.NEGATIVE_INFINITY;
     this.resetWindow();
   }
 
   /** Forgets the timing window (after a pause: the next deltas are not frame intervals). */
   resetWindow(): void {
-    this.n = 0;
-    this.head = 0;
-    this.counts.fill(0);
-    this.overSince = -1;
-    this.underSince = -1;
+    this.#n = 0;
+    this.#head = 0;
+    this.#counts.fill(0);
+    this.#overSince = -1;
+    this.#underSince = -1;
   }
 
   /**
@@ -250,46 +250,46 @@ export class FrameLoad {
       this.resetWindow();
       return false;
     }
-    if (this.n === WINDOW) {
-      const c = this.cand[this.head] as number;
-      if (c >= 0) this.counts[c] = (this.counts[c] as number) - 1;
+    if (this.#n === WINDOW) {
+      const c = this.#cand[this.#head] as number;
+      if (c >= 0) this.#counts[c] = (this.#counts[c] as number) - 1;
     } else {
-      this.n++;
+      this.#n++;
     }
     const c = nearestCandidate(deltaMs);
-    this.deltas[this.head] = deltaMs;
-    this.cand[this.head] = c;
-    if (c >= 0) this.counts[c] = (this.counts[c] as number) + 1;
-    this.head = (this.head + 1) % WINDOW;
+    this.#deltas[this.#head] = deltaMs;
+    this.#cand[this.#head] = c;
+    if (c >= 0) this.#counts[c] = (this.#counts[c] as number) + 1;
+    this.#head = (this.#head + 1) % WINDOW;
     this.workMs += (Math.max(0, workMs) - this.workMs) * EMA;
     if (gpuMs !== null && Number.isFinite(gpuMs)) {
       this.gpuMs = this.gpuMs === null ? gpuMs : this.gpuMs + (gpuMs - this.gpuMs) * EMA;
     }
-    if (this.n >= 20) {
+    if (this.#n >= 20) {
       let maxI = -1;
       let maxC = 0;
       let fast = -1;
       for (let i = 0; i < VSYNC_CANDIDATES.length; i++) {
-        const cnt = this.counts[i] as number;
-        if (fast < 0 && cnt >= 0.2 * this.n) fast = i;
+        const cnt = this.#counts[i] as number;
+        if (fast < 0 && cnt >= 0.2 * this.#n) fast = i;
         if (cnt > maxC) {
           maxC = cnt;
           maxI = i;
         }
       }
-      if (fast >= 0) this.best = Math.min(this.best, VSYNC_CANDIDATES[fast] as number);
-      if (this.n === WINDOW && maxI >= 0 && maxC >= RISE_SHARE * WINDOW) {
-        this.maybeRise(maxI, now);
+      if (fast >= 0) this.#best = Math.min(this.#best, VSYNC_CANDIDATES[fast] as number);
+      if (this.#n === WINDOW && maxI >= 0 && maxC >= RISE_SHARE * WINDOW) {
+        this.#maybeRise(maxI, now);
       }
     }
-    const interval = Math.min(this.hint, this.best);
+    const interval = Math.min(this.#hint, this.#best);
     this.intervalMs = Number.isFinite(interval) ? interval : 16.67;
     const I = this.intervalMs;
-    const n = this.n;
+    const n = this.#n;
     if (n === 0) return false;
     const limit = 1.5 * I;
     let miss = 0;
-    for (let i = 0; i < n; i++) if ((this.deltas[i] as number) > limit) miss++;
+    for (let i = 0; i < n; i++) if ((this.#deltas[i] as number) > limit) miss++;
     this.missRatio = miss / n;
     if (n < 30) return false;
 
@@ -304,54 +304,54 @@ export class FrameLoad {
     const r = Math.max(1, relaxRatio);
     const under =
       M < 0.05 && W * r < 0.35 * I && (G === null || G * r < 0.45 * I) && eff > baseLevel(floor, I);
-    this.overSince = over ? (this.overSince < 0 ? now : this.overSince) : -1;
-    this.underSince = under ? (this.underSince < 0 ? now : this.underSince) : -1;
+    this.#overSince = over ? (this.#overSince < 0 ? now : this.#overSince) : -1;
+    this.#underSince = under ? (this.#underSince < 0 ? now : this.#underSince) : -1;
 
     // A probe on missed frames without a known cause: judged after PROBE_MS.
-    if (this.probeAt >= 0 && now - this.probeAt >= PROBE_MS) {
-      const helped = M < this.probeMiss - 0.1 || M < 0.05;
-      this.probeAt = -1;
+    if (this.#probeAt >= 0 && now - this.#probeAt >= PROBE_MS) {
+      const helped = M < this.#probeMiss - 0.1 || M < 0.05;
+      this.#probeAt = -1;
       if (helped) {
-        this.probeBackoff = PROBE_BACKOFF_MS;
-        this.relaxMs = Math.max(this.relaxMs, PROBED_RELAX_MS);
+        this.#probeBackoff = PROBE_BACKOFF_MS;
+        this.#relaxMs = Math.max(this.#relaxMs, PROBED_RELAX_MS);
       } else {
-        this.probeBlockedUntil = now + this.probeBackoff;
-        this.probeBackoff = Math.min(MAX_PROBE_BACKOFF_MS, this.probeBackoff * 2);
+        this.#probeBlockedUntil = now + this.#probeBackoff;
+        this.#probeBackoff = Math.min(MAX_PROBE_BACKOFF_MS, this.#probeBackoff * 2);
         if (this.level > 0) {
           this.level = levelBelow(this.level, I);
-          this.lastChange = now;
+          this.#lastChange = now;
           return true;
         }
       }
     }
-    if (now - this.lastChange < MIN_INTERVAL) return false;
+    if (now - this.#lastChange < MIN_INTERVAL) return false;
 
-    if (this.overSince >= 0 && now - this.overSince >= STEP_UP_MS && up > eff) {
-      this.raise(up, now);
+    if (this.#overSince >= 0 && now - this.#overSince >= STEP_UP_MS && up > eff) {
+      this.#raise(up, now);
       return true;
     }
     if (
       !over &&
       G === null &&
       M > 0.3 &&
-      this.probeAt < 0 &&
-      now >= this.probeBlockedUntil &&
+      this.#probeAt < 0 &&
+      now >= this.#probeBlockedUntil &&
       up > eff
     ) {
-      this.raise(up, now);
-      this.probeAt = now;
-      this.probeMiss = M;
+      this.#raise(up, now);
+      this.#probeAt = now;
+      this.#probeMiss = M;
       return true;
     }
-    if (this.underSince >= 0 && now - this.underSince >= this.relaxMs && this.level > 0) {
+    if (this.#underSince >= 0 && now - this.#underSince >= this.#relaxMs && this.level > 0) {
       this.level = levelBelow(eff, I);
-      this.lastChange = now;
-      this.relaxedAt = now;
-      this.underSince = -1;
+      this.#lastChange = now;
+      this.#relaxedAt = now;
+      this.#underSince = -1;
       return true;
     }
     // A level that has held for a long while forgets the relax backoff.
-    if (now - this.lastChange > MAX_RELAX_MS) this.relaxMs = RELAX_MS;
+    if (now - this.#lastChange > MAX_RELAX_MS) this.#relaxMs = RELAX_MS;
     return false;
   }
 
@@ -363,9 +363,9 @@ export class FrameLoad {
    * frame budget raised the level to the highest rate step, that held a while, and the frames still keep
    * that pace with little work of ours.
    */
-  private maybeRise(i: number, now: number): void {
+  #maybeRise(i: number, now: number): void {
     const slower = VSYNC_CANDIDATES[i] as number;
-    if (!(slower > Math.min(this.hint, this.best) * 1.1)) return;
+    if (!(slower > Math.min(this.#hint, this.#best) * 1.1)) return;
     const G = this.gpuMs;
     const W = this.workMs;
     const small =
@@ -373,14 +373,14 @@ export class FrameLoad {
         ? G < 0.5 * slower && W < 0.5 * slower
         : this.level > 0 &&
           levelAbove(this.level, this.intervalMs) === this.level &&
-          now - this.lastChange >= PROBE_MS &&
+          now - this.#lastChange >= PROBE_MS &&
           W < 0.3 * slower;
     if (!small) return;
-    if (Number.isFinite(this.hint)) {
-      this.rejectedEpoch = this.hintEpoch;
-      this.hint = Number.POSITIVE_INFINITY;
+    if (Number.isFinite(this.#hint)) {
+      this.#rejectedEpoch = this.#hintEpoch;
+      this.#hint = Number.POSITIVE_INFINITY;
     }
-    this.best = slower;
+    this.#best = slower;
     this.resetWindow();
   }
 }

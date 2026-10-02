@@ -50,6 +50,11 @@ vi.mock('../src/core/lumi-cells', async () => {
     static supported = true;
     /** Calls of the static support probe, with the instances that existed at each. */
     static probes: number[] = [];
+    /** Calls of preload (the GPU side's chunk), with the probes made before each. */
+    static prefetches: number[] = [];
+    static preload() {
+      FakeLumiCells.prefetches.push(FakeLumiCells.probes.length);
+    }
     static isSupported() {
       FakeLumiCells.probes.push(FakeLumiCells.instances.length);
       return FakeLumiCells.supported;
@@ -173,7 +178,12 @@ interface Fake {
   listeners: Map<string, Set<(e: any) => void>>;
   emit(type: string, detail?: unknown): void;
 }
-const FakeClass = Core as unknown as { instances: Fake[]; supported: boolean; probes: number[] };
+const FakeClass = Core as unknown as {
+  instances: Fake[];
+  supported: boolean;
+  probes: number[];
+  prefetches: number[];
+};
 const live = () => FakeClass.instances.filter((i) => !i.destroyed);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -200,10 +210,13 @@ const render = (node: ReactNode) => act(() => root.render(node));
 describe('<LumiCells>', () => {
   it('probes WebGL2 support in a layout effect, before the instance and before the paint', () => {
     FakeClass.probes = [];
+    FakeClass.prefetches = [];
     render(createElement(LumiCells, { preset: 'orb' }));
     // Called while no instance existed yet: the layout effect runs before the mount effect.
     expect(FakeClass.instances).toHaveLength(1);
     expect(FakeClass.probes[0]).toBe(0);
+    // The engine's chunk is asked for first: it downloads while the probe waits for the GPU.
+    expect(FakeClass.prefetches).toEqual([0]);
   });
 
   it('creates one instance on mount, starts it, and destroys it on unmount', () => {

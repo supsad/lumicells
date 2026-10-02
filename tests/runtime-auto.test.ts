@@ -18,6 +18,7 @@ import {
   DEMOTE_RATIO,
   PROMOTE_VIEWPORT_SHARE,
 } from '../src/core/runtime/auto-renderer';
+import { loadLive } from '../src/core/runtime/loader';
 import { contextsInUse, resetRuntimeForTesting } from '../src/core/runtime/scheduler';
 import { peekSharedRenderer, resetSharedForTesting } from '../src/core/runtime/shared-renderer';
 import type { LumiCellsEvents } from '../src/core/types';
@@ -37,6 +38,12 @@ function size(p: Partial<AutoSize> = {}): AutoSize {
     ...p,
   };
 }
+
+// The GPU side is a chunk the facade loads on demand: loaded first, every instance gets it at
+// construction (as on a page where it has arrived; tests/runtime-lazy.test.ts covers the wait).
+beforeAll(async () => {
+  await loadLive();
+});
 
 describe('auto policy: score', () => {
   const PX = 0.5e6;

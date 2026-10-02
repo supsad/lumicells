@@ -13,6 +13,7 @@ import { computeGeometry, createGeometry } from '../src/core/controller/geometry
 import { OFF_CLOCK } from '../src/core/engine/frame-block';
 import type { FrameInputs } from '../src/core/engine/types';
 import { LumiCells } from '../src/core/lumi-cells';
+import { loadLive } from '../src/core/runtime/loader';
 import {
   LookGroup,
   type LookSpec,
@@ -223,6 +224,12 @@ function canvasBox(c: HTMLCanvasElement, axis: 'w' | 'h'): number {
   const o = -Number.parseFloat(c.style.left || '0') || 0;
   return s[axis] + 2 * o;
 }
+
+// The GPU side is a chunk the facade loads on demand: loaded first, every instance gets it at
+// construction (as on a page where it has arrived; tests/runtime-lazy.test.ts covers the wait).
+beforeAll(async () => {
+  await loadLive();
+});
 
 beforeAll(() => {
   const ctxs = new WeakMap<HTMLCanvasElement, object>();

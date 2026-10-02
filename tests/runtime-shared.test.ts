@@ -18,6 +18,7 @@ import {
   HOLD_MAX_FRAMES,
   requestDisplayCalibration,
 } from '../src/core/runtime/display';
+import { loadLive } from '../src/core/runtime/loader';
 import {
   claimContextCreation,
   contextsInUse,
@@ -230,6 +231,12 @@ function place(pl: LumiCells, inView: boolean, inZone = inView): void {
     io.report(io.zone ? inZone : inView);
   }
 }
+
+// The GPU side is a chunk the facade loads on demand: loaded first, every instance gets it at
+// construction (as on a page where it has arrived; tests/runtime-lazy.test.ts covers the wait).
+beforeAll(async () => {
+  await loadLive();
+});
 
 beforeAll(() => {
   HTMLCanvasElement.prototype.getContext = function (

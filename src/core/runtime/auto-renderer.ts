@@ -27,8 +27,7 @@
 
 import type { InstanceRenderer } from '../types';
 
-/** Default `promoteArea`, megapixels of device pixels. */
-export const DEFAULT_PROMOTE_AREA = 0.5;
+export { DEFAULT_PROMOTE_AREA } from './settings';
 /** Share of the viewport area from which a host prefers its own context, whatever its pixels. */
 export const PROMOTE_VIEWPORT_SHARE = 0.25;
 /** An instance with its own context goes shared only below this share of the threshold. */

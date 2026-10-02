@@ -25,7 +25,7 @@
  * Nothing runs at import (SSR-safe): the ticker feeds frames once it runs.
  */
 
-import { VSYNC_CANDIDATES } from '../controller/perf';
+import { VSYNC_CANDIDATES } from './vsync';
 
 /** Clean deltas kept (newest first out). */
 export const CADENCE_WINDOW = 24;
@@ -44,11 +44,11 @@ export const HOLD_MAX_MS = 160;
  * clean (its two predecessors carried no GL work); only clean ones count. Pure: no clock, no DOM.
  */
 export class CadenceProbe {
-  private readonly deltas = new Float64Array(CADENCE_WINDOW);
-  private readonly cand = new Int8Array(CADENCE_WINDOW);
-  private readonly counts = new Int32Array(VSYNC_CANDIDATES.length);
-  private head = 0;
-  private n = 0;
+  readonly #deltas = new Float64Array(CADENCE_WINDOW);
+  readonly #cand = new Int8Array(CADENCE_WINDOW);
+  readonly #counts = new Int32Array(VSYNC_CANDIDATES.length);
+  #head = 0;
+  #n = 0;
   /** Published refresh interval, ms, or null before enough clean frames were seen. */
   intervalMs: number | null = null;
   /**
@@ -59,19 +59,19 @@ export class CadenceProbe {
    */
   epoch = 0;
   /** A measurement completed since the last reset. */
-  private settled = false;
+  #settled = false;
 
   /** Clean deltas collected since the last reset. */
   get samples(): number {
-    return this.n;
+    return this.#n;
   }
 
   /** Forgets the samples (not the published value: a new one replaces it once measured). */
   reset(): void {
-    this.n = 0;
-    this.head = 0;
-    this.counts.fill(0);
-    this.settled = false;
+    this.#n = 0;
+    this.#head = 0;
+    this.#counts.fill(0);
+    this.#settled = false;
   }
 
   /** Forgets the published value too. */
@@ -96,25 +96,25 @@ export class CadenceProbe {
         best = i;
       }
     }
-    if (this.n === CADENCE_WINDOW) {
-      const old = this.cand[this.head] as number;
-      if (old >= 0) this.counts[old] = (this.counts[old] as number) - 1;
+    if (this.#n === CADENCE_WINDOW) {
+      const old = this.#cand[this.#head] as number;
+      if (old >= 0) this.#counts[old] = (this.#counts[old] as number) - 1;
     } else {
-      this.n++;
+      this.#n++;
     }
-    this.deltas[this.head] = deltaMs;
-    this.cand[this.head] = best;
-    if (best >= 0) this.counts[best] = (this.counts[best] as number) + 1;
-    this.head = (this.head + 1) % CADENCE_WINDOW;
-    if (this.n < CADENCE_MIN_SAMPLES) return false;
+    this.#deltas[this.#head] = deltaMs;
+    this.#cand[this.#head] = best;
+    if (best >= 0) this.#counts[best] = (this.#counts[best] as number) + 1;
+    this.#head = (this.#head + 1) % CADENCE_WINDOW;
+    if (this.#n < CADENCE_MIN_SAMPLES) return false;
     // The fastest rate a fair share of quiet frames hit: jank only ever lengthens a delta.
     for (let i = 0; i < VSYNC_CANDIDATES.length; i++) {
-      const c = this.counts[i] as number;
-      if (c >= 3 && c >= CADENCE_SHARE * this.n) {
+      const c = this.#counts[i] as number;
+      if (c >= 3 && c >= CADENCE_SHARE * this.#n) {
         const v = VSYNC_CANDIDATES[i] as number;
-        if (v === this.intervalMs && this.settled) return false;
+        if (v === this.intervalMs && this.#settled) return false;
         this.intervalMs = v;
-        this.settled = true;
+        this.#settled = true;
         this.epoch++;
         return true;
       }

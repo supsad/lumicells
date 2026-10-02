@@ -27,6 +27,7 @@
  */
 
 import type { InstancePriority } from '../types';
+import { sanitizeMaxContexts } from './settings';
 
 const PRIORITY_WEIGHT: Record<InstancePriority, number> = { low: 0, normal: 1, high: 2 };
 
@@ -57,12 +58,7 @@ export const DESKTOP_MAX_CONTEXTS = 4;
 /** Default budget on phones and tablets (coarse pointer). */
 export const COARSE_MAX_CONTEXTS = 2;
 
-/** A usable limit: an integer >= 1 or Infinity (no limit); anything else is null. */
-export function sanitizeMaxContexts(value: unknown): number | null {
-  if (typeof value !== 'number' || Number.isNaN(value)) return null;
-  if (value === Number.POSITIVE_INFINITY) return value;
-  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : null;
-}
+export { sanitizeMaxContexts };
 
 /** The effective limit for a `maxContexts` setting. */
 export function resolveMaxContexts(value: number | 'auto', coarsePointer: boolean): number {

@@ -5,13 +5,14 @@
  * store's schema-derived part is shared. Each instance must still behave exactly like one built
  * from scratch and own its config copy.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Controller, initMissCount } from '../src/core/controller/controller';
 import { createParamLayout } from '../src/core/controller/layout';
 import { lutBakeCount, PaletteLut } from '../src/core/controller/lut';
 import { ParamStore } from '../src/core/controller/tween';
 import { reducedMotionQuery, watchVisibility } from '../src/core/dom/environment';
 import { LumiCells } from '../src/core/lumi-cells';
+import { loadLive } from '../src/core/runtime/loader';
 import {
   getDefaults,
   getLeafPaths,
@@ -28,6 +29,12 @@ function host(): HTMLElement {
   hosts.push(el);
   return el;
 }
+
+// The GPU side is a chunk the facade loads on demand: loaded first, every instance gets it at
+// construction (as on a page where it has arrived; tests/runtime-lazy.test.ts covers the wait).
+beforeAll(async () => {
+  await loadLive();
+});
 
 afterEach(() => {
   for (const h of hosts.splice(0)) h.remove();

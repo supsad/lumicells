@@ -28,6 +28,9 @@
  */
 
 import type { RenderQuality } from '../engine/types';
+import { VSYNC_CANDIDATES } from '../runtime/vsync';
+
+export { VSYNC_CANDIDATES };
 
 export type QualityMode = 'auto' | 'high' | 'medium' | 'low';
 
@@ -45,9 +48,6 @@ export const QUALITY_LEVELS: readonly QualityLevel[] = [
   { quality: 'low', scale: 0.6 },
   { quality: 'low', scale: 0.5 },
 ];
-
-/** Known refresh intervals, ms (240, 165, 144, 120, 90, 60, 30 Hz). */
-export const VSYNC_CANDIDATES = [4.17, 6.06, 6.94, 8.33, 11.11, 16.67, 33.33] as const;
 
 export const PERF_WINDOW = 120;
 const STEP_DOWN_AFTER = 2000;
@@ -101,38 +101,38 @@ export class PerfController {
   fps = 60;
   cpuMs = 0;
   gpuMs: number | null = null;
-  private readonly deltas = new Float64Array(PERF_WINDOW);
-  private readonly cand = new Int8Array(PERF_WINDOW);
-  private readonly counts = new Int32Array(VSYNC_CANDIDATES.length);
-  private readonly blacklist = new Float64Array(QUALITY_LEVELS.length);
+  readonly #deltas = new Float64Array(PERF_WINDOW);
+  readonly #cand = new Int8Array(PERF_WINDOW);
+  readonly #counts = new Int32Array(VSYNC_CANDIDATES.length);
+  readonly #blacklist = new Float64Array(QUALITY_LEVELS.length);
   /** Failed step-ups per level (exponential blacklist backoff), reset when the level holds. */
-  private readonly fails = new Uint8Array(QUALITY_LEVELS.length);
-  private lockedUntil = 0;
-  private head = 0;
-  private n = 0;
-  private sum = 0;
-  private slowSince = -1;
-  private goodSince = -1;
-  private lastChange = Number.NEGATIVE_INFINITY;
-  private verify = VERIFY_NONE;
-  private verifyAt = 0;
-  private verifyFrom = 0;
-  private missBefore = 0;
+  readonly #fails = new Uint8Array(QUALITY_LEVELS.length);
+  #lockedUntil = 0;
+  #head = 0;
+  #n = 0;
+  #sum = 0;
+  #slowSince = -1;
+  #goodSince = -1;
+  #lastChange = Number.NEGATIVE_INFINITY;
+  #verify = VERIFY_NONE;
+  #verifyAt = 0;
+  #verifyFrom = 0;
+  #missBefore = 0;
   /** Consecutive steps down without fewer misses, and the level before the first of them. */
-  private noGain = 0;
-  private streakFrom = 0;
+  #noGain = 0;
+  #streakFrom = 0;
   /** Fastest refresh interval seen (sticky), ms. */
-  private bestVsync = Number.POSITIVE_INFINITY;
+  #bestVsync = Number.POSITIVE_INFINITY;
   /** Calibrated display refresh interval (setDisplayHint), ms; Infinity: none or rejected. */
-  private hint = Number.POSITIVE_INFINITY;
+  #hint = Number.POSITIVE_INFINITY;
   /** Epoch of the hint in use, and of the last one rejected (-1: none). */
-  private hintEpoch = -1;
-  private rejectedEpoch = -1;
+  #hintEpoch = -1;
+  #rejectedEpoch = -1;
   /** GPU time when the last step down was taken (null: no GPU timer then). */
-  private gpuBefore: number | null = null;
+  #gpuBefore: number | null = null;
   /** Mean frame time when the last step down was taken, ms. */
-  private frameBefore = 0;
-  private readonly change: PerfChange = { quality: 'high', scale: 1, reason: 'slow' };
+  #frameBefore = 0;
+  readonly #change: PerfChange = { quality: 'high', scale: 1, reason: 'slow' };
 
   get quality(): RenderQuality {
     if (this.mode !== 'auto') return this.mode;
@@ -146,7 +146,7 @@ export class PerfController {
 
   /** Samples in the current window. */
   get samples(): number {
-    return this.n;
+    return this.#n;
   }
 
   /** Switches between adaptive and a fixed tier; returns true when quality or scale changed. */
@@ -158,10 +158,10 @@ export class PerfController {
     if (mode === 'auto') {
       this.level = 0;
       this.locked = false;
-      this.verify = VERIFY_NONE;
-      this.noGain = 0;
-      this.blacklist.fill(0);
-      this.fails.fill(0);
+      this.#verify = VERIFY_NONE;
+      this.#noGain = 0;
+      this.#blacklist.fill(0);
+      this.#fails.fill(0);
       this.resetWindow();
     }
     return q !== this.quality || s !== this.scale;
@@ -175,7 +175,7 @@ export class PerfController {
     if (this.mode !== 'auto' || o.mode !== 'auto' || this.level === o.level) return false;
     this.level = o.level;
     this.locked = o.locked;
-    this.verify = VERIFY_NONE;
+    this.#verify = VERIFY_NONE;
     this.resetWindow();
     return true;
   }
@@ -187,26 +187,26 @@ export class PerfController {
    * bumps the epoch on every completed calibration, a recalibration at the same rate included).
    */
   setDisplayHint(ms: number | null, epoch: number): void {
-    if (ms === null || !(ms > 0) || epoch === this.rejectedEpoch) {
-      if (ms === null) this.hint = Number.POSITIVE_INFINITY;
+    if (ms === null || !(ms > 0) || epoch === this.#rejectedEpoch) {
+      if (ms === null) this.#hint = Number.POSITIVE_INFINITY;
       return;
     }
-    if (epoch === this.hintEpoch && ms === this.hint) return;
-    this.hintEpoch = epoch;
-    this.hint = ms;
+    if (epoch === this.#hintEpoch && ms === this.#hint) return;
+    this.#hintEpoch = epoch;
+    this.#hint = ms;
     if (ms < this.vsyncMs) this.vsyncMs = ms;
   }
 
   /** The display hint in use (Infinity: none). */
   get displayHint(): number {
-    return this.hint;
+    return this.#hint;
   }
 
   /** The hint proved wrong (a slower pace set by the display or the OS): until a new one. */
-  private rejectHint(): void {
-    if (this.hint === Number.POSITIVE_INFINITY) return;
-    this.rejectedEpoch = this.hintEpoch;
-    this.hint = Number.POSITIVE_INFINITY;
+  #rejectHint(): void {
+    if (this.#hint === Number.POSITIVE_INFINITY) return;
+    this.#rejectedEpoch = this.#hintEpoch;
+    this.#hint = Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -215,22 +215,22 @@ export class PerfController {
    * changed, or the page resumes from a hidden tab where OS power modes may have changed).
    */
   resetVsync(): void {
-    this.bestVsync = Number.POSITIVE_INFINITY;
+    this.#bestVsync = Number.POSITIVE_INFINITY;
     this.locked = false;
-    this.noGain = 0;
-    this.blacklist.fill(0);
-    this.fails.fill(0);
+    this.#noGain = 0;
+    this.#blacklist.fill(0);
+    this.#fails.fill(0);
     this.resetWindow();
   }
 
   /** Forgets the timing window (after a pause or a resize, stale deltas are meaningless). */
   resetWindow(): void {
-    this.n = 0;
-    this.head = 0;
-    this.sum = 0;
-    this.counts.fill(0);
-    this.slowSince = -1;
-    this.goodSince = -1;
+    this.#n = 0;
+    this.#head = 0;
+    this.#sum = 0;
+    this.#counts.fill(0);
+    this.#slowSince = -1;
+    this.#goodSince = -1;
   }
 
   /**
@@ -239,21 +239,21 @@ export class PerfController {
    */
   sample(deltaMs: number, cpuMs: number, gpuMs: number | null, now: number): PerfChange | null {
     const d = deltaMs > 0.5 ? (deltaMs < 1000 ? deltaMs : 1000) : 0.5;
-    if (this.n === PERF_WINDOW) {
-      this.sum -= this.deltas[this.head] as number;
-      const c = this.cand[this.head] as number;
-      if (c >= 0) this.counts[c] = (this.counts[c] as number) - 1;
+    if (this.#n === PERF_WINDOW) {
+      this.#sum -= this.#deltas[this.#head] as number;
+      const c = this.#cand[this.#head] as number;
+      if (c >= 0) this.#counts[c] = (this.#counts[c] as number) - 1;
     } else {
-      this.n++;
+      this.#n++;
     }
     const c = nearestCandidate(d);
-    this.deltas[this.head] = d;
-    this.cand[this.head] = c;
-    if (c >= 0) this.counts[c] = (this.counts[c] as number) + 1;
-    this.sum += d;
-    this.head = (this.head + 1) % PERF_WINDOW;
+    this.#deltas[this.#head] = d;
+    this.#cand[this.#head] = c;
+    if (c >= 0) this.#counts[c] = (this.#counts[c] as number) + 1;
+    this.#sum += d;
+    this.#head = (this.#head + 1) % PERF_WINDOW;
 
-    const n = this.n;
+    const n = this.#n;
     this.cpuMs += (Math.max(0, cpuMs) - this.cpuMs) * 0.1;
     if (gpuMs !== null && Number.isFinite(gpuMs)) {
       this.gpuMs = this.gpuMs === null ? gpuMs : this.gpuMs + (gpuMs - this.gpuMs) * 0.1;
@@ -265,7 +265,7 @@ export class PerfController {
       let maxI = -1;
       let maxC = 0;
       for (let i = 0; i < VSYNC_CANDIDATES.length; i++) {
-        const cnt = this.counts[i] as number;
+        const cnt = this.#counts[i] as number;
         if (vs < 0 && cnt >= 0.2 * n) vs = i;
         if (cnt > maxC) {
           maxC = cnt;
@@ -276,69 +276,69 @@ export class PerfController {
       if (maxI >= 0) this.cadenceMs = VSYNC_CANDIDATES[maxI] as number;
       if (vs >= 0) {
         const est = VSYNC_CANDIDATES[vs] as number;
-        if (n >= 30 && est < this.bestVsync) this.bestVsync = est;
-        this.vsyncMs = Math.min(est, this.bestVsync, this.hint);
+        if (n >= 30 && est < this.#bestVsync) this.#bestVsync = est;
+        this.vsyncMs = Math.min(est, this.#bestVsync, this.#hint);
       }
-      if (n === PERF_WINDOW && maxI >= 0 && maxC >= RISE_SHARE * n) this.maybeRise(maxI);
+      if (n === PERF_WINDOW && maxI >= 0 && maxC >= RISE_SHARE * n) this.#maybeRise(maxI);
     }
     const limit = 1.5 * this.vsyncMs;
     let miss = 0;
-    for (let i = 0; i < n; i++) if ((this.deltas[i] as number) > limit) miss++;
+    for (let i = 0; i < n; i++) if ((this.#deltas[i] as number) > limit) miss++;
     this.missRatio = n > 0 ? miss / n : 0;
-    this.frameMs = n > 0 ? this.sum / n : d;
+    this.frameMs = n > 0 ? this.#sum / n : d;
     this.fps = 1000 / this.frameMs;
 
-    if (this.locked && now >= this.lockedUntil) this.locked = false;
+    if (this.locked && now >= this.#lockedUntil) this.locked = false;
     if (this.mode !== 'auto' || this.locked) return null;
     const vsync = this.vsyncMs;
     const gpu = this.gpuMs;
 
-    if (this.verify === VERIFY_UP) {
-      if (now - this.verifyAt >= VERIFY_AFTER) {
+    if (this.#verify === VERIFY_UP) {
+      if (now - this.#verifyAt >= VERIFY_AFTER) {
         // The step up held: forget this level's failures.
-        this.verify = VERIFY_NONE;
-        this.fails[this.level] = 0;
+        this.#verify = VERIFY_NONE;
+        this.#fails[this.level] = 0;
       } else if (n >= 30) {
         const slowish = gpu !== null ? gpu > 0.75 * vsync : this.missRatio > 0.15;
         if (slowish) {
-          const f = this.fails[this.level] as number;
-          this.blacklist[this.level] = now + Math.min(BLACKLIST_MS * 2 ** f, MAX_BLACKLIST_MS);
-          this.fails[this.level] = Math.min(16, f + 1);
-          return this.apply(this.verifyFrom, now, 'slow');
+          const f = this.#fails[this.level] as number;
+          this.#blacklist[this.level] = now + Math.min(BLACKLIST_MS * 2 ** f, MAX_BLACKLIST_MS);
+          this.#fails[this.level] = Math.min(16, f + 1);
+          return this.#apply(this.#verifyFrom, now, 'slow');
         }
       }
     }
     if (n < 60) return null;
 
-    if (this.verify === VERIFY_DOWN && now - this.verifyAt >= VERIFY_AFTER) {
-      this.verify = VERIFY_NONE;
+    if (this.#verify === VERIFY_DOWN && now - this.#verifyAt >= VERIFY_AFTER) {
+      this.#verify = VERIFY_NONE;
       // Fewer misses, faster frames (three vsyncs down to two is a gain even though both miss)
       // or, with a GPU timer, less GPU time (the cadence may be held by something else); a step
       // that cut none of them is no gain.
-      const gpuBefore = this.gpuBefore;
+      const gpuBefore = this.#gpuBefore;
       const improved =
         this.missRatio < 0.1 ||
-        this.missRatio < this.missBefore - 0.05 ||
-        this.frameMs < 0.9 * this.frameBefore ||
+        this.missRatio < this.#missBefore - 0.05 ||
+        this.frameMs < 0.9 * this.#frameBefore ||
         (gpu !== null && gpuBefore !== null && gpu < 0.9 * gpuBefore);
       if (improved) {
-        this.noGain = 0;
+        this.#noGain = 0;
       } else {
-        if (this.noGain++ === 0) this.streakFrom = this.verifyFrom;
-        if (this.noGain >= 2) {
+        if (this.#noGain++ === 0) this.#streakFrom = this.#verifyFrom;
+        if (this.#noGain >= 2) {
           // Fewer pixels did not help: probe again after LOCK_MS. Without a GPU timer that is
           // evidence about the pace (a display cap, OS throttling): re-learn the refresh rate
           // from here on. With one, the GPU time did not shrink with the pixels (per-draw
           // overhead), which says nothing about the display: the refresh estimate and the hint
           // stay.
           this.locked = true;
-          this.lockedUntil = now + LOCK_MS;
-          this.noGain = 0;
+          this.#lockedUntil = now + LOCK_MS;
+          this.#noGain = 0;
           if (gpu === null || gpuBefore === null) {
-            this.bestVsync = Number.POSITIVE_INFINITY;
-            this.rejectHint();
+            this.#bestVsync = Number.POSITIVE_INFINITY;
+            this.#rejectHint();
           }
-          return this.apply(this.streakFrom, now, 'locked');
+          return this.#apply(this.#streakFrom, now, 'locked');
         }
       }
     }
@@ -346,36 +346,36 @@ export class PerfController {
     const slow =
       gpu !== null ? gpu > 0.75 * vsync : this.missRatio > 0.25 && this.cpuMs < 0.5 * vsync;
     const good = this.missRatio < 0.02 && (gpu === null || gpu < 0.5 * vsync);
-    this.slowSince = slow ? (this.slowSince < 0 ? now : this.slowSince) : -1;
-    this.goodSince = good ? (this.goodSince < 0 ? now : this.goodSince) : -1;
-    if (now - this.lastChange < MIN_INTERVAL) return null;
+    this.#slowSince = slow ? (this.#slowSince < 0 ? now : this.#slowSince) : -1;
+    this.#goodSince = good ? (this.#goodSince < 0 ? now : this.#goodSince) : -1;
+    if (now - this.#lastChange < MIN_INTERVAL) return null;
 
     if (
-      this.slowSince >= 0 &&
-      now - this.slowSince >= STEP_DOWN_AFTER &&
+      this.#slowSince >= 0 &&
+      now - this.#slowSince >= STEP_DOWN_AFTER &&
       this.level < QUALITY_LEVELS.length - 1
     ) {
       const from = this.level;
       const missBefore = this.missRatio;
       const frameBefore = this.frameMs;
-      const ch = this.apply(from + 1, now, 'slow');
-      this.verify = VERIFY_DOWN;
-      this.verifyFrom = from;
-      this.missBefore = missBefore;
-      this.frameBefore = frameBefore;
-      this.gpuBefore = gpu;
+      const ch = this.#apply(from + 1, now, 'slow');
+      this.#verify = VERIFY_DOWN;
+      this.#verifyFrom = from;
+      this.#missBefore = missBefore;
+      this.#frameBefore = frameBefore;
+      this.#gpuBefore = gpu;
       return ch;
     }
     if (
-      this.goodSince >= 0 &&
-      now - this.goodSince >= STEP_UP_AFTER &&
+      this.#goodSince >= 0 &&
+      now - this.#goodSince >= STEP_UP_AFTER &&
       this.level > 0 &&
-      (this.blacklist[this.level - 1] as number) <= now
+      (this.#blacklist[this.level - 1] as number) <= now
     ) {
       const from = this.level;
-      const ch = this.apply(from - 1, now, 'recovered');
-      this.verify = VERIFY_UP;
-      this.verifyFrom = from;
+      const ch = this.#apply(from - 1, now, 'recovered');
+      this.#verify = VERIFY_UP;
+      this.#verifyFrom = from;
       return ch;
     }
     return null;
@@ -386,30 +386,30 @@ export class PerfController {
    * and our own cost is small, the display or the OS (low-power mode, energy saver, a 60 Hz
    * monitor) sets the pace, not our GPU: adopt the slower rate.
    */
-  private maybeRise(i: number): void {
+  #maybeRise(i: number): void {
     const slower = VSYNC_CANDIDATES[i] as number;
-    if (!(slower > Math.min(this.bestVsync, this.hint) * 1.1)) return;
+    if (!(slower > Math.min(this.#bestVsync, this.#hint) * 1.1)) return;
     const gpu = this.gpuMs;
     const small =
       gpu !== null
         ? gpu < 0.5 * slower && this.cpuMs < 0.5 * slower
         : this.locked && this.cpuMs < 0.3 * slower;
     if (!small) return;
-    this.rejectHint();
-    this.bestVsync = slower;
+    this.#rejectHint();
+    this.#bestVsync = slower;
     this.vsyncMs = slower;
     this.missRatio = 0;
-    this.noGain = 0;
+    this.#noGain = 0;
     this.resetWindow();
   }
 
-  private apply(level: number, now: number, reason: PerfReason): PerfChange {
+  #apply(level: number, now: number, reason: PerfReason): PerfChange {
     this.level = level;
-    this.lastChange = now;
-    this.verifyAt = now;
-    this.verify = VERIFY_NONE;
+    this.#lastChange = now;
+    this.#verifyAt = now;
+    this.#verify = VERIFY_NONE;
     this.resetWindow();
-    const ch = this.change;
+    const ch = this.#change;
     ch.quality = this.quality;
     ch.scale = this.scale;
     ch.reason = reason;

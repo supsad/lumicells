@@ -13,7 +13,7 @@ import {
   useState,
 } from 'react';
 import { LumiCells as LumiCellsCore } from '../core/lumi-cells';
-import { runtimeSettings } from '../core/runtime/scheduler';
+import { runtimeSettings } from '../core/runtime/settings';
 import type { InstancePriority, LookMode, RendererMode, Stats } from '../core/types';
 import { resolveConfig } from '../element/resolve';
 import { type LumiCellsConfigInput, type PresetId, posterCss, stableStringify } from '../schema';
@@ -152,7 +152,9 @@ export function LumiCells({
   // The WebGL2 support probe (it creates a context, a call that waits for the GPU process) runs
   // before the browser paints this commit: right after a paint the GPU process rasterizes it,
   // which takes hundreds of milliseconds on a first visit, and the probe would wait for that.
+  // The engine's chunk starts loading just before it, so it downloads while the probe waits.
   useLayoutEffect(() => {
+    LumiCellsCore.preload();
     LumiCellsCore.isSupported();
   }, []);
 
@@ -179,8 +181,9 @@ export function LumiCells({
       lookOffset: initialOffset,
     });
     appliedKey.current = initial.key;
-    // 'no-webgl2' and 'compile' are final; 'context-lost' is temporary (the facade rebuilds its
-    // engine on 'webglcontextrestored'), so the consumer's fallback node must not outlive it.
+    // 'no-webgl2', 'compile' and 'load' are final; 'context-lost' is temporary (the facade
+    // rebuilds its engine on 'webglcontextrestored'), so the consumer's fallback node must not
+    // outlive it.
     let sticky = !inst.supported;
     const offs = [
       inst.on('ready', () => {

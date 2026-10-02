@@ -109,9 +109,9 @@ function before(a: Influence, b: Influence): boolean {
 
 export class InfluenceRegistry {
   private readonly list: Influence[] = [];
-  private nextId = 1;
-  private gpu = 0;
-  private overflowWarned = false;
+  #nextId = 1;
+  #gpu = 0;
+  #overflowWarned = false;
   /**
    * Something visible changed since the owner last cleared it: an entry was added, updated,
    * moved, shown, hidden or disposed, or one is fading (the controller's activity, see
@@ -140,7 +140,7 @@ export class InfluenceRegistry {
 
   /** Entries currently holding a GPU slot. */
   get activeCount(): number {
-    return this.gpu;
+    return this.#gpu;
   }
 
   /** True when some live entry is in `client` space (the host rect must be measured). */
@@ -151,17 +151,28 @@ export class InfluenceRegistry {
     return false;
   }
 
-  add(init: InfluenceInit): Influence {
-    const e = new Influence(this.nextId++);
-    this.apply(e, init);
+  /**
+   * `id`: the id to give the entry (one the facade handed out before this registry existed, see
+   * Controller.createInfluence); later ids continue above it.
+   */
+  add(init: InfluenceInit, id?: number): Influence {
+    const own = id === undefined ? this.#nextId : id;
+    if (own >= this.#nextId) this.#nextId = own + 1;
+    const e = new Influence(own);
+    this.#apply(e, init);
     this.list.push(e);
     this.touched = true;
     return e;
   }
 
+  /** Ids below `next` are taken (handed out before this registry existed): later ones go above. */
+  reserveIds(next: number): void {
+    if (next > this.#nextId) this.#nextId = next;
+  }
+
   update(e: Influence, patch: InfluenceInit): void {
     if (e.removed) return;
-    this.apply(e, patch);
+    this.#apply(e, patch);
     this.touched = true;
   }
 
@@ -175,12 +186,6 @@ export class InfluenceRegistry {
     e.y = y;
     e.w = w;
     e.h = h;
-    this.touched = true;
-  }
-
-  setHidden(e: Influence, hidden: boolean): void {
-    if (e.hidden === hidden) return;
-    e.hidden = hidden;
     this.touched = true;
   }
 
@@ -207,7 +212,7 @@ export class InfluenceRegistry {
       e.slot = false;
     }
     this.list.length = 0;
-    this.gpu = 0;
+    this.#gpu = 0;
   }
 
   /**
@@ -236,13 +241,13 @@ export class InfluenceRegistry {
     list.length = w;
 
     if (eligible > MAX_INFLUENCES) {
-      if (!this.overflowWarned) {
-        this.overflowWarned = true;
+      if (!this.#overflowWarned) {
+        this.#overflowWarned = true;
         this.onOverflow?.(eligible);
       }
       for (let i = 0; i < list.length; i++) {
         const e = list[i] as Influence;
-        e.score = this.strengthOf(e, ctx) * this.areaOf(e, ctx.geo);
+        e.score = this.#strengthOf(e, ctx) * this.#areaOf(e, ctx.geo);
       }
       // Insertion sort: the order barely changes between frames, so this is ~O(n) and in place.
       for (let i = 1; i < list.length; i++) {
@@ -280,15 +285,15 @@ export class InfluenceRegistry {
         if (e.presence <= 0) {
           e.presence = 0;
           e.slot = false;
-          this.gpu--;
+          this.#gpu--;
         }
       }
     }
-    for (let i = 0; i < list.length && this.gpu < MAX_INFLUENCES; i++) {
+    for (let i = 0; i < list.length && this.#gpu < MAX_INFLUENCES; i++) {
       const e = list[i] as Influence;
       if (e.slot || !e.wanted) continue;
       e.slot = true;
-      this.gpu++;
+      this.#gpu++;
       e.presence = e.fadeIn > 0 ? Math.min(1, dtMs / e.fadeIn) : 1;
     }
 
@@ -296,7 +301,7 @@ export class InfluenceRegistry {
     for (let i = 0; i < list.length && n < MAX_INFLUENCES; i++) {
       const e = list[i] as Influence;
       if (!e.slot || e.presence <= 0) continue;
-      this.write(e, ctx, frame, OFF_INF + n * 12);
+      this.#write(e, ctx, frame, OFF_INF + n * 12);
       n++;
     }
     return n;
@@ -304,7 +309,7 @@ export class InfluenceRegistry {
 
   // -------------------------------------------------------------------------------------------
 
-  private apply(e: Influence, p: InfluenceInit): void {
+  #apply(e: Influence, p: InfluenceInit): void {
     if (p.space !== undefined) e.space = SPACE_CODE[p.space] ?? SPACE_HOST;
     if (p.x !== undefined) e.x = p.x;
     if (p.y !== undefined) e.y = p.y;
@@ -334,12 +339,12 @@ export class InfluenceRegistry {
     }
   }
 
-  private strengthOf(e: Influence, ctx: InfluenceContext): number {
+  #strengthOf(e: Influence, ctx: InfluenceContext): number {
     return Number.isNaN(e.strength) ? ctx.defaultStrength : e.strength;
   }
 
   /** Units per device px for sizes in this entry's space. */
-  private unit(e: Influence, g: Geometry, axis: 0 | 1 | 2): number {
+  #unit(e: Influence, g: Geometry, axis: 0 | 1 | 2): number {
     switch (e.space) {
       case SPACE_NORM:
         return axis === 0 ? g.hostW : axis === 1 ? g.hostH : Math.min(g.hostW, g.hostH);
@@ -350,17 +355,17 @@ export class InfluenceRegistry {
     }
   }
 
-  private areaOf(e: Influence, g: Geometry): number {
+  #areaOf(e: Influence, g: Geometry): number {
     if (!Number.isNaN(e.w) || !Number.isNaN(e.h)) {
-      const w = (Number.isNaN(e.w) ? 0 : e.w) * this.unit(e, g, 0);
-      const h = (Number.isNaN(e.h) ? 0 : e.h) * this.unit(e, g, 1);
+      const w = (Number.isNaN(e.w) ? 0 : e.w) * this.#unit(e, g, 0);
+      const h = (Number.isNaN(e.h) ? 0 : e.h) * this.#unit(e, g, 1);
       return Math.max(1, w * h);
     }
-    const r = (Number.isNaN(e.radius) ? 0 : e.radius) * this.unit(e, g, 2);
+    const r = (Number.isNaN(e.radius) ? 0 : e.radius) * this.#unit(e, g, 2);
     return Math.max(1, Math.PI * r * r);
   }
 
-  private write(e: Influence, ctx: InfluenceContext, f: Float32Array, o: number): void {
+  #write(e: Influence, ctx: InfluenceContext, f: Float32Array, o: number): void {
     const g = ctx.geo;
     let px: number;
     let py: number;
@@ -386,12 +391,12 @@ export class InfluenceRegistry {
     let hh = 0;
     let corner: number;
     if (!Number.isNaN(e.w) || !Number.isNaN(e.h)) {
-      hw = Math.max(0, (Number.isNaN(e.w) ? 0 : e.w) * 0.5 * this.unit(e, g, 0));
-      hh = Math.max(0, (Number.isNaN(e.h) ? 0 : e.h) * 0.5 * this.unit(e, g, 1));
-      const c = Number.isNaN(e.corner) ? 0 : e.corner * this.unit(e, g, 2);
+      hw = Math.max(0, (Number.isNaN(e.w) ? 0 : e.w) * 0.5 * this.#unit(e, g, 0));
+      hh = Math.max(0, (Number.isNaN(e.h) ? 0 : e.h) * 0.5 * this.#unit(e, g, 1));
+      const c = Number.isNaN(e.corner) ? 0 : e.corner * this.#unit(e, g, 2);
       corner = Math.max(0, Math.min(c, hw, hh));
     } else {
-      corner = Math.max(0, (Number.isNaN(e.radius) ? 0 : e.radius) * this.unit(e, g, 2));
+      corner = Math.max(0, (Number.isNaN(e.radius) ? 0 : e.radius) * this.#unit(e, g, 2));
     }
     const falloff = Number.isNaN(e.falloff) ? ctx.defaultFalloff : e.falloff;
     f[o] = px;
@@ -400,7 +405,7 @@ export class InfluenceRegistry {
     f[o + 3] = hh;
     f[o + 4] = corner;
     f[o + 5] = Math.max(0, falloff) * g.pitchPx;
-    f[o + 6] = this.strengthOf(e, ctx) * smooth01(e.presence);
+    f[o + 6] = this.#strengthOf(e, ctx) * smooth01(e.presence);
     f[o + 7] = e.type;
     f[o + 8] = e.r;
     f[o + 9] = e.g;

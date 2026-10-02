@@ -9,7 +9,7 @@
  */
 
 import { LumiCells } from '../core/lumi-cells';
-import { isRendererMode, runtimeSettings } from '../core/runtime/scheduler';
+import { isRendererMode, runtimeSettings } from '../core/runtime/settings';
 import type {
   ConfigSource,
   InfluenceHandle,

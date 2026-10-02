@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { HostView } from '../src/core/dom/host';
 import { LumiCells } from '../src/core/lumi-cells';
+import { liveLoadState, setLiveImporterForTesting } from '../src/core/runtime/loader';
 import type { LumiCellsEvents } from '../src/core/types';
 import { getPresetConfig } from '../src/schema';
 
@@ -275,6 +276,50 @@ describe('LumiCells without WebGL2', () => {
     bogus.destroy();
     LumiCells.configure({ maxContexts: 'auto', parkAfterMs: 10_000, createPerFrame: 1 });
     pl.destroy();
+  });
+
+  it('a page without WebGL2 never loads the GPU side', async () => {
+    const importer = vi.fn(() => new Promise<never>(() => {}));
+    setLiveImporterForTesting(importer);
+    try {
+      expect(LumiCells.isSupported()).toBe(false);
+      const pl = new LumiCells(host());
+      const idle = new LumiCells(host(), { autoStart: false });
+      // Runtime layers still hand out handles (they stay inert).
+      expect(pl.addInfluence({ x: 1, y: 1 }).id).toBeGreaterThan(0);
+      pl.pulse({ x: 1, y: 1 });
+      idle.start();
+      await tick();
+      expect(importer).not.toHaveBeenCalled();
+      expect(liveLoadState()).toBe('idle');
+      expect(pl.getStats().state).toBe('failed');
+      expect(idle.getStats().state).toBe('failed');
+      pl.destroy();
+      idle.destroy();
+    } finally {
+      setLiveImporterForTesting(null);
+    }
+  });
+
+  it('a paused instance on a page known to lack WebGL2 keeps nothing for a GPU side', async () => {
+    expect(LumiCells.isSupported()).toBe(false);
+    const paused = new LumiCells(host(), { autoStart: false });
+    const fallbacks: string[] = [];
+    paused.on('fallback', (e) => fallbacks.push(e.reason));
+    const speed = paused.get('animation.speed');
+    // A queued tween would hold the effective value at the first config until a frame moves it
+    // (and the queue would grow with every call); with no GPU side to come it is the config's.
+    paused.setConfig({ animation: { speed: speed + 1 } }, { transition: 500 });
+    expect(paused.getEffective('animation.speed')).toBe(speed + 1);
+    // It stays 'pending' until start() reports the missing WebGL2.
+    await tick();
+    expect(paused.getStats().state).toBe('pending');
+    expect(fallbacks).toEqual([]);
+    paused.start();
+    await tick();
+    expect(paused.getStats().state).toBe('failed');
+    expect(fallbacks).toEqual(['no-webgl2']);
+    paused.destroy();
   });
 
   it('listener errors do not break other listeners', async () => {

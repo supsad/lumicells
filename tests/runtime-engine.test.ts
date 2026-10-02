@@ -9,6 +9,7 @@ import { HostView } from '../src/core/dom/host';
 import { OFF_INF } from '../src/core/engine/frame-block';
 import type { FrameInputs } from '../src/core/engine/types';
 import { LumiCells } from '../src/core/lumi-cells';
+import { loadLive } from '../src/core/runtime/loader';
 import { resetRuntimeForTesting } from '../src/core/runtime/scheduler';
 import type { LumiCellsEvents } from '../src/core/types';
 
@@ -139,6 +140,12 @@ class FakeIO {
 }
 
 let canvasSize = { w: 400, h: 300 };
+
+// The GPU side is a chunk the facade loads on demand: loaded first, every instance gets it at
+// construction (as on a page where it has arrived; tests/runtime-lazy.test.ts covers the wait).
+beforeAll(async () => {
+  await loadLive();
+});
 
 beforeAll(() => {
   // WebGL2 "available" for LumiCells.isSupported(); the fake engine never touches it.

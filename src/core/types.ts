@@ -97,7 +97,8 @@ export type LookChangeReason = 'join' | 'layers' | 'config' | 'explicit' | 'rend
 
 /**
  * Lifecycle of an instance's GPU side (`Stats.state`):
- * - `pending`  no context yet: not started, not near the viewport yet, or queued for creation;
+ * - `pending`  no context yet: not started, the engine's chunk still loading, not near the
+ *              viewport yet, or queued for creation;
  * - `waiting`  (`renderer: 'own'`) near the viewport, but the context budget is full of
  *              instances that rank higher: the poster is shown until a context frees up;
  * - `live`     owns a WebGL context, or a slot on the shared one (drawing, paused offscreen or
@@ -107,7 +108,8 @@ export type LookChangeReason = 'join' | 'layers' | 'config' | 'explicit' | 'rend
  *              rebuilt when it comes back near the viewport;
  * - `lost`     the browser took the context away (for a shared instance: the shared one, while
  *              its canvas keeps the last frame); waiting for it to be restored;
- * - `failed`   no WebGL2 or a shader/resource failure: the poster stays;
+ * - `failed`   no WebGL2, a shader/resource failure, or the engine's chunk could not be loaded:
+ *              the poster stays;
  * - `destroyed` after `destroy()`: no context, no canvas, nothing left to restore.
  */
 export type InstanceState =
@@ -557,15 +559,17 @@ export interface LumiCellsEvents {
   warn: { code: string; message: string };
   error: Error;
   /**
-   * The poster is shown instead of the animation. `no-webgl2` and `compile` are final;
+   * The poster is shown instead of the animation. `no-webgl2`, `compile` and `load` are final;
    * `context-lost` lasts until `contextrestored`; `budget` means a visible `renderer: 'own'`
    * instance waits for a WebGL context because the page budget
    * (`LumiCells.configure({ maxContexts })`) is full of instances that rank higher (an instance
    * with `render.pauseOffscreen: false` counts as visible): it starts drawing (with 'ready' if it
    * never drew before) as soon as a context frees up. `auto` instances never wait: they use the
-   * shared renderer instead (see the `renderer` event).
+   * shared renderer instead (see the `renderer` event). `load`: the engine, a chunk of its own
+   * that loads behind the poster, could not be loaded (a network error; an `error` event carries
+   * it). Instances created later try to load it again.
    */
-  fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' | 'budget' };
+  fallback: { reason: 'no-webgl2' | 'compile' | 'context-lost' | 'budget' | 'load' };
   /**
    * The renderer changed (`Stats.renderer`): an `auto` instance was promoted, demoted or moved
    * by the context budget, or `setRenderer()` asked for the other one. Not emitted for the first

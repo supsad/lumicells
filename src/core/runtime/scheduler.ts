@@ -22,21 +22,30 @@
  * that frees up later), so a pass goes on past a flexible refusal instead of refusing everyone
  * ranked below it.
  *
+ * The settings themselves (runtime/settings.ts) are eager: LumiCells.configure() stores them before
+ * this module has loaded, and it reads them as it goes (settingsApplied reacts to later changes).
+ *
  * Nothing runs at import: the budget is created on first use (SSR-safe).
  */
 
 import { readyForContext } from '../engine/warmup';
 import { onFrameEnd } from '../ticker';
-import type { ConfigureOptions, RendererMode } from '../types';
-import { DEFAULT_PROMOTE_AREA } from './auto-renderer';
+import type { ConfigureOptions } from '../types';
 import {
   type BudgetMember,
   ContextBudget,
   compareRank,
   resolveMaxContexts,
-  sanitizeMaxContexts,
 } from './context-budget';
 import { resetDisplayForTesting } from './display';
+import {
+  applySettings,
+  resetSettingsForTesting,
+  runtimeSettings,
+  type SettingsChange,
+} from './settings';
+
+export { isRendererMode, type RuntimeSettings, runtimeSettings } from './settings';
 
 /** An instance as the scheduler sees it. Callbacks run synchronously inside the scheduler. */
 export interface GpuClient extends BudgetMember {
@@ -67,45 +76,12 @@ export interface GpuClient extends BudgetMember {
   settingsChanged(): void;
 }
 
-export interface RuntimeSettings {
-  maxContexts: number | 'auto';
-  parkAfterMs: number;
-  createPerFrame: number;
-  /** Pixel budget of the shared renderer's atlas, megapixels, or 'auto'. */
-  sharedBudget: number | 'auto';
-  /** Renderer of new instances that do not ask for one. */
-  renderer: RendererMode;
-  /** `auto`: canvas megapixels from which an instance prefers a context of its own. */
-  promoteArea: number;
-  /** Frame-rate cap of inactive shared instances: fps, 'auto' (when needed) or 0 (off). */
-  secondaryMaxFps: number | 'auto';
-  /** Lite pipeline for shared instances: 'auto' (small or crowded), true (all inactive), false. */
-  lite: boolean | 'auto';
-}
-
-/**
- * Longest delay setTimeout honours (2^31 - 1 ms, about 24.8 days). Browsers and Node store the
- * delay as a signed 32-bit integer: anything longer wraps around and fires almost at once.
- */
-const MAX_TIMER_MS = 0x7fffffff;
-
-const DEFAULTS: Readonly<RuntimeSettings> = {
-  maxContexts: 'auto',
-  parkAfterMs: 10_000,
-  createPerFrame: 1,
-  sharedBudget: 'auto',
-  renderer: 'auto',
-  promoteArea: DEFAULT_PROMOTE_AREA,
-  secondaryMaxFps: 'auto',
-  lite: 'auto',
-};
-
 /** Default shared atlas budget on desktop (fine pointer), megapixels. */
 export const DESKTOP_SHARED_BUDGET = 4;
 /** Default shared atlas budget on phones and tablets (coarse pointer), megapixels. */
 export const COARSE_SHARED_BUDGET = 2;
 
-const settings: RuntimeSettings = { ...DEFAULTS };
+const settings = runtimeSettings();
 let budget: ContextBudget<GpuClient> | null = null;
 /** Clients that want a slot and do not hold one (queued or waiting), in request order. */
 const queue = new Set<GpuClient>();
@@ -236,59 +212,26 @@ function serve(now: number): void {
 
 /** Applies LumiCells.configure() options (invalid values are ignored). */
 export function configureRuntime(opts: ConfigureOptions): void {
-  let parkChanged = false;
-  if (opts.parkAfterMs !== undefined) {
-    let v = Number(opts.parkAfterMs);
-    // A delay no timer can express means "never" (a wrapped timer would park at once).
-    if (v > MAX_TIMER_MS) v = Number.POSITIVE_INFINITY;
-    if (v >= 0 && v !== settings.parkAfterMs) {
-      settings.parkAfterMs = v;
-      parkChanged = true;
-    }
-  }
-  if (opts.createPerFrame !== undefined) {
-    const v = Number(opts.createPerFrame);
-    if (v >= 1) settings.createPerFrame = Number.isFinite(v) ? Math.floor(v) : v;
-  }
-  if (opts.sharedBudget !== undefined) {
-    const v = opts.sharedBudget === 'auto' ? 'auto' : Number(opts.sharedBudget);
-    if (v === 'auto' || (Number.isFinite(v) && v > 0)) settings.sharedBudget = v;
-  }
-  if (isRendererMode(opts.renderer)) settings.renderer = opts.renderer;
-  if (opts.promoteArea !== undefined) {
-    const v = Number(opts.promoteArea);
-    if (Number.isFinite(v) && v > 0) settings.promoteArea = v;
-  }
-  if (opts.secondaryMaxFps !== undefined) {
-    const v = opts.secondaryMaxFps === 'auto' ? 'auto' : Number(opts.secondaryMaxFps);
-    if (v === 'auto' || (Number.isFinite(v) && v >= 0)) settings.secondaryMaxFps = v;
-  }
-  if (opts.lite === 'auto' || opts.lite === true || opts.lite === false) settings.lite = opts.lite;
-  if (opts.maxContexts !== undefined) {
-    const v = opts.maxContexts === 'auto' ? 'auto' : sanitizeMaxContexts(opts.maxContexts);
-    if (v !== null) {
-      settings.maxContexts = v;
-      if (budget) {
-        const max = resolveMaxContexts(v, coarsePointer());
-        if (budget.size > max) refreshAreas(budget);
-        const victims = budget.setMax(max);
-        for (const c of victims) c.evicted();
-      }
-    }
+  settingsApplied(applySettings(opts));
+}
+
+/**
+ * The settings changed (see applySettings): the budget follows a new `maxContexts` (lowering it
+ * evicts the lowest ranked holders at once), holders and seats re-arm their park timers for a new
+ * `parkAfterMs`, and queued requests are looked at again.
+ */
+export function settingsApplied(change: SettingsChange): void {
+  if (change.maxContexts && budget) {
+    const max = resolveMaxContexts(settings.maxContexts, coarsePointer());
+    if (budget.size > max) refreshAreas(budget);
+    const victims = budget.setMax(max);
+    for (const c of victims) c.evicted();
   }
   // Existing holders follow the new delay (only holders run a park timer). A copy: a holder
   // that has been away longer than the new delay parks, and releases its slot, right away.
-  if (parkChanged && budget) for (const h of Array.from(budget.holders())) h.settingsChanged();
-  if (parkChanged) for (const cb of Array.from(settingsWatchers)) cb();
+  if (change.park && budget) for (const h of Array.from(budget.holders())) h.settingsChanged();
+  if (change.park) for (const cb of Array.from(settingsWatchers)) cb();
   if (queue.size > 0) kick();
-}
-
-export function runtimeSettings(): Readonly<RuntimeSettings> {
-  return settings;
-}
-
-export function isRendererMode(v: unknown): v is RendererMode {
-  return v === 'auto' || v === 'own' || v === 'shared';
 }
 
 /** The effective context limit of the page. */
@@ -409,7 +352,7 @@ export function claimBudgetWarning(): boolean {
  */
 export function resetRuntimeForTesting(calibrationHold = false): void {
   resetDisplayForTesting(calibrationHold);
-  Object.assign(settings, DEFAULTS);
+  resetSettingsForTesting();
   budget = null;
   queue.clear();
   unkick();

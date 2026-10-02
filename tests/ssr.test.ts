@@ -91,6 +91,7 @@ describe('SSR safety: importing entries in a DOM-less environment', () => {
 describe('React SSR', () => {
   it('renders the host with a poster background and the children, without a canvas', async () => {
     const { LumiCells } = await import('../src/react/index');
+    const { liveLoadState } = await import('../src/core/runtime/loader');
     const html = renderToString(
       createElement(
         LumiCells,
@@ -105,6 +106,8 @@ describe('React SSR', () => {
     expect(html).toContain('hello');
     expect(html).not.toContain('<canvas');
     expect(accessed).toEqual([]);
+    // The GPU side's chunk is never imported on the server.
+    expect(liveLoadState()).toBe('idle');
   });
 
   it('renders the same markup for equal inputs (hydration-safe)', async () => {
