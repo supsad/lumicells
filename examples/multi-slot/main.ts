@@ -17,7 +17,8 @@
  *   - slots A and C are compared between 'base' and 'changed' (they must not notice B).
  *   The result carries a verdict (PASS / FAIL with the reasons), see TOLERANCE.
  * - startup({ n, cold }): main-thread and compile cost of n own-context Engines against one
- *   device with n slots: synchronous creation, time until every program linked, first frame.
+ *   device with n slots: synchronous creation, time until every program is linked and warmed up
+ *   (with the field variant of the look), first frame.
  *   `cold` makes the shader sources unique per run (and per engine), so the browser's program
  *   cache cannot serve them. It releases the parity devices first (a page gets ~16 contexts).
  */
@@ -30,6 +31,7 @@ import { Engine } from '../../src/core/engine/engine';
 import { createRegion, placeRegion, type Region } from '../../src/core/engine/region';
 import type { RenderSlot } from '../../src/core/engine/slot';
 import { RegionSurface } from '../../src/core/engine/surface';
+import type { FrameInputs } from '../../src/core/engine/types';
 
 // Programs created per context: the device must compile once for all of its slots.
 const programCount = new WeakMap<WebGL2RenderingContext, number>();
@@ -447,10 +449,24 @@ async function runScenario(
     }
     // Reverse order on odd frames: a leak into a region drawn earlier survives either way.
     const reverse = frame % 2 === 1;
+    const inputs = ctls.map((c) => c.update(STEP_S, now));
+    // A look that needs a field variant not compiled yet (the first frame, B's patch) would draw
+    // without it until it is (see engine/field-variants.ts), each side on its own schedule:
+    // wait until both sides have it, so they draw the very same frame.
+    while (
+      lost().length === 0 &&
+      !inputs.every(
+        (f, i) =>
+          (slots[i] as RenderSlot).prepare(f) && (engines[i] as Engine).prepare(f) && dev.poll(),
+      )
+    ) {
+      dev.poll();
+      await nextFrame();
+    }
     for (let k = 0; k < ctls.length; k++) {
       const i = reverse ? ctls.length - 1 - k : k;
       const c = ctls[i] as Controller;
-      const f = c.update(STEP_S, now);
+      const f = inputs[i] as FrameInputs;
       const a = (slots[i] as RenderSlot).draw(f, surfaces[i] as RegionSurface);
       const o = (engines[i] as Engine).render(f);
       if (a && o) drawn[i] = (drawn[i] ?? 0) + 1;
@@ -650,10 +666,15 @@ async function parity(opts: { frames?: number } = {}) {
 }
 
 /** Busy-polls until `done()` (compiles run off the main thread) or the timeout. */
-function spin(done: () => boolean, timeoutMs = 30_000): number {
+/**
+ * Milliseconds until `done()` holds, checked once per frame (the warm-up fences that end a
+ * start-up pass only between tasks: see engine/warmup.ts). NaN past `timeoutMs`.
+ */
+async function until(done: () => boolean, timeoutMs = 30_000): Promise<number> {
   const t0 = performance.now();
   while (!done()) {
     if (performance.now() - t0 > timeoutMs) return Number.NaN;
+    await nextFrame();
   }
   return performance.now() - t0;
 }
@@ -701,7 +722,8 @@ async function startup(opts: { n?: number; cold?: boolean } = {}) {
     );
   }
   const ownSync = performance.now() - t0;
-  const ownLink = spin(() => engines.every((e) => e.poll()));
+  // Linked, warmed up and the look's field variant ready.
+  const ownLink = await until(() => engines.every((e) => e.prepare(f)));
   t0 = performance.now();
   for (const e of engines) {
     e.render(f);
@@ -729,7 +751,9 @@ async function startup(opts: { n?: number; cold?: boolean } = {}) {
     dev.createSlot({ paramsPrelude: dev.paramsPrelude, paramsVec4Count: layout.vec4Count }),
   );
   const slotsSync = performance.now() - tSlots;
-  const devLink = spin(() => dev.poll() || dev.isContextLost());
+  const devLink = await until(
+    () => (slots.every((s) => s.prepare(f)) && dev.poll()) || dev.isContextLost(),
+  );
   t0 = performance.now();
   slots.forEach((s, i) => {
     s.draw(f, new RegionSurface(dev, i * w, 0));
