@@ -60,6 +60,8 @@ Two plain HTML examples are published next to it:
 - **Many per page**: a page-wide WebGL context budget, lazy creation near the viewport and
   parking of far-away backgrounds, so a long list never hits the browser's context limit.
 - **React, Web Component and vanilla** entry points over one core.
+- **Small first load**: the engine (renderer, shaders, controller) is a chunk of its own that
+  downloads behind the poster, so an app pays about 16 KB gzip up front.
 - **SSR-safe**: importing does not touch `window`; the React component renders a static poster
   on the server.
 - **TypeScript first**: typed config, typed parameter paths for `set()` and `modulate()`.
@@ -306,7 +308,7 @@ off(); // unsubscribe
 | `config` | `{ config, changed, source }`, coalesced per frame |
 | `quality` | `{ scale, quality, reason }` when adaptive quality steps |
 | `warn`, `error` | Non-fatal warnings and errors |
-| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' \| 'budget' }` (see [Many instances on one page](#many-instances-on-one-page)) |
+| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' \| 'budget' \| 'load' }` (see [Many instances on one page](#many-instances-on-one-page)); `'load'`: the engine's chunk could not be downloaded, the poster stays (for every instance, until the page is reloaded) |
 | `renderer` | `{ renderer, previous, reason }` when the renderer changes: `'promote'`, `'demote'`, `'budget'` or `'explicit'` |
 | `contextlost`, `contextrestored`, `destroy` | Lifecycle |
 
@@ -354,9 +356,21 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
   `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
   `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
 - No objects or arrays are allocated per frame; uniform buffers upload only on change.
-- Bundle: an app that imports only `LumiCells` ships about 79 KB gzip (69 KB brotli) after
-  minification, the plain `<script>` bundle about 84 KB gzip. Shaders are minified at build
-  time and UI texts of the schema are not part of the runtime. `npm run size` checks the budget.
+- Bundle: the engine (WebGL passes, shaders, the controller, the shared renderer) is a chunk of
+  its own that loads lazily behind the poster. The first instance on the page starts the download,
+  so the chunk arrives while the poster shows and the page finds out where the background is;
+  every call made before (config, `modulate`, `bindElement`, `pulse`...) is applied once it is
+  there. An app that imports only `LumiCells` loads about 16 KB gzip (14 KB brotli) up front and
+  about 82 KB gzip (72 KB brotli) in total after minification; the up-front figure includes the
+  bundler's chunk loader (under 1 KB), which an app with lazy imports of its own already has.
+  The cost of the split: on a cold visit over a network the first animated frame arrives about
+  one round trip later than with a single bundle, because the chunk is requested only once the
+  app's code runs. The React component and `lumicells/element/define` start the download
+  themselves as early as they can; other apps can call `LumiCells.preload()` from their entry or
+  add a `<link rel="modulepreload">` for the engine chunk. A chunk that fails to download keeps
+  every instance on the page on its poster (`fallback` `'load'`) until the page is reloaded.
+  The plain `<script>` bundle is one file of about 85 KB gzip. Shaders are minified at build time
+  and UI texts of the schema are not part of the runtime. `npm run size` checks both budgets.
 
 Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
 1920×1080, about 0.08 ms GPU at 3840×2160 on `high`. There are no measurements on real mobile
@@ -601,8 +615,8 @@ shared look still ahead on frame rate and main-thread time (138 against 108 to 1
 ## Browser support
 
 Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2, after a
-context loss, before the first frame and while an instance waits for a context or is parked, a
-static CSS poster in the config colors is shown. With
+context loss, before the first frame (the engine's chunk loads meanwhile) and while an instance
+waits for a context or is parked, a static CSS poster in the config colors is shown. With
 float render targets the glow is computed in HDR, otherwise in RGBA8 with compression.
 
 ## Architecture
@@ -613,7 +627,9 @@ src/core
   controller    tweens, modulators, influences, pulses, lifted pixels, adaptive quality (no DOM, no GL)
   engine        WebGL2: life, field, bloom, stamp, composite and lift passes, GLSL modes
   dom           canvas and its size, element tracking, pointer
-  lumi-cells.ts the LumiCells facade
+  runtime       context budget, shared renderer, look groups; live.ts: the GPU side of an instance
+  lumi-cells.ts the LumiCells facade; with shell.ts (config, poster, observers) the eager part,
+                runtime/loader.ts imports the rest (controller, engine, runtime) on demand
 src/react       component and hooks
 src/element     Web Component
 demo            playground and demo scene
