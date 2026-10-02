@@ -3,31 +3,45 @@
  * specs (each Playwright worker evaluates this module again, with the same environment). This
  * header is the reference the READMEs point to.
  *
- * Running: `npx playwright install chromium` once, then `npm run test:e2e`. The test server
+ * Running: `npx playwright install chromium firefox webkit` once, then `npm run test:e2e`: every
+ * spec runs in the three Playwright projects `chromium`, `firefox` and `webkit`, one after the
+ * other. One browser: `npm run test:e2e -- --project=firefox` (any project name; install only
+ * that browser then, e.g. `npx playwright install firefox`). The test server
  * (tests/e2e/site/serve.mjs) builds the site like GitHub Pages (base /lumicells/) into dist/e2e,
  * with the dev-only pages under /lumicells/dev/, and serves it on LC_E2E_PORT. Outputs:
  * playwright-report/ (HTML), test-results/e2e-results.json and test-results/e2e-perf.json (the
- * CI e2e job uploads them as artifacts).
+ * CI e2e jobs upload them as artifacts, one set per browser).
  *
- *   CI=1                   GitHub Actions: SwiftShader, retries, no reuse of a running server
- *   LC_E2E_GPU=swiftshader  force the software rasterizer (what CI runs on; the default on CI
- *                           and on Linux, where headless Chromium rarely gets a GPU)
- *   LC_E2E_GPU=hardware     ask ANGLE for the platform's GPU backend (the default locally on
- *                           Windows and macOS)
+ *   CI=1                   GitHub Actions: software rendering, retries, no reuse of a running
+ *                          server
+ *   LC_E2E_GPU=swiftshader  ask for a software rasterizer (what CI runs on; the default on CI
+ *                           and on Linux): SwiftShader in Chromium, WARP (Windows) or llvmpipe
+ *                           (Linux, Mesa) in Firefox; WebKit has no switch and renders with
+ *                           whatever the platform gives it (llvmpipe on a GPU-less Linux)
+ *   LC_E2E_GPU=hardware     ask for the GPU (the default locally on Windows and macOS): ANGLE's
+ *                           platform backend in Chromium, the GPU blocklist ignored in Firefox
  *   LC_E2E_SERVER=dev       test against the Vite dev server instead of the Pages build
  *   LC_E2E_PORT=5285        port of the test server
  *   LC_E2E_REUSE=1          reuse a server already running on the port (locally)
  *   LC_E2E_PERF_SLACK=2     multiply every gross perf limit (slow machine)
  *
- * GPU_MODE is the mode asked for (Chromium flags, config-level timeout). Perf limits and the
- * specs' waits follow the renderer Chromium actually uses (the `gpu` fixture in test.ts): a
- * hardware run that silently lands on SwiftShader gets SwiftShader limits, and the smoke test
- * 'WebGL2 is available' fails with a hint instead.
+ * GPU_MODE is the mode asked for (launch options, config-level timeout). Perf limits and the
+ * specs' waits follow the renderer the browser actually uses (the `gpu` fixture in test.ts): a
+ * hardware run that silently lands on a software rasterizer gets software limits, and the smoke
+ * test 'WebGL2 is available' fails with a hint instead. WebKit reports every GPU as 'Apple GPU'
+ * (WEBGL_debug_renderer_info is masked there), so its renderer cannot be told from the string:
+ * the `gpu` fixture takes the mode asked for and the smoke test records that it could not check.
+ * A browser without WebGL2 fails every test at once with the reason (the `webgl2` fixture), so a
+ * run never passes on posters alone.
  */
 
 export const CI = !!process.env.CI;
 
 export type GpuMode = 'swiftshader' | 'hardware';
+
+/** The Playwright projects (playwright.config.ts), one per browser engine. */
+export type BrowserName = 'chromium' | 'firefox' | 'webkit';
+export const BROWSERS: readonly BrowserName[] = ['chromium', 'firefox', 'webkit'];
 
 function gpuMode(): GpuMode {
   const v = process.env.LC_E2E_GPU;
@@ -77,4 +91,18 @@ export function chromiumArgs(mode: GpuMode = GPU_MODE): string[] {
   return backend
     ? [`--use-angle=${backend}`, '--ignore-gpu-blocklist']
     : ['--ignore-gpu-blocklist'];
+}
+
+/**
+ * Firefox preferences for the GPU mode. Playwright's Firefox already allows software WebGL
+ * (webgl.forbid-software false in its playwright.cfg), which is what a GPU-less Linux runner gets:
+ * Mesa's llvmpipe. Software mode forbids the GPU outright locally (webgl.forbid-hardware: WARP on
+ * Windows, llvmpipe on Linux); on CI, where llvmpipe is all there is, nothing is forced (the
+ * smoke test checks the renderer is a software one). Hardware mode ignores the GPU blocklist,
+ * like --ignore-gpu-blocklist for Chromium. Nothing else is changed: timer precision (1 ms),
+ * context limits and the program cache stay what a Firefox user has.
+ */
+export function firefoxPrefs(mode: GpuMode = GPU_MODE): Record<string, string | number | boolean> {
+  if (mode === 'hardware') return { 'webgl.force-enabled': true };
+  return CI ? {} : { 'webgl.forbid-hardware': true };
 }

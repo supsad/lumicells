@@ -10,25 +10,25 @@
  * - mount, settle and frame timings are recorded; only gross regressions fail (see perf.ts).
  */
 import type { Page } from '@playwright/test';
-import type { GpuMode } from './support/env';
+import type { BrowserName, GpuMode } from './support/env';
 import { CONTEXT_CEILING, DESKTOP_MAX_CONTEXTS, stressUrl } from './support/pages';
-import type { PerfRecord } from './support/perf';
-import { expect, rendererNotes, test, unexpectedWarnCodes } from './support/test';
-
-/**
- * How long the visible cards may take to all come alive after the mount (hard limit), by the
- * renderer in use (the `gpu` fixture).
- */
-function settleTimeoutMs(gpu: GpuMode): number {
-  return gpu === 'swiftshader' ? 60_000 : 20_000;
-}
+import type { Limits, PerfRecord } from './support/perf';
+import {
+  browserOf,
+  expect,
+  rendererNotes,
+  startupTimeoutMs,
+  test,
+  unexpectedWarnCodes,
+} from './support/test';
 
 /**
  * Waits until the bench has mounted and every card it sees on screen shows a live canvas.
  * Returns the time since the mount (ms) and the snapshot at that moment.
  */
 async function settle(page: Page, gpu: GpuMode, minVisible: number) {
-  const limitMs = settleTimeoutMs(gpu);
+  // How long the visible cards may take to all come alive after the mount (hard limit).
+  const limitMs = startupTimeoutMs(gpu, browserOf(page));
   await page.waitForFunction(() => window.bench?.mounted === true);
   const result = await page.evaluate(
     async ({ timeoutMs, minVisible }) => {
@@ -92,6 +92,23 @@ interface ScrollOptions {
    * third of them on SwiftShader, 2 on a GPU).
    */
   unsettledSteps?: number;
+  /**
+   * Browsers where settling is recorded, not judged (the metrics keep their targets, no gross
+   * limit), with the measurement that says why (see perf.ts).
+   */
+  settleRecordedIn?: Partial<Record<BrowserName, string>>;
+}
+
+/** Limits of every browser of `why` (see ScrollOptions.settleRecordedIn): targets only. */
+function recordedIn(
+  why: Partial<Record<BrowserName, string>> | undefined,
+  target: number,
+): Limits['browsers'] {
+  if (!why) return undefined;
+  const limit = { target, gross: Number.MAX_SAFE_INTEGER };
+  return Object.fromEntries(
+    Object.entries(why).map(([b, w]) => [b, { hardware: limit, swiftshader: limit, why: w }]),
+  );
 }
 
 /**
@@ -152,18 +169,21 @@ async function scrollPass(
   // Timings: gross regressions only. Settling is judged in frames too: on SwiftShader a frame
   // of large cards takes up to a second (measured 1-4 fps), so milliseconds say little there.
   // A step that did not settle within the dwell counts in stepsNotSettled.
+  const why = opts.settleRecordedIn;
   perf.check(
     'maxSettleFrames',
     t.maxSettleFrames,
     {
       hardware: { target: 12, gross: 40 },
       swiftshader: { target: 4, gross: 12 },
+      browsers: recordedIn(why, 12),
     },
     'frames',
   );
   perf.check('maxSettleMs', t.maxSettleMs, {
     hardware: { target: 300, gross: 700 },
     swiftshader: { target: 3000, gross: 30_000 },
+    browsers: recordedIn(why, 300),
   });
   perf.check(
     'stepsNotSettled',
@@ -171,6 +191,7 @@ async function scrollPass(
     {
       hardware: { target: 0, gross: opts.unsettledSteps ?? 2 },
       swiftshader: { target: 2, gross: opts.unsettledSteps ?? Math.ceil(t.steps / 3) },
+      browsers: recordedIn(why, 0),
     },
     'steps',
   );
@@ -178,7 +199,14 @@ async function scrollPass(
 }
 
 test.describe('stress bench, default config', () => {
-  test('visible layout: 100 cards on one screen', async ({ page, problems, perf, gl, gpu }) => {
+  test('visible layout: 100 cards on one screen', async ({
+    page,
+    problems,
+    perf,
+    gl,
+    gpu,
+    browserName,
+  }, testInfo) => {
     // 10 columns x 10 rows of 130x80 cards fit 1440x900.
     await page.setViewportSize({ width: 1440, height: 900 });
     const url = stressUrl({ n: 100, layout: 'visible' });
@@ -188,6 +216,15 @@ test.describe('stress bench, default config', () => {
     perf.check('allVisibleLiveMs', settled.ms, {
       hardware: { target: 1500, gross: 10_000 },
       swiftshader: { target: 10_000, gross: 45_000 },
+      browsers: {
+        webkit: {
+          hardware: { target: 15_000, gross: 25_000 },
+          why:
+            'WebKit 26.6 (Windows port), RTX 5090: the page runs at 8-10 fps while the GPU ' +
+            "process compiles the device's programs, then the field variants' warm-up blocks " +
+            'in fenceSync (synchronous there) for 1.3 s: 7.9-13.3 s',
+        },
+      },
     });
 
     // The mount report covers 5 s after the instances were created.
@@ -239,10 +276,19 @@ test.describe('stress bench, default config', () => {
       hardware: { target: 60, gross: 500 },
       swiftshader: { target: 150, gross: 1500 },
     });
-    perf.check('mountMaxLongTaskMs', mount.maxLongTaskMs, {
-      hardware: { target: 50, gross: 500 },
-      swiftshader: { target: 1000, gross: 4000 },
-    });
+    // The Long Tasks API is Chromium's: elsewhere the bench reports null and the longest frame
+    // after the mount (maxFrameGapMs, in the report) is all there is.
+    if (mount.maxLongTaskMs === null) {
+      testInfo.annotations.push({
+        type: 'skipped-check',
+        description: `mountMaxLongTaskMs: no Long Tasks API in ${browserName}`,
+      });
+    } else {
+      perf.check('mountMaxLongTaskMs', mount.maxLongTaskMs, {
+        hardware: { target: 50, gross: 500 },
+        swiftshader: { target: 1000, gross: 4000 },
+      });
+    }
     perf.check('frameWorkMsP95', m.workMsP95, {
       hardware: { target: 8, gross: 50 },
       swiftshader: { target: 30, gross: 200 },
@@ -285,6 +331,19 @@ test.describe('stress bench, default config', () => {
       {
         dwellMs: sw ? 3000 : 700,
         ...(sw ? { unsettledSteps: Number.MAX_SAFE_INTEGER } : {}),
+        // A card that scrolls in takes a new own context: where creating one costs seconds, its
+        // steps end unsettled, and settling is recorded, not judged, as on SwiftShader.
+        settleRecordedIn: {
+          firefox:
+            'Firefox, D3D11, RTX 5090: every new own context compiles its programs anew (no ' +
+            'program cache across contexts, no KHR_parallel_shader_compile: 1.6-1.7 s with the ' +
+            'main thread waiting), longer than a 700 ms step: 5-12 of 19 steps unsettled, ' +
+            'settled ones up to 79 frames / 1950 ms',
+          webkit:
+            "WebKit 26.6 (Windows port), RTX 5090: every new own context's warm-up blocks in " +
+            'fenceSync (synchronous there) for 1.2-1.7 s, the page at 0.4-12 fps meanwhile: 17 of ' +
+            '19 steps unsettled',
+        },
       },
     );
     expect(pass.probe.created, 'contexts created (the budget was exercised)').toBeGreaterThan(

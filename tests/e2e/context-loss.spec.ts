@@ -14,19 +14,33 @@
  * background shows through), a white box in a headed one.
  */
 import type { Page } from '@playwright/test';
-import type { GpuMode } from './support/env';
+import type { BrowserName, GpuMode } from './support/env';
 import { CONTEXT_CEILING, DESKTOP_MAX_CONTEXTS, stressUrl } from './support/pages';
 import { pageShot, pixelStats, type Rect } from './support/pixels';
-import { expect, rendererNotes, test } from './support/test';
+import { browserOf, expect, rendererNotes, startupTimeoutMs, test } from './support/test';
 
 /**
- * How long lossTest() watches, by the renderer in use (the `gpu` fixture): the restore comes
- * after 0.5 s, then the device or engines are rebuilt (programs compiled again: 1-4 s on
- * SwiftShader locally, more on a CI runner).
+ * The longest lossTest() watches (it stops SETTLE_MS after every card is live again), by the
+ * renderer in use (the `gpu` fixture) and the browser: the restore comes after 0.5 s, then the
+ * device or engines are rebuilt (programs compiled again: 1-4 s on SwiftShader locally, more on a
+ * CI runner). Firefox keeps no program cache across contexts and has no
+ * KHR_parallel_shader_compile: every restored context compiles its programs anew, one after the
+ * other in the GPU process (measured on Windows/D3D11, RTX 5090: 1.6-1.7 s per context, 4 own
+ * contexts live again after 7.0-8.0 s). WebKit (Windows port) compiles a restored context's
+ * programs anew too, one context after the other, and blocks in fenceSync (a synchronous call
+ * there) meanwhile (4 own contexts: 9.6-17.0 s).
  */
-function watchMs(gpu: GpuMode): number {
+function watchMs(gpu: GpuMode, browser: BrowserName): number {
+  if (browser !== 'chromium') return 30_000;
   return gpu === 'swiftshader' ? 15_000 : 3000;
 }
+
+/**
+ * How long the watch goes on once every card is live again: the screenshots cover the recovery
+ * and a second of drawing after it, not whatever the cards do later (an adaptive quality step
+ * resizes their canvases a few seconds after they start drawing).
+ */
+const SETTLE_MS = 1000;
 
 /** Chrome's console notes about GL calls on a lost context (expected while it is lost). */
 const LOSS_NOTES = [/CONTEXT_LOST_WEBGL/];
@@ -36,7 +50,7 @@ async function settleLive(page: Page, gpu: GpuMode, n: number) {
   await expect
     .poll(() => page.evaluate(() => window.bench.snapshot().instances.visibleLive), {
       message: 'visible cards live',
-      timeout: gpu === 'swiftshader' ? 60_000 : 20_000,
+      timeout: startupTimeoutMs(gpu, browserOf(page)),
     })
     .toBe(n);
 }
@@ -66,7 +80,10 @@ interface Looks {
  * Runs bench.lossTest() and, while it watches, screenshots the page as often as it can. Returns
  * the bench's report, what the cards looked like before the loss and during it.
  */
-async function lossWithScreenshots(page: Page, opts: { count: number; watchMs: number }) {
+async function lossWithScreenshots(
+  page: Page,
+  opts: { count: number; watchMs: number; settleMs?: number },
+) {
   const rects = await cardRects(page);
   const look = (into: Looks, img: Awaited<ReturnType<typeof pageShot>>) => {
     into.shots++;
@@ -118,6 +135,7 @@ test.describe('context loss', () => {
     perf,
     gl,
     gpu,
+    browserName,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(stressUrl({ n: 20, layout: 'visible' }));
@@ -128,7 +146,8 @@ test.describe('context loss', () => {
       during,
     } = await lossWithScreenshots(page, {
       count: 4,
-      watchMs: watchMs(gpu),
+      watchMs: watchMs(gpu, browserName),
+      settleMs: SETTLE_MS,
     });
     perf.set('loss', { ...r, end: undefined, centers: undefined, params: undefined });
     perf.set('screenshots', { before, during });
@@ -149,6 +168,14 @@ test.describe('context loss', () => {
     perf.check('allLiveAgainMs', r.allLiveAgainMs, {
       hardware: { target: 1200, gross: 2500 },
       swiftshader: { target: 4000, gross: 12_000 },
+      browsers: {
+        firefox: {
+          hardware: { target: 2500, gross: 5000 },
+          why:
+            'Firefox, D3D11, RTX 5090: the restored device compiles its programs anew (no ' +
+            'program cache across contexts, 1.6-1.7 s) after the 0.5 s restore: 2.3-3.3 s',
+        },
+      },
     });
     expect(problems.unexpected([...LOSS_NOTES, ...rendererNotes(gl)])).toEqual([]);
   });
@@ -159,6 +186,7 @@ test.describe('context loss', () => {
     perf,
     gl,
     gpu,
+    browserName,
   }) => {
     // Renderer 'own', as many cards as the default budget has contexts: all of them draw.
     const n = DESKTOP_MAX_CONTEXTS;
@@ -171,7 +199,8 @@ test.describe('context loss', () => {
       during,
     } = await lossWithScreenshots(page, {
       count: 4,
-      watchMs: watchMs(gpu),
+      watchMs: watchMs(gpu, browserName),
+      settleMs: SETTLE_MS,
     });
     perf.set('loss', { ...r, end: undefined, centers: undefined, params: undefined });
     perf.set('screenshots', { before, during });
@@ -196,6 +225,22 @@ test.describe('context loss', () => {
     perf.check('allLiveAgainMs', r.allLiveAgainMs, {
       hardware: { target: 1200, gross: 2500 },
       swiftshader: { target: 4000, gross: 12_000 },
+      browsers: {
+        firefox: {
+          hardware: { target: 8000, gross: 12_000 },
+          why:
+            'Firefox, D3D11, RTX 5090: 4 restored contexts each compile their programs anew, one ' +
+            'after the other in the GPU process (no program cache across contexts, 1.6-1.7 s ' +
+            'each): 7.9-10.2 s',
+        },
+        webkit: {
+          hardware: { target: 15_000, gross: 25_000 },
+          why:
+            'WebKit 26.6 (Windows port), RTX 5090: restored contexts compile their programs ' +
+            'anew, one after the other, and each warm-up blocks in fenceSync (synchronous ' +
+            'there) for 1.2-1.8 s: 9.6-17.0 s',
+        },
+      },
     });
     expect(problems.unexpected([...LOSS_NOTES, ...rendererNotes(gl)])).toEqual([]);
   });

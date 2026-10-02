@@ -5,10 +5,15 @@
  *
  * Determinism: an instance's controller seeds its own generator from Math.random once, in its
  * constructor, so Math.random is replaced by one seeded generator per construction. Both
- * instances of a pair are granted their GPU side at the end of the same frame
- * (createPerFrame lets the own context and the shared device be created together), subscribe
+ * instances of a pair are granted their GPU side at the end of the same frame (createPerFrame
+ * leaves room for the own context, and the shared renderer's device exists already: an anchor
+ * instance holds it from before the first pair, so the shared one only needs a seat), subscribe
  * to the shared ticker together and so see the same frame deltas; the 'frame' event's `time`
- * (the sum of those deltas) is compared to prove it. Things that are not deterministic are
+ * (the sum of those deltas) is compared to prove it. Without the anchor, the first pair would
+ * need two contexts at once, and where programs link synchronously (no
+ * KHR_parallel_shader_compile: Firefox) the own engine compiles and warms up its programs in the
+ * frame it is created; no context is created while a warm-up runs (engine/warmup.ts), so the
+ * device would come frames later and the pair's clocks would start apart. Things that are not deterministic are
  * switched off: the Life automaton (its GPU state starts at an instance's first drawn frame,
  * which depends on when its programs finished compiling), pointer interaction and adaptive
  * quality (it reacts to measured CPU/GPU times, which differ between the two renderers).
@@ -98,6 +103,8 @@ interface PairResult {
   unpremultiplied: Diff | null;
   ownState: string;
   sharedState: string;
+  /** How the shared renderer copied the compared frame: direct, staged (drawn) or staged (read). */
+  copyPath: string;
   failures: string[];
 }
 
@@ -261,6 +268,12 @@ async function runPair(s: PairSpec): Promise<PairResult> {
   }
   const ownState = own.getStats().state;
   const sharedState = shared.getStats().state;
+  const st = shared.getStats().shared;
+  const copyPath = !st?.copyStaged
+    ? 'direct'
+    : st.copyReadback
+      ? 'staged (read)'
+      : 'staged (drawn)';
   if (own.renderer !== 'own' || shared.renderer !== 'shared') failures.push('wrong renderers');
   return {
     name: s.name,
@@ -273,6 +286,7 @@ async function runPair(s: PairSpec): Promise<PairResult> {
     unpremultiplied,
     ownState,
     sharedState,
+    copyPath,
     failures,
   };
 }
@@ -340,13 +354,25 @@ function fmt(d: Diff | null): string {
   return `max ${d.max}, >0 ${d.n1}, >1 ${d.n2} of ${d.pixels}`;
 }
 
+/** A small shared instance that holds the shared renderer's device (see the header). */
+async function anchor(): Promise<LumiCells> {
+  const el = document.createElement('div');
+  el.style.cssText = 'width: 32px; height: 20px; position: relative';
+  pairsEl.append(el);
+  const lc = new LumiCells(el, { config: spec('anchor', 1, {}).config, renderer: 'shared' });
+  await new Promise<void>((r) => lc.on('ready', () => r()));
+  return lc;
+}
+
 async function run() {
   pairsEl.replaceChildren();
   statusEl.textContent = 'running...';
+  const held = await anchor();
   const results: PairResult[] = [];
   for (const s of SPECS) results.push(await runPair(s));
   // Last: it changes the page-wide budget while it runs.
   const grids = [await runGridPair('grid under a tiny budget', 15, 0.02)];
+  held.destroy();
   const failures = [...results, ...grids].flatMap((r) => r.failures.map((f) => `${r.name}: ${f}`));
   const verdict = failures.length === 0 ? 'PASS' : 'FAIL';
   const lines = [
@@ -356,7 +382,7 @@ async function run() {
     `own vs shared, same seed and time, ${WAIT_FRAMES} frames after both were ready; tolerance 1 LSB (premultiplied)`,
     ...results.map(
       (r) =>
-        `[${r.name}] ${r.size} t=${r.time.toFixed(3)} s  premultiplied: ${fmt(r.premultiplied)}` +
+        `[${r.name}] ${r.size} t=${r.time.toFixed(3)} s  copy ${r.copyPath}  premultiplied: ${fmt(r.premultiplied)}` +
         (r.opaque
           ? ''
           : `\n    margin pixels (0 < a < 255): ${r.marginPixels}; unpremultiplied (a >= 16): ${fmt(r.unpremultiplied)}`),

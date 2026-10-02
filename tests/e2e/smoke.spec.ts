@@ -8,17 +8,28 @@ import { PAGES } from './support/pages';
 import { canvasShot, changedShare, pixelStats } from './support/pixels';
 import { expect, rendererNotes, test } from './support/test';
 
-test('WebGL2 is available (records the renderer)', async ({ gl, perf }) => {
+test('WebGL2 is available (records the renderer)', async ({
+  gl,
+  gpu,
+  perf,
+  browserName,
+}, testInfo) => {
   perf.set('webgl', gl);
-  expect(gl.webgl2, 'WebGL2 context in headless Chromium').toBe(true);
-  if (GPU_MODE === 'swiftshader') {
-    expect(gl.software, `SwiftShader requested, got ${gl.renderer}`).toBe(true);
+  expect(gl.webgl2, `WebGL2 context in headless ${browserName}`).toBe(true);
+  if (gl.masked) {
+    // WebKit names no GPU: the run goes by the mode asked for (the `gpu` fixture).
+    testInfo.annotations.push({
+      type: 'renderer-masked',
+      description: `${browserName} reports '${gl.renderer}': hardware or software cannot be told, ${gpu} limits apply`,
+    });
+  } else if (GPU_MODE === 'swiftshader') {
+    expect(gl.software, `software rasterizer requested, got ${gl.renderer}`).toBe(true);
   } else {
     // The other specs still run (perf limits and waits follow the renderer in use, see the `gpu`
     // fixture); this one says why a hardware run is not one.
     expect(
       gl.software,
-      `hardware mode requested but Chromium uses ${gl.renderer}; set LC_E2E_GPU=swiftshader`,
+      `hardware mode requested but ${browserName} uses ${gl.renderer}; set LC_E2E_GPU=swiftshader`,
     ).toBe(false);
   }
 });

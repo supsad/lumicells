@@ -27,8 +27,11 @@ test('turning a mode on: its weight waits for the variant, then fades in', async
   // Let start-up settle (warm-ups, the first frames).
   await page.waitForTimeout(1000);
 
+  // At least 3 s, then until the weight is there (the variant may take a while to compile where
+  // the browser keeps no program cache: Firefox and WebKit compile every context's programs).
   const log = await page.evaluate(
-    ([mode, weight]) => window.lifecycle.setModeWeight(mode as string, weight as number, 3000),
+    ([mode, weight]) =>
+      window.lifecycle.setModeWeight(mode as string, weight as number, 3000, 15_000),
     [MODE, WEIGHT],
   );
   const start = log.findIndex((f) => f[2] > 0);
@@ -51,6 +54,20 @@ test('turning a mode on: its weight waits for the variant, then fades in', async
   perf.check('modeToggleMaxFrameGapMs', maxGap, {
     hardware: { target: 300, gross: 2000 },
     swiftshader: { target: 2000, gross: 10_000 },
+    browsers: {
+      firefox: {
+        hardware: { target: 1500, gross: 3000 },
+        why:
+          'Firefox, D3D11, RTX 5090: no KHR_parallel_shader_compile, the variant links while the ' +
+          'main thread waits for its link status: 570-1131 ms',
+      },
+      webkit: {
+        hardware: { target: 2500, gross: 4000 },
+        why:
+          "WebKit 26.6 (Windows port), RTX 5090: the variant's warm-up blocks in fenceSync " +
+          '(synchronous there) while the GPU process compiles it: up to 2567 ms',
+      },
+    },
   });
   expect(problems.unexpected(rendererNotes(gl))).toEqual([]);
 });

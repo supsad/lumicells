@@ -1,7 +1,7 @@
 /**
  * Reporter that merges the `perf` attachments of every test (see perf.ts), with each test's
- * status and duration, into one JSON file: the timings artifact of a run (CI uploads it).
- * The last attempt of a retried test wins.
+ * project (browser), status and duration, into one JSON file: the timings artifact of a run (CI
+ * uploads one per browser). The last attempt of a retried test wins.
  *
  * Options: { outputFile } (default test-results/e2e-perf.json, relative to the config).
  */
@@ -18,6 +18,8 @@ import type {
 import { CI, GPU_MODE, PERF_SLACK, SERVER } from './env';
 
 interface Entry {
+  /** Playwright project: the browser engine (chromium, firefox, webkit). */
+  project: string;
   title: string;
   file: string;
   status: TestResult['status'];
@@ -64,6 +66,7 @@ export default class PerfReporter implements Reporter {
       });
     }
     this.#entries.set(test.id, {
+      project: test.parent.project()?.name ?? '',
       title: test.titlePath().filter(Boolean).slice(1).join(' > '),
       file: test.location.file.replace(/\\/g, '/').replace(/^.*\/tests\/e2e\//, ''),
       status: result.status,

@@ -9,7 +9,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import config from '../../playwright.config';
-import { MULTI_SLOT_WAIVERS, multiSlotWaivers } from './support/known-issues';
+import { BROWSERS, chromiumArgs } from './support/env';
+import { CONSOLE_WAIVERS, MULTI_SLOT_WAIVERS, multiSlotWaivers } from './support/known-issues';
 import { MULTI_SLOT, multiSlotUrl } from './support/pages';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -20,6 +21,24 @@ describe('playwright config', () => {
     expect(config.testMatch).toBe('**/*.spec.ts');
     expect(config.testDir).toBe('tests/e2e');
     expect(config.retries).toBeLessThanOrEqual(1);
+  });
+
+  it('has one project per browser engine, named after it', () => {
+    const projects = config.projects ?? [];
+    expect(projects.map((p) => p.name)).toEqual([...BROWSERS]);
+    for (const p of projects) expect(p.use?.browserName).toBe(p.name);
+  });
+
+  it('gives the Chromium flags to Chromium only', () => {
+    const projects = config.projects ?? [];
+    const chromium = projects.find((p) => p.name === 'chromium');
+    expect(chromium?.use?.launchOptions?.args).toEqual(chromiumArgs());
+    for (const p of projects.filter((x) => x.name !== 'chromium')) {
+      expect(p.use?.launchOptions?.args, p.name).toBeUndefined();
+    }
+    // No shared launch options or browser a project could pick up by accident.
+    expect(config.use?.launchOptions).toBeUndefined();
+    expect(config.use?.browserName).toBeUndefined();
   });
 });
 
@@ -33,6 +52,24 @@ describe('parity verdicts are not retried', () => {
   it('never raises the retries again', () => {
     expect(spec).not.toMatch(/retries:\s*[1-9]/);
     expect(spec).not.toMatch(/test\.fail\(|\.fixme\(/);
+  });
+});
+
+describe('console waivers (browser behavior the library cannot avoid)', () => {
+  it('each names one browser, the version it was seen with, the whole message and why', () => {
+    for (const w of CONSOLE_WAIVERS) {
+      expect(BROWSERS).toContain(w.browser);
+      expect(w.seen).toMatch(/\d/);
+      // Anchored: a waiver never takes a message off the list by a part of its text.
+      expect(w.text.source.startsWith('^') && w.text.source.endsWith('$'), w.text.source).toBe(
+        true,
+      );
+      expect(w.note.length).toBeGreaterThan(80);
+    }
+  });
+
+  it('waives nothing in Chromium', () => {
+    expect(CONSOLE_WAIVERS.filter((w) => w.browser === 'chromium')).toEqual([]);
   });
 });
 
@@ -123,8 +160,11 @@ describe('e2e docs (the env.ts header is the reference the READMEs point to)', (
 
   it('says how to run it and where the outputs go', () => {
     expect(read('package.json')).toContain('"test:e2e": "playwright test"');
-    expect(header).toContain('npx playwright install chromium');
+    expect(header).toContain('npx playwright install chromium firefox webkit');
     expect(header).toContain('npm run test:e2e');
+    // One browser: its project, every project named in the header.
+    expect(header).toContain('--project=');
+    for (const b of BROWSERS) expect(header, b).toContain(`\`${b}\``);
     const config = read('playwright.config.ts');
     for (const out of [
       'playwright-report',

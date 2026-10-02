@@ -43,13 +43,16 @@ const lifecycle = {
 
   /**
    * Sets a mode weight of the first instance (with its config transition, default 600 ms) and
-   * records every animation frame for `ms`: [ms since the change, gap to the previous frame,
-   * effective weight]. For the live-change spec.
+   * records every animation frame for `ms`, then on until the weight has reached `weight` (at most
+   * `maxMs` in all): [ms since the change, gap to the previous frame, effective weight]. For the
+   * live-change spec (the variant the mode needs compiles first, which takes longer where the
+   * browser has no program cache).
    */
   async setModeWeight(
     mode: string,
     weight: number,
     ms = 2500,
+    maxMs = ms,
   ): Promise<[number, number, number][]> {
     const c = instances[0];
     if (!c) return [];
@@ -58,10 +61,13 @@ const lifecycle = {
     const t0 = performance.now();
     c.setConfig({ modes: { [mode]: { weight } } } as Parameters<LumiCells['setConfig']>[0]);
     let last = t0;
-    while (performance.now() - t0 < ms) {
+    for (;;) {
       const t = await nextFrame();
-      log.push([Math.round(t - t0), Math.round(t - last), c.getEffective(path)]);
+      const w = c.getEffective(path);
+      log.push([Math.round(t - t0), Math.round(t - last), w]);
       last = t;
+      const elapsed = performance.now() - t0;
+      if (elapsed >= maxMs || (elapsed >= ms && Math.abs(w - weight) < 1e-6)) break;
     }
     return log;
   },

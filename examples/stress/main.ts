@@ -178,8 +178,14 @@ interface Recording {
 }
 let rec: Recording | null = null;
 let lastRaf = -1;
+/** Longest gap between animation frames in the 5 s after the mount (every browser has it). */
+let mountMaxGap = 0;
 function rafLoop(now: number): void {
   if (rec && lastRaf >= 0) rec.deltas.push(now - lastRaf);
+  const sinceMount = now - mountInfo.startAt;
+  if (mountInfo.startAt >= 0 && lastRaf >= 0 && sinceMount >= 0 && sinceMount < 5000) {
+    mountMaxGap = Math.max(mountMaxGap, now - lastRaf);
+  }
   lastRaf = now;
   requestAnimationFrame(rafLoop);
 }
@@ -190,12 +196,21 @@ interface LongTask {
   duration: number;
 }
 const longTasks: LongTask[] = [];
-try {
+/**
+ * Entry types this browser reports. Observing one it does not know is not an error: Firefox logs
+ * a console warning ('Ignoring unsupported entryTypes'), which the e2e suite counts as a problem.
+ */
+function observable(type: string): boolean {
+  return (PerformanceObserver.supportedEntryTypes ?? []).includes(type);
+}
+/** The Long Tasks API (Chromium only): without it the long task figures are null, not 0. */
+const hasLongTasks = observable('longtask');
+/** Long animation frames (Chromium 123+). */
+const hasLongFrames = observable('long-animation-frame');
+if (hasLongTasks) {
   new PerformanceObserver((list) => {
     for (const e of list.getEntries()) longTasks.push({ start: e.startTime, duration: e.duration });
   }).observe({ type: 'longtask', buffered: true });
-} catch {
-  // Long Tasks API unavailable (Firefox, Safari).
 }
 /** Long animation frames (Chrome 123+): a frame whose tasks + rendering took over 50 ms. */
 interface LongFrame extends LongTask {
@@ -216,7 +231,7 @@ interface LoafEntry extends PerformanceEntry {
   }[];
 }
 const longFrames: LongFrame[] = [];
-try {
+if (hasLongFrames) {
   new PerformanceObserver((list) => {
     for (const e of list.getEntries() as LoafEntry[]) {
       const end = e.startTime + e.duration;
@@ -235,8 +250,6 @@ try {
       });
     }
   }).observe({ type: 'long-animation-frame', buffered: true });
-} catch {
-  // LoAF unavailable.
 }
 
 // -------------------------------------------------------------------------------------------
@@ -854,7 +867,9 @@ async function measure(ms = 5000) {
     /** Shared regions drawn per frame (sampled): min and max over the window. */
     sharedDraws: draws.length ? [Math.min(...draws), Math.max(...draws)] : null,
     gpuReporting,
-    longTasks: { count: lt.length, totalMs: Math.round(lt.reduce((a, t) => a + t.duration, 0)) },
+    longTasks: hasLongTasks
+      ? { count: lt.length, totalMs: Math.round(lt.reduce((a, t) => a + t.duration, 0)) }
+      : null,
     contextChurnInWindow: {
       created: c1.created - c0.created,
       lost: c1.lost - c0.lost,
@@ -1023,11 +1038,16 @@ async function scrollThrough(opts: { dwellMs?: number; stepFraction?: number } =
  *   to the backgrounds), pushing the browser past its limit so that it evicts the oldest ones,
  *   ours; evicted contexts are not restored. The page's contexts are released at the end.
  * `centers` are the affected cards' centres in viewport px, for a driver that samples
- * screenshot pixels during the loss.
+ * screenshot pixels during the loss. With `settleMs` the watch ends that long after all of them
+ * are live again (at the latest after `watchMs`): a slow recovery gets a long window without
+ * every run waiting it out.
  */
-async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: number } = {}) {
+async function lossTest(
+  opts: { count?: number; watchMs?: number; settleMs?: number; appContexts?: number } = {},
+) {
   const count = opts.count ?? 4;
   const watchMs = opts.watchMs ?? 2000;
+  const settleMs = opts.settleMs ?? Number.POSITIVE_INFINITY;
   const appContexts = Math.max(0, opts.appContexts ?? 0);
   const liveNow = entries.filter(
     (e) => e.card.visible && e.cells.getStats().state === 'live' && cardLook(e) === 'live',
@@ -1081,6 +1101,7 @@ async function lossTest(opts: { count?: number; watchMs?: number; appContexts?: 
   let maxVisibleDead = 0;
   let allLiveAgainMs = -1;
   while (performance.now() - start < watchMs) {
+    if (allLiveAgainMs >= 0 && performance.now() - start - allLiveAgainMs >= settleMs) break;
     await nextFrame();
     frames++;
     let dead = 0;
@@ -1179,7 +1200,10 @@ function mount() {
   return {
     syncMs: round(mountInfo.syncMs, 1),
     longTasks: lt.map((t) => ({ at: Math.round(t.start - start), ms: Math.round(t.duration) })),
-    maxLongTaskMs: maxOf(lt.map((t) => t.duration)),
+    /** null where the browser has no Long Tasks API (Firefox, Safari). */
+    maxLongTaskMs: hasLongTasks ? maxOf(lt.map((t) => t.duration)) : null,
+    /** The longest frame of those 5 s, from requestAnimationFrame (every browser). */
+    maxFrameGapMs: Math.round(mountMaxGap),
     longFrames: lf.map((t) => ({
       at: Math.round(t.start - start),
       ms: Math.round(t.duration),
@@ -1188,8 +1212,8 @@ function mount() {
       styleLayoutMs: Math.round(t.styleLayoutMs),
       scripts: t.scripts.map((sc) => `${sc.invoker} ${sc.fn} ${Math.round(sc.ms)}ms`),
     })),
-    maxLongFrameMs: maxOf(lf.map((t) => t.duration)),
-    maxLongFrameBlockingMs: maxOf(lf.map((t) => t.blocking)),
+    maxLongFrameMs: hasLongFrames ? maxOf(lf.map((t) => t.duration)) : null,
+    maxLongFrameBlockingMs: hasLongFrames ? maxOf(lf.map((t) => t.blocking)) : null,
   };
 }
 

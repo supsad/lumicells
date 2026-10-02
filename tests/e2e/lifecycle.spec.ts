@@ -1,7 +1,9 @@
 /**
  * Lifecycle leaks: 20 cycles of mounting LumiCells instances and destroying them again (on the
  * fixture page tests/e2e/site/lifecycle.html) must leave no WebGL context alive, no canvas in the
- * document or held anywhere (after a GC), and the JS heap where it was.
+ * document or held anywhere (after a GC: page.requestGC(), in every browser), and the JS heap
+ * where it was (Chromium only: reading the heap after a full GC needs CDP, which Firefox and
+ * WebKit do not have; the other checks run there as well).
  *
  * The cycles rotate through both renderers and three moments of destruction:
  * - shared / live: 100 small cards ('auto' puts them on the shared renderer), destroyed once
@@ -55,11 +57,25 @@ test('mount and destroy instances 20 times: no contexts, canvases or heap left',
   page,
   problems,
   perf,
-}) => {
+  browserName,
+}, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(LIFECYCLE);
   await page.waitForFunction(() => window.lifecycle !== undefined);
-  const session = await cdp(page);
+  const session = browserName === 'chromium' ? await cdp(page) : null;
+  if (!session) {
+    testInfo.annotations.push({
+      type: 'skipped-check',
+      description: `JS heap growth: no CDP in ${browserName} (contexts and canvases are still checked)`,
+    });
+  }
+  /** The heap after a full GC (Chromium), or null. Every browser collects garbage first. */
+  const heap = async (): Promise<number | null> => {
+    if (session) return heapAfterGc(session);
+    await page.requestGC();
+    await page.requestGC();
+    return null;
+  };
 
   const cycle = async ({ renderer, moment }: Kind) =>
     page.evaluate(
@@ -116,9 +132,9 @@ test('mount and destroy instances 20 times: no contexts, canvases or heap left',
       counters: { ...window.__glProbe.counters },
     }));
 
-  const heapStart = await heapAfterGc(session);
+  const heapStart = await heap();
   for (const kind of WARMUP) await cycle(kind);
-  const heapBase = await heapAfterGc(session);
+  const heapBase = await heap();
   const base = await state();
 
   const cycles = [];
@@ -145,15 +161,17 @@ test('mount and destroy instances 20 times: no contexts, canvases or heap left',
 
   // Every context released, every canvas collectable.
   await expect.poll(async () => (await state()).liveContexts, { message: 'live contexts' }).toBe(0);
-  const heapEnd = await heapAfterGc(session);
+  const heapEnd = await heap();
   const end = await state();
-  await session.detach();
+  await session?.detach();
 
+  const mb = (b: number | null) => (b === null ? null : +(b / 1048576).toFixed(2));
   perf.set('heap', {
-    startMB: +(heapStart / 1048576).toFixed(2),
-    baselineMB: +(heapBase / 1048576).toFixed(2),
-    endMB: +(heapEnd / 1048576).toFixed(2),
-    growthKB: Math.round((heapEnd - heapBase) / 1024),
+    startMB: mb(heapStart),
+    baselineMB: mb(heapBase),
+    endMB: mb(heapEnd),
+    growthKB:
+      heapEnd === null || heapBase === null ? null : Math.round((heapEnd - heapBase) / 1024),
   });
   perf.set('state', { base, end });
   perf.set('cycles', cycles);
@@ -161,14 +179,25 @@ test('mount and destroy instances 20 times: no contexts, canvases or heap left',
   perf.check('cycleLiveMsMax', Math.max(...waited), {
     hardware: { target: 2000, gross: 10_000 },
     swiftshader: { target: 8000, gross: 30_000 },
+    browsers: {
+      firefox: {
+        hardware: { target: 8000, gross: 15_000 },
+        why:
+          'Firefox, D3D11, RTX 5090: an own cycle creates 4 contexts that each compile their ' +
+          'programs anew, one after the other (no program cache across contexts, 1.6-1.7 s ' +
+          'each): 6.8-10.2 s',
+      },
+    },
   });
 
   expect(end.counters.evicted, 'contexts lost to the browser').toBe(0);
   expect(end.liveContexts, 'live WebGL contexts').toBe(0);
   expect(end.canvasesInDocument, 'canvases in the document').toBe(0);
   expect(end.canvasesAlive.total, 'canvases still alive after GC').toBe(0);
-  expect(heapEnd - heapBase, `JS heap growth over ${CYCLES} cycles (bytes)`).toBeLessThanOrEqual(
-    HEAP_TOLERANCE_BYTES,
-  );
+  if (heapEnd !== null && heapBase !== null) {
+    expect(heapEnd - heapBase, `JS heap growth over ${CYCLES} cycles (bytes)`).toBeLessThanOrEqual(
+      HEAP_TOLERANCE_BYTES,
+    );
+  }
   expect(problems.unexpected()).toEqual([]);
 });
