@@ -269,6 +269,8 @@ export class LiveInstance {
   #areaBucket = -1;
   #readyEmitted = false;
   #drawnSinceMount = false;
+  /** Frames the engine drew into its canvas while it was still hidden (see #render). */
+  #hiddenDraws = 0;
   #lastNow = -1;
   #skip = 0;
   #accMs = 0;
@@ -754,6 +756,7 @@ export class LiveInstance {
     // engine/field-variants.ts), not from the first frame the instance renders.
     engine.prepare(this.#controller.frame);
     this.#drawnSinceMount = false;
+    this.#hiddenDraws = 0;
     this.#controller.setMaxDrawableSize(engine.caps.maxDrawableSize);
     if (this.#hookedCanvas !== canvas) {
       this.#releaseCanvas();
@@ -843,6 +846,7 @@ export class LiveInstance {
     const s = this.#s;
     this.#lost = true;
     this.#drawnSinceMount = false;
+    this.#hiddenDraws = 0;
     // A lost context's canvas paints a blank box over everything: hide it until the first frame
     // drawn on the restored context.
     this.#view.setCanvasVisible(false);
@@ -1830,9 +1834,13 @@ export class LiveInstance {
       noteGpuWork();
       c.commitFrame();
       this.#drawnAt = now;
+      // A new (or restored) canvas is shown with its second frame, when the first one has
+      // reached the screen. WebKit presents a context's frame once its GPU process gets to it,
+      // which can be well after the style change that reveals the canvas (other contexts
+      // compiling meanwhile): shown with its first frame, an opaque canvas flashed black.
       if (!this.#drawnSinceMount) {
-        noteFirstDraw(now);
-        this.#showFirstFrame();
+        if (this.#hiddenDraws++ === 0) noteFirstDraw(now);
+        else this.#showFirstFrame();
       }
     }
     this.#finishFrame(performance.now() - t0, dt, ideal, now, engine.gpuTimeMs);
@@ -2048,6 +2056,7 @@ export class LiveInstance {
   #showFirstFrame(): void {
     const view = this.#view;
     this.#drawnSinceMount = true;
+    this.#hiddenDraws = 0;
     view.setCanvasVisible(true);
     view.dropStandIn();
     view.hidePoster();

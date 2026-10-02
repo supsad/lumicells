@@ -1199,7 +1199,8 @@ describe('LumiCells with renderer: shared', () => {
 
   it('switches between own and shared at runtime', async () => {
     const pl = create({ renderer: 'own' });
-    frames(2);
+    // Granted, drawn once, shown with its second frame ('ready').
+    frames(3);
     const own = pl.canvas as HTMLCanvasElement;
     expect(pl.getStats()).toMatchObject({ renderer: 'own', state: 'live', presentMs: null });
     expect(contextsInUse()).toBe(1);

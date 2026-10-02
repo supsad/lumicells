@@ -706,6 +706,10 @@ describe('context loss', () => {
     expect(canvas.style.visibility).toBe('hidden');
     FakeEngine.compiling = false;
     frame();
+    // Drawn once: shown with its second frame, once the first one has reached the screen
+    // (WebKit presents a context's frames later than the style change that would reveal it).
+    expect(canvas.style.visibility).toBe('hidden');
+    frame();
     expect(canvas.style.visibility).toBe('');
     canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
     expect(canvas.style.visibility).toBe('hidden');
@@ -719,12 +723,14 @@ describe('context loss', () => {
     expect(FakeEngine.instances.length).toBe(2);
     expect(canvas.style.visibility).toBe('hidden');
     frame();
+    expect(canvas.style.visibility).toBe('hidden');
+    frame();
     expect(canvas.style.visibility).toBe('');
   });
 
   it('hides the canvas in the first frame after a loss, before the loss event arrives', () => {
     const pl = create();
-    frames(2);
+    frames(3);
     const canvas = pl.canvas as HTMLCanvasElement;
     expect(canvas.style.visibility).toBe('');
     const ev: string[] = [];
@@ -744,6 +750,7 @@ describe('context loss', () => {
     canvas.dispatchEvent(new Event('webglcontextrestored'));
     frame();
     expect(pl.getStats().state).toBe('live');
+    frame();
     expect(canvas.style.visibility).toBe('');
   });
 });

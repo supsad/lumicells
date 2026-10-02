@@ -489,9 +489,12 @@ describe("LumiCells renderer: 'auto'", () => {
     wait(50);
     expect(card.renderer).toBe('own');
     expect(FakeEngine.instances).toHaveLength(1);
-    // The 2D canvas stays in the host with its last frame until the engine drew.
+    // The 2D canvas stays in the host with its last frame until the engine's canvas shows (with
+    // its second frame, see LiveInstance#render).
     expect(shared.isConnected).toBe(true);
     expect(card.canvas).not.toBe(shared);
+    frame();
+    expect(shared.isConnected).toBe(true);
     frame();
     expect(shared.isConnected).toBe(false);
     expect([shared.width, shared.height]).toEqual([0, 0]); // its memory freed
