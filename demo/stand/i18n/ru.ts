@@ -4,7 +4,7 @@ import type { Messages } from './en';
 
 export const ru: Messages = {
   meta: {
-    title: 'LumiCells — шейдерная песочница',
+    title: 'LumiCells: живой неоновый пиксельный фон на WebGL2, песочница',
     language: 'Язык',
     localeNames: { en: 'Английский', ru: 'Русский' },
     github: 'GitHub',

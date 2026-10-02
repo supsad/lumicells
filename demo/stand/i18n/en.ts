@@ -9,7 +9,7 @@ import type { SizeMode } from '../prefs';
 
 export const en = {
   meta: {
-    title: 'LumiCells — shader playground',
+    title: 'LumiCells: live WebGL2 neon pixel-grid background, playground',
     language: 'Language',
     localeNames: { en: 'English', ru: 'Russian' },
     github: 'GitHub',

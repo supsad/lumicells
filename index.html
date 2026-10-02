@@ -4,14 +4,286 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>LumiCells — shader playground</title>
+    <meta name="theme-color" content="#05062a" />
+    <title>LumiCells: live WebGL2 neon pixel-grid background, playground</title>
+    <meta
+      name="description"
+      content="LumiCells is a live WebGL2 neon pixel-grid animated background for the web. Use it from React, as a Web Component or in plain TypeScript. Try the playground."
+    />
+    <link rel="canonical" href="https://supsad.github.io/lumicells/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="LumiCells" />
+    <meta property="og:title" content="LumiCells: live WebGL2 neon pixel-grid background" />
+    <meta
+      property="og:description"
+      content="A grid of glowing cells that reacts to your page. Open the playground: 9 presets, every parameter live, export to JSON, React or HTML."
+    />
+    <meta property="og:url" content="https://supsad.github.io/lumicells/" />
+    <meta property="og:image" content="https://supsad.github.io/lumicells/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="LumiCells rendering a glowing grid of red, violet and blue neon cells, with the name and tagline on top"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="LumiCells: live WebGL2 neon pixel-grid background" />
+    <meta
+      name="twitter:description"
+      content="A grid of glowing cells that reacts to your page. React, Web Component or plain TypeScript, zero runtime dependencies."
+    />
+    <meta name="twitter:image" content="https://supsad.github.io/lumicells/og.png" />
+    <meta
+      name="twitter:image:alt"
+      content="LumiCells rendering a glowing grid of red, violet and blue neon cells, with the name and tagline on top"
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "LumiCells",
+        "description": "A live WebGL2 neon pixel-grid animated background for the web, with a tuning playground, a React wrapper and a Web Component.",
+        "url": "https://supsad.github.io/lumicells/",
+        "codeRepository": "https://github.com/supsad/lumicells",
+        "programmingLanguage": "TypeScript",
+        "runtimePlatform": "Web browser with WebGL2",
+        "license": "https://opensource.org/licenses/MIT",
+        "image": "https://supsad.github.io/lumicells/og.png",
+        "keywords": "WebGL2, shader, animated background, pixel grid, neon, glow, React, Web Component, TypeScript"
+      }
+    </script>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050632'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f21239'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%23c43db2'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%23e0267a'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%230476ff'/%3E%3C/svg%3E"
     />
+    <style>
+      /* The static page inside #root: what a visitor sees before the playground mounts (React
+         replaces it) and all a visitor without JavaScript sees. Scoped to .lc-static so nothing
+         here touches the playground. */
+      .lc-static {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 48px 16px 64px;
+        color: #eceeff;
+        font:
+          15px/1.55 Inter,
+          ui-sans-serif,
+          system-ui,
+          'Segoe UI',
+          sans-serif;
+        background:
+          radial-gradient(60vmax 50vmax at 0% 0%, rgba(106, 31, 110, 0.32), transparent 60%),
+          radial-gradient(50vmax 50vmax at 100% 100%, rgba(4, 118, 255, 0.16), transparent 60%),
+          #05062a;
+      }
+      .lc-static * {
+        box-sizing: border-box;
+      }
+      .lc-static__inner {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      .lc-static h1 {
+        margin: 0 0 8px;
+        font-size: 40px;
+        line-height: 1.1;
+        font-weight: 700;
+      }
+      .lc-static h2 {
+        margin: 32px 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .lc-static p,
+      .lc-static ul {
+        margin: 0 0 12px;
+        color: #b0b5e6;
+      }
+      .lc-static .lc-static__lead {
+        color: #eceeff;
+        font-size: 18px;
+      }
+      .lc-static ul {
+        padding-left: 20px;
+      }
+      .lc-static li {
+        margin: 4px 0;
+      }
+      .lc-static a {
+        color: #7fb4ff;
+      }
+      .lc-static code {
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #d7dcff;
+        font:
+          13px ui-monospace,
+          'Cascadia Code',
+          Consolas,
+          monospace;
+      }
+      .lc-static__note {
+        padding: 10px 14px;
+        border: 1px solid rgba(150, 160, 255, 0.16);
+        border-radius: 8px;
+        background: rgba(11, 13, 58, 0.6);
+      }
+
+      /* #root is a viewport-high column: the static block above (scrolling inside itself, since
+         the stand stylesheet turns off page scroll), then the stand plus its one-line footer. The
+         selectors outrank app.css, which gives .stand a fixed 100vh height. */
+      body > #root {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      @supports (height: 100dvh) {
+        body > #root {
+          height: 100dvh;
+        }
+      }
+      #root > .lc-static {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      #root > .stand {
+        flex: 1 1 auto;
+        height: auto;
+        min-height: 0;
+      }
+
+      /* The footer under the stand (demo/main.tsx): the page's h1 and its description, kept in the
+         rendered page for search engines and readers. */
+      .lc-about {
+        flex: none;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 2px 12px;
+        margin: 0;
+        padding: 0 12px 8px;
+        color: #8a90cc;
+        font:
+          12px/1.4 Inter,
+          ui-sans-serif,
+          system-ui,
+          'Segoe UI',
+          sans-serif;
+      }
+      .lc-about__name {
+        margin: 0;
+        color: #eceeff;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .lc-about__text {
+        flex: 1 1 320px;
+        min-width: 0;
+        margin: 0;
+      }
+      .lc-about code {
+        color: #b0b5e6;
+        font:
+          11px ui-monospace,
+          'Cascadia Code',
+          Consolas,
+          monospace;
+      }
+      .lc-about__links {
+        display: flex;
+        gap: 12px;
+      }
+      .lc-about a {
+        color: #b0b5e6;
+        text-decoration: none;
+      }
+      .lc-about a:hover {
+        color: #eceeff;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .lc-about a:focus-visible {
+        border-radius: 3px;
+        outline: 2px solid #19e6d0;
+        outline-offset: 2px;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="lc-static">
+        <main class="lc-static__inner">
+          <h1>LumiCells</h1>
+          <p class="lc-static__lead">A live neon pixel-grid background for the web.</p>
+          <p>
+            A grid of glowing cells forms rings, spheres, waves, spirals, rain or Conway's Life.
+            The glow is soft and layered, single pixels pop out of the plane, and the background
+            responds to the page around it: buttons tint the grid with their own color, clicks send
+            ripples, hovering lifts pixels. Use it from React, as a
+            <code>&lt;lumi-cells&gt;</code> Web Component, or with plain TypeScript.
+          </p>
+          <p class="lc-static__note">
+            This page is the LumiCells playground (the tuning stand). It starts here once
+            JavaScript has loaded, and it needs WebGL2 (current Chrome, Edge, Firefox, and Safari
+            15 or newer).
+          </p>
+
+          <h2>In the playground</h2>
+          <ul>
+            <li>switch between the 9 presets and tweak every parameter with live tweening;</li>
+            <li>
+              resize the stage (full screen, 360×360 card, 1200×320 banner, 390×844 phone,
+              custom);
+            </li>
+            <li>toggle the demo scene, pointer interaction and debug layers;</li>
+            <li>
+              export your look as JSON, TypeScript, React or HTML, import a config back, or copy a
+              share link.
+            </li>
+          </ul>
+
+          <h2>Features</h2>
+          <ul>
+            <li>
+              8 animation modes (sphere, flow, pulse, wave, ripple, vortex, life, rain) that blend
+              as weighted layers.
+            </li>
+            <li>A 3-layer glow: a tight halo around each cell, a soft bloom and a wide haze.</li>
+            <li>
+              Binds to the page: element influences, pulses, lifts and modulators driven by your
+              own data.
+            </li>
+            <li>Many backgrounds per page under one page-wide WebGL context budget.</li>
+            <li>React, Web Component and vanilla entry points over one core.</li>
+            <li>TypeScript first, a JSON config with a JSON Schema, zero runtime dependencies.</li>
+          </ul>
+
+          <h2>Links</h2>
+          <ul>
+            <li>
+              Source code: <a href="https://github.com/supsad/lumicells">github.com/supsad/lumicells</a>
+            </li>
+            <li>
+              Documentation:
+              <a href="https://github.com/supsad/lumicells/tree/main/docs">the docs on GitHub</a>
+            </li>
+            <li>
+              Example: <a href="examples/web-component.html">&lt;lumi-cells&gt; without a framework</a>
+              (Web Component)
+            </li>
+            <li>
+              Example: <a href="examples/core-basic.html">a fullscreen background in vanilla
+              TypeScript</a> (core API)
+            </li>
+          </ul>
+          <p>MIT license.</p>
+        </main>
+      </div>
+    </div>
     <script type="module" src="./demo/main.tsx"></script>
   </body>
 </html>
