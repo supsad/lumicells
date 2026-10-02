@@ -323,6 +323,20 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
   share one texture.
 - Every instance on the page runs on one shared `requestAnimationFrame`, split into phases:
   app animations, DOM reads, GPU work.
+- Start-up does not freeze the page, even on a first visit with cold shader caches. Shaders
+  compile in the background (`KHR_parallel_shader_compile`) and a look compiles only the
+  animation modes and color features it uses. On Windows (ANGLE on Direct3D 11) every costly
+  shader has a single output, so it compiles on a worker thread and not on the thread that
+  composites the page, and every program is drawn once off screen before the first visible
+  frame. On a desktop in a fresh browser profile the playground shows its first frame after
+  about 1.1 s instead of about 6 s, and its longest main-thread task went from about 2.5 s to
+  under 0.1 s.
+- Turning a mode, the noise color mapping or the warp on later compiles one more shader in the
+  background. Until it is ready the picture stays exactly as it was, then the change fades in
+  over its full transition: it starts later by the compile time (a few hundred milliseconds on
+  Direct3D). On Direct3D the first use of such a shader also stops the page's frames for about
+  0.1 to 0.2 s, while the driver prepares it on the thread that composites the page; once the
+  browser has cached the shader, this does not happen again.
 - Resolution is capped by `render.maxDpr` and the pixel budget `render.maxPixels` (at most
   2.4 MP on touch devices).
 - Adaptive quality learns the display rate (60, 120, 144 Hz and up) from frames that carry no GL
@@ -340,8 +354,8 @@ The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc
   `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
   `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
 - No objects or arrays are allocated per frame; uniform buffers upload only on change.
-- Bundle: an app that imports only `LumiCells` ships about 74 KB gzip (65 KB brotli) after
-  minification, the plain `<script>` bundle about 79 KB gzip. Shaders are minified at build
+- Bundle: an app that imports only `LumiCells` ships about 79 KB gzip (69 KB brotli) after
+  minification, the plain `<script>` bundle about 84 KB gzip. Shaders are minified at build
   time and UI texts of the schema are not part of the runtime. `npm run size` checks the budget.
 
 Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
