@@ -21,60 +21,51 @@
   </a>
 </p>
 
-A grid of glowing cells forms rings, spheres, waves, spirals, rain or Conway's Life. The glow
-is soft and layered, single pixels pop out of the plane, and the background responds to the page
-around it: buttons tint the grid with their own color, clicks send ripples, hovering lifts pixels.
-Use it from React, as a `<lumi-cells>` Web Component, or with plain TypeScript.
+LumiCells is an animated background for websites, drawn with WebGL2 shaders: a neon pixel grid
+whose glowing cells form rings, spheres, waves, spirals, rain or Conway's Life. The background
+responds to the page around it: buttons tint the grid with their own color, clicks send ripples,
+hovering lifts pixels. Use it as a React component, as the `<lumi-cells>` Web Component, or from
+plain TypeScript.
 
-## Live demo
-
-**[supsad.github.io/lumicells](https://supsad.github.io/lumicells/)** opens the playground (the
-tuning stand) with a demo scene on top of the background. There you can:
-
-- switch between the 9 presets and tweak every parameter with live tweening;
-- resize the stage (full screen, 360×360 card, 1200×320 banner, 390×844 phone, custom);
-- toggle the demo scene, pointer interaction and debug layers (field, halo, bloom, haze, cells);
-- watch FPS, CPU and GPU frame time, quality tier and pixel count;
-- export your look as JSON, TypeScript, React or HTML, import a config back, or copy a share link.
-
-Two plain HTML examples are published next to it:
+**[Live demo](https://supsad.github.io/lumicells/)**: the playground, where you switch presets,
+tune every parameter live and export the config. Two plain HTML examples are published next to it:
 [Web Component](https://supsad.github.io/lumicells/examples/web-component.html) and
 [vanilla core](https://supsad.github.io/lumicells/examples/core-basic.html).
 
-<p align="center">
-  <img src="docs/media/playground.png" width="960" alt="The LumiCells playground: toolbar with presets, stage sizes and export, the animated stage with the demo scene, and a settings panel generated from the parameter schema" />
-</p>
-
 ## Features
 
-- **8 animation modes** (`sphere`, `flow`, `pulse`, `wave`, `ripple`, `vortex`, `life`, `rain`)
-  that blend as weighted layers and cross-fade when you switch.
-- **Neat 3-layer glow**: a tight halo around each cell, a soft bloom and a wide haze.
-- **Pop-out pixels**: cells spring up, wobble and land with a small ripple. With
-  `render.overflow` they (and their glow) can leave the canvas box.
+- **8 animation modes** that blend as weighted layers and cross-fade when you switch, and 9 presets
+  to start from.
+- **Neat 3-layer glow** and **pop-out pixels** that can leave the canvas box.
 - **Any palette**: 1 to 32 color stops, OKLab, linear or stepped interpolation, 5 mapping modes.
 - **Live tweening**: every change animates smoothly, including preset switches.
 - **Binds to the page**: element influences (light, shadow, lift, seed, repel), pulses, lifts and
   modulators that drive any numeric parameter from your own data.
-- **Built for 60+ FPS**: procedural math runs at cell resolution, the cell shape is a baked stamp,
-  quality adapts to the device, resolution is capped by a pixel budget.
-- **Many per page**: a page-wide WebGL context budget, lazy creation near the viewport and
-  parking of far-away backgrounds, so a long list never hits the browser's context limit.
-- **React, Web Component and vanilla** entry points over one core.
-- **Small first load**: the engine (renderer, shaders, controller) is a chunk of its own that
-  downloads behind the poster, so an app pays about 16 KB gzip up front.
-- **SSR-safe**: importing does not touch `window`; the React component renders a static poster
-  on the server.
-- **TypeScript first**: typed config, typed parameter paths for `set()` and `modulate()`.
-- **JSON config with a JSON Schema**: editor autocompletion, `normalizeConfig` and
-  `validateConfig`.
+- **Built for 60+ FPS**: procedural math at cell resolution, adaptive quality, a pixel budget.
+- **Many per page**: a page-wide WebGL context budget, lazy creation and parking.
+- **Small first load**: about 16 KB gzip up front, the engine downloads behind the poster.
+- **SSR-safe** and **TypeScript first**: typed config, typed parameter paths.
+- **JSON config with a JSON Schema** for editor autocompletion.
 - **Zero runtime dependencies** (React is an optional peer dependency of `lumicells/react`).
 
-## Quick start
+## Install
 
-> **The npm package is coming soon.** Until it is published, build it from source (see
-> [Using it before the npm release](#using-it-before-the-npm-release)). The import paths below are
-> the ones the package will have.
+> **The npm package is coming soon.** Until it is published, build it from source:
+
+```bash
+git clone https://github.com/supsad/lumicells.git
+cd lumicells
+npm ci
+npm run build:lib   # dist/lib (ES modules, IIFE bundle, schema.json) and dist/types
+npm pack            # lumicells-0.1.0.tgz
+```
+
+Then install the tarball in your app with `npm install ../lumicells/lumicells-0.1.0.tgz`, and the
+imports below work as written. For a page without a bundler, load
+`dist/lib/lumicells-element.iife.js` with a `<script src>`. More in
+[Installation](docs/installation.md).
+
+## Quick start
 
 ### React
 
@@ -102,19 +93,8 @@ function Bubble({ color, children }: { color: string; children: ReactNode }) {
 }
 ```
 
-Props: `preset`, `config`, `transition`, `paused`, `interactive`, `overflow`, `priority`,
-`renderer`, `look`, `lookOffset`, `fallback`, `onReady`, `onError`, `onStats`, `ref`, plus
-regular `div` attributes. The merge order is defaults, then `preset`, then `config`. `config` may be a new object on every render: the
-component compares content, not identity. Requires React 19 (`ref` is a regular prop).
-
-| Hook | Purpose |
-| --- | --- |
-| `useLumiCells()` | The instance of the nearest `<LumiCells>` (`null` on the server, before mount and after unmount) |
-| `useInfluence(ref, opts)` | Turns an element into a light, shadow or lift source; returns a ref to its handle |
-| `useModulator(path, source, opts)` | Drives a numeric parameter from a value, a function or `{ get() }` |
-| `usePulse()` | Stable function that sends a ripple |
-| `useLumiCellsStats()` | Frame stats, updated about 4 times per second |
-| `useLumiCellsEvent(type, handler)` | Subscribes to an instance event |
+`lumicells.config.json` is a config exported from the playground ([Config file](docs/config.md)).
+Props, hooks, server rendering and the fallback: [React](docs/react.md).
 
 ### Web Component
 
@@ -135,25 +115,7 @@ component compares content, not identity. Requires React 19 (`ref` is a regular 
 </script>
 ```
 
-Without a bundler, load the single file `dist/lib/lumicells-element.iife.js` with a plain
-`<script>`: it registers the tag and exposes the API as the global `LumiCells`.
-
-Attributes: `preset`, `src` (URL of a config file), `interactive`, `overflow`, `paused`,
-`transition`, `priority`, `renderer`, `look`, `look-offset`. Properties: `config`, `preset`,
-`src`, `paused`, `interactive`, `overflow`, `transition`, `priority`, `renderer`, `look`,
-`lookOffset` and the read-only `instance`.
-
-Declarative binding of child elements:
-
-| Attribute | Meaning |
-| --- | --- |
-| `data-lc-influence` | The element affects the background. The value (or `data-lc-type`) sets the type: `light` (default), `shadow`, `lift`, `seed`, `repel` |
-| `data-lc-color`, `data-lc-color-mix` | Tint color and how much of it is mixed into the palette |
-| `data-lc-strength`, `data-lc-falloff`, `data-lc-padding`, `data-lc-priority` | Strength, soft edge in cells, padding in px, priority |
-| `data-lc-track` | `auto` or `frame`: how often the position is re-read |
-| `data-lc-pulse` | `click` or `hover`: send a ripple from the element |
-| `data-lc-lift` | `hover` or `click`: lift pixels at the element |
-| `data-lc-for="bg"` | Bind an element outside the tag (a portal, for example) to `<lumi-cells id="bg">` |
+Attributes, `data-lc-*` binding and DOM events: [Web Component](docs/web-component.md).
 
 ### Vanilla TypeScript
 
@@ -176,562 +138,33 @@ cells.set('modes.sphere.radius', 0.5, { transition: 800 });
 cells.destroy();
 ```
 
-### Using it before the npm release
-
-```bash
-git clone https://github.com/supsad/lumicells.git
-cd lumicells
-npm ci
-npm run build:lib   # dist/lib (ES modules, IIFE bundle, schema.json) and dist/types
-npm pack            # lumicells-0.1.0.tgz
-```
-
-Then install the tarball in your app with `npm install ../lumicells/lumicells-0.1.0.tgz`, and all
-the imports above work as written. For a page without a bundler, copy
-`dist/lib/lumicells-element.iife.js` next to it and load it with `<script src>`.
-
-## Config file
-
-The playground exports `lumicells.config.json`:
-
-```json
-{
-  "$schema": "./lumicells.schema.json",
-  "version": 1,
-  "extends": "reference",
-  "grid": { "count": 36, "gap": 0.25 },
-  "color": { "palette": ["#f21239", "#6a3cc8", "#0476ff", "#19e6d0"] }
-}
-```
-
-- Save the whole config, or only the difference from a preset (`extends`). A full file does not
-  change when library defaults change later.
-- The JSON Schema ships with the package (`lumicells/schema.json`) and can be downloaded from the
-  playground, so your editor suggests fields and ranges.
-- `normalizeConfig(raw)` never throws: it fixes types, clamps ranges, drops unknown keys and
-  returns a list of issues with paths. `validateConfig(raw)` is stricter and suits CI checks.
-- **Playground round trip**: *Export* gives JSON (full or diff), TypeScript, React and HTML
-  snippets and the JSON Schema; *Import* takes a file or pasted JSON and reports what it fixed.
-  *Link* copies a URL with the config inside.
-
-## Presets
-
-<p align="center">
-  <img src="docs/media/presets.png" width="760" alt="The nine presets side by side: reference, orb, pulse, life, vortex, waves, ripples, rain and minimal" />
-</p>
-
-`reference` (the default look), `orb`, `pulse`, `life`, `vortex`, `waves`, `ripples`, `rain`,
-`minimal`. Every preset is a small patch over the defaults, so it makes a good starting point
-for your own config: `{ "extends": "vortex", ... }`.
-
-## Animation modes
-
-Modes blend as layers with weights (`animation.blend`: `screen`, `add` or `max`). Switching a
-mode cross-fades the weights.
-
-| Mode | What it does |
-| --- | --- |
-| `sphere` | A rotating sphere with a dark core and a bright rim |
-| `flow` | Flowing noise, living blobs |
-| `pulse` | Breathing and concentric rings from a point |
-| `wave` | Directional waves and interference |
-| `ripple` | Raindrops with spreading circles |
-| `vortex` | Spiral arms |
-| `life` | Conway's automaton and its variants, with a smooth fade |
-| `rain` | Falling columns |
-
-On top of the modes: flicker, rare sparkles, sparse edges, external energy and the 3-layer glow.
-**Lifted pixels** (`lift`) come in two styles: `pop` raises a cell in place, `float` detaches it
-and carries it upward like a bubble.
-
-## Binding to the page
-
-The background knows what happens around it through four mechanisms.
-
-**Influences** (`bindElement`, `addInfluence`): a rounded rectangle or a circle that adds light
-(`light`), darkens (`shadow`, for example under a heading for readability), lifts pixels
-(`lift`), seeds Life (`seed`) or pushes the pattern away (`repel`). Use as many as you like:
-the 64 most important ones (by priority and area) reach the shader, the rest wait and swap in
-smoothly.
-
-```ts
-const light = cells.bindElement(el, { type: 'light', color: '#0481f5', strength: 0.8 });
-light.update({ strength: 1.3 }); // on hover
-light.dispose();
-
-// A darker area under a heading, so the text stays readable.
-cells.bindElement(title, { type: 'shadow', padding: 24 });
-```
-
-Tracking modes (`track`): `auto` reads the element rect only while it may move (resize, scroll,
-CSS transitions, Web Animations), `frame` reads it every frame, `manual` never touches the DOM
-and takes coordinates from `update({ x, y, w, h })`. For elements moved by JavaScript, animate
-them inside `onBeforeFrame` from `lumicells` and the light never lags a frame behind.
-
-**Events** (`pulse`, `lift`): a one-off ripple from a point and a lift of pixels at a point.
-
-```ts
-cells.pulse({ x: 0.5, y: 0.5, space: 'norm', color: '#19e6d0', strength: 1 });
-cells.lift({ x: 12, y: 8, space: 'cells', count: 6, radius: 2 });
-```
-
-**Modulators** (`modulate`): drive any numeric parameter from a number, a function or an object
-with `get()`. Blend modes: `add`, `mul`, `override`, `max`, with optional smoothing. Modulators
-live only at runtime and never end up in a saved config.
-
-```ts
-// The sphere grows while something is happening on the page.
-const m = cells.modulate('modes.sphere.radius', () => activity * 0.1, {
-  blend: 'add',
-  smoothingMs: 150,
-});
-
-// External energy, for example an audio level.
-cells.setEnergy(1.4);
-```
-
-**Coordinate spaces** (`space`): `host` (CSS px from the container corner), `client` (viewport
-px, like `PointerEvent`), `norm` (0..1 of the container) and `cells` (grid cells).
-
-## Events
-
-```ts
-const off = cells.on('stats', (s) => console.log(s.fps, s.gpuMs, s.quality));
-off(); // unsubscribe
-```
-
-| Event | Payload |
-| --- | --- |
-| `ready` | First frame is on screen |
-| `frame` | `{ time, dt }` every frame (reused object) |
-| `stats` | FPS, CPU/GPU ms, quality, pixels, cells, lifts, influences (about 4 Hz) |
-| `resize` | `{ width, height, cols, rows, dpr, scale }` |
-| `config` | `{ config, changed, source }`, coalesced per frame |
-| `quality` | `{ scale, quality, reason }` when adaptive quality steps |
-| `warn`, `error` | Non-fatal warnings and errors |
-| `fallback` | `{ reason: 'no-webgl2' \| 'compile' \| 'context-lost' \| 'budget' \| 'load' }` (see [Many instances on one page](#many-instances-on-one-page)); `'load'`: the engine's chunk could not be downloaded, the poster stays (for every instance, until the page is reloaded) |
-| `renderer` | `{ renderer, previous, reason }` when the renderer changes: `'promote'`, `'demote'`, `'budget'` or `'explicit'` |
-| `contextlost`, `contextrestored`, `destroy` | Lifecycle |
-
-The Web Component re-dispatches them as DOM events: `lc-ready`, `lc-config`, `lc-stats`,
-`lc-error`, `lc-fallback`, `lc-contextlost`, `lc-contextrestored` (the end of a
-`context-lost` fallback: the animation is back) and `lc-renderer`.
-
-## Performance
-
-- All procedural math runs at grid resolution: one texel per cell, thousands of points instead
-  of millions. Full resolution only runs one composite pass and the instanced lifted pixels.
-- The cell shape (rounding, halo, hot core) is baked into a small stamp the size of one grid
-  step, so the composite pass does not evaluate SDFs and exponentials per pixel. Bloom and haze
-  share one texture.
-- Every instance on the page runs on one shared `requestAnimationFrame`, split into phases:
-  app animations, DOM reads, GPU work.
-- Start-up does not freeze the page, even on a first visit with cold shader caches. Shaders
-  compile in the background (`KHR_parallel_shader_compile`) and a look compiles only the
-  animation modes and color features it uses. On Windows (ANGLE on Direct3D 11) every costly
-  shader has a single output, so it compiles on a worker thread and not on the thread that
-  composites the page, and every program is drawn once off screen before the first visible
-  frame. On a desktop in a fresh browser profile the playground shows its first frame after
-  about 1.1 s instead of about 6 s, and its longest main-thread task went from about 2.5 s to
-  under 0.1 s.
-- Turning a mode, the noise color mapping or the warp on later compiles one more shader in the
-  background. Until it is ready the picture stays exactly as it was, then the change fades in
-  over its full transition: it starts later by the compile time (a few hundred milliseconds on
-  Direct3D). On Direct3D the first use of such a shader also stops the page's frames for about
-  0.1 to 0.2 s, while the driver prepares it on the thread that composites the page; once the
-  browser has cached the shader, this does not happen again.
-- Resolution is capped by `render.maxDpr` and the pixel budget `render.maxPixels` (at most
-  2.4 MP on touch devices).
-- Adaptive quality learns the display rate (60, 120, 144 Hz and up) from frames that carry no GL
-  work: while the first backgrounds of a page compile (their first draws wait a few frames more
-  when needed, about 25 ms at 165 Hz, under the poster), and again when the tab comes back or the
-  device pixel ratio changes (zoom, a move to a display with another DPR). So a GPU that is too
-  slow from the very first frame is not mistaken for a slower display. A display that gets slower
-  without a recalibration (a monitor with the same DPR, an OS power profile) is picked up from the
-  frame cadence once the GPU time or the steps already taken show that the pace is not ours.
-  When frames run late, it steps quality and resolution down with hysteresis. It does not mistake main-thread stalls or an OS frame-rate cap for a slow GPU, and
-  a step that cuts neither the late frames nor the GPU time is undone (the cost does not depend
-  on pixels there). Tiers: `high` full picture, `medium` cheaper glow sampling, `low` no halo and
-  bevel, plus the lite glow pipeline (see [Cost reducers](#cost-reducers)).
-- Rendering stops while the tab is hidden or the container is off screen. With
-  `prefers-reduced-motion` the animation slows down and lifted pixels are off, including
-  `lift()` calls (opt out with `render.reducedMotion: 'ignore'`).
-- No objects or arrays are allocated per frame; uniform buffers upload only on change.
-- Bundle: the engine (WebGL passes, shaders, the controller, the shared renderer) is a chunk of
-  its own that loads lazily behind the poster. The first instance on the page starts the download,
-  so the chunk arrives while the poster shows and the page finds out where the background is;
-  every call made before (config, `modulate`, `bindElement`, `pulse`...) is applied once it is
-  there. An app that imports only `LumiCells` loads about 16 KB gzip (14 KB brotli) up front and
-  about 82 KB gzip (72 KB brotli) in total after minification; the up-front figure includes the
-  bundler's chunk loader (under 1 KB), which an app with lazy imports of its own already has.
-  The cost of the split: on a cold visit over a network the first animated frame arrives about
-  one round trip later than with a single bundle, because the chunk is requested only once the
-  app's code runs. The React component and `lumicells/element/define` start the download
-  themselves as early as they can; other apps can call `LumiCells.preload()` from their entry or
-  add a `<link rel="modulepreload">` for the engine chunk. A chunk that fails to download keeps
-  every instance on the page on its poster (`fallback` `'load'`) until the page is reloaded.
-  The plain `<script>` bundle is one file of about 85 KB gzip. Shaders are minified at build time
-  and UI texts of the schema are not part of the runtime. `npm run size` checks both budgets.
-
-Measured on a desktop (RTX 5090, 165 Hz): about 0.04 to 0.06 ms GPU and 0.1 ms CPU per frame at
-1920×1080, about 0.08 ms GPU at 3840×2160 on `high`. There are no measurements on real mobile
-GPUs yet: the mobile path is budgeted by design (DPR cap 2, pixel budget), so check your target
-devices with the playground stats.
-
-By default large backgrounds get a WebGL context of their own and the others share one; see
-[Many instances on one page](#many-instances-on-one-page) for how LumiCells picks the renderer and
-keeps the number of contexts in check.
-
-## Many instances on one page
-
-Browsers keep only about 16 WebGL contexts per page (fewer on phones). Past that they silently
-kill the oldest one, which may be your hero background or the app's own WebGL (maps, three.js).
-So LumiCells does not give every background a context of its own: it picks a renderer per
-instance and keeps the number of contexts small page-wide, whatever the number of backgrounds.
-
-### Renderers
-
-By default (`renderer: 'auto'`) each instance picks one of two renderers:
-
-- **Own context** for large backgrounds: a canvas of at least 0.5 megapixels (device pixels,
-  `render.overflow` margin included), or a quarter of the viewport. A hero or a full-screen
-  background draws straight into its own canvas: no copy per frame, and a context loss elsewhere
-  on the page does not touch it.
-- **Shared renderer** for everything else: one WebGL context for all of them. Each instance draws
-  into its own region of one offscreen canvas, then its frame is copied into a 2D canvas in its
-  host.
-
-A page with a full-screen hero and a hundred cards therefore runs on two contexts: the hero's
-own and the shared one.
-
-- **Budget.** Own contexts are limited to 4 on desktop and 2 on touch devices (`maxContexts`).
-  When the budget is full, a large `auto` instance uses the shared renderer instead of waiting,
-  and takes a context of its own as soon as one frees up. Among large instances competing for
-  contexts, a higher `priority` wins, then a clearly larger size. An `auto` instance, even with
-  `priority: 'high'`, never takes the context of a visible `renderer: 'own'` instance; it stays on
-  the shared renderer instead. Use `renderer: 'own'` with `priority: 'high'` to guarantee a
-  context.
-- **Resizes.** The choice is re-evaluated when the host, the viewport, the DPR or the render
-  config change. It uses hysteresis (a shared instance switches to its own context at 1x the
-  threshold, an own one goes shared below 0.7x) and waits until the size has held still for
-  about a second, so dragging a resize handle across the threshold switches nothing. While the
-  renderer switches, the last frame stays on screen until the new renderer draws.
-- **Stats and events.** `getStats().renderer` is the renderer in use (`'own'` or `'shared'`),
-  `getStats().rendererMode` the one asked for. The `renderer` event
-  `{ renderer, previous, reason }` reports every switch after the first choice, with the reason
-  `'promote'`, `'demote'`, `'budget'` or `'explicit'` (`lc-renderer` on the Web Component).
-
-Force a renderer when you know better than the size:
-
-- `renderer: 'own'` always takes a context of its own and never switches. Use it for a background
-  that must never depend on the shared context, or a medium-sized one you want without the copy.
-  When the budget is full it waits on its poster (`getStats().state` is `'waiting'`, a visible
-  one emits `fallback` with reason `'budget'`, and the page logs one warning).
-- `renderer: 'shared'` never takes a context of its own, even when large. Use it when the app
-  needs its WebGL contexts for itself (maps, three.js), or to keep several large backgrounds on
-  one context.
-
-```ts
-import { LumiCells } from 'lumicells';
-
-// Page-wide settings: call before or after creating instances (safe on the server too).
-LumiCells.configure({ maxContexts: 2, promoteArea: 1 });
-
-const hero = new LumiCells(heroEl, { preset: 'reference', priority: 'high' }); // 'auto'
-const card = new LumiCells(cardEl, { preset: 'orb' }); // small: the shared renderer
-const map = new LumiCells(mapEl, { renderer: 'shared' }); // never takes a context of its own
-
-hero.on('renderer', (e) => console.log(e.previous, '->', e.renderer, e.reason));
-hero.getStats().state; // 'pending' | 'waiting' | 'live' | 'parked' | 'lost' | 'failed' | 'destroyed'
-card.setRenderer('own'); // switch a running instance ('auto' hands it back to the policy)
-```
-
-In React use `<LumiCells renderer="own" priority="high">`, in HTML
-`<lumi-cells renderer="own" priority="high">`. Without the prop or attribute the page default
-applies.
-
-| `LumiCells.configure()` option | Default | Meaning |
-| --- | --- | --- |
-| `renderer` | `'auto'` | Renderer of instances created afterwards that do not ask for one |
-| `promoteArea` | `0.5` | Megapixels (device px) from which an `auto` instance prefers a context of its own; a quarter of the viewport always qualifies |
-| `maxContexts` | `'auto'` | Own contexts at once: 4, or 2 on touch devices. Lowering it moves the lowest ranked `auto` instances to the shared renderer at once (`own` ones park) |
-| `parkAfterMs` | `10000` | An instance farther than about one viewport for this long releases its GPU side and shows its poster; `Infinity` never parks |
-| `createPerFrame` | `1` | Contexts created per frame |
-| `sharedBudget` | `'auto'` | Megapixels of the shared canvas: 4, or 2 on touch devices. Past it, all shared instances render at a lower resolution |
-| `secondaryMaxFps` | `'auto'` | Frame-rate cap of the inactive shared instances: fps, `0` off, `'auto'` only when needed (see [Cost reducers](#cost-reducers)) |
-| `lite` | `'auto'` | Lite glow pipeline of the shared instances: `'auto'` small or crowded inactive ones, `true` every inactive one, `false` never |
-
-### Lazy creation and parking
-
-- **Lazy creation.** Nothing is created in the constructor. A context (or a slot on the shared
-  one) is requested only when the container comes within about one viewport of the screen, at
-  most one context per frame, so mounting a long list does not freeze the page: creating 100
-  instances in one task takes about 20-25 ms of main thread on a first load on the test desktop
-  (about 15 ms once the browser has cached the code). Inside a scrolling element (a carousel, a
-  chat pane) the zone reaches one element size beyond its visible part in Chrome and Edge 120+
-  (IntersectionObserver `scrollMargin`). Other browsers create the context there only once the
-  background scrolls into the element's visible part, and treat the rest of the element as far
-  away; in a cross-origin iframe the zone is the visible area.
-- **Parking.** A background that stays farther away for 10 seconds releases its context (or its
-  shared slot) and GPU memory and shows its poster. Scrolling back rebuilds it; the config,
-  tweens and bound elements are kept, only the Life automaton reseeds.
-- Instances with `render.pauseOffscreen: false` (for example an offscreen source copied into
-  other canvases) are created right away, never parked, and rank as visible wherever they are.
-
-### Shared renderer details
-
-- Config, pointer, influences, pulses, lifted pixels, events, debug views and quality tiers work
-  per instance as with an own context. `canvas` is the 2D canvas, and `ready` fires after the
-  first copy.
-- Only instances on screen get a region. When they need more pixels than `sharedBudget`, all of
-  them render at a lower resolution: the grid and the cell size stay, only the sharpness drops,
-  and no instance is dropped. The factor snaps down to a whole pixel cell size, never below 3
-  device pixels: instances whose cells are already that small keep their resolution.
-- Parked instances give their slot back and shrink their 2D canvas to 0×0, because Safari caps
-  the canvas memory of a page.
-- A lost shared context affects every shared instance. Each keeps its last frame (no poster) and
-  gets `contextlost`, then `contextrestored` once the context is rebuilt.
-- Each instance that presents a frame costs its own GPU work plus one `drawImage`, so the frame
-  time grows with the number of animating instances; [Cost reducers](#cost-reducers) keep a
-  hundred of them smooth. `getStats()` reports `presentMs` (this instance's copy, with its share
-  of the frame's atlas snapshot) and `shared` (atlas size, draw and copy cost, the snapshot part
-  of the copy cost, whether the copies went through a snapshot, `copyStaged`, read with
-  `readPixels`, `copyReadback`, and a calibration of the copy cost per megapixel, measured again
-  when the atlas size or budget scale changes). For a shared instance `gpuMs` is the GPU time of
-  the whole shared device.
-
-### Cost reducers
-
-A hundred animated cards cost a hundred instances' draws and copies every frame. The shared
-renderer cuts that where nobody looks closely, decided anew every frame:
-
-- **Secondary frame rate.** An instance is active while the pointer is over it, for about a
-  second after a pulse, a lift, an influence that moved or changed, a config transition or a
-  modulated value. Active instances run at the full rate, and so does the largest one drawing,
-  whatever its state. The others present every n-th display frame, spread evenly over the frames (at n = 2 half of
-  them on even frames, half on odd ones), so every frame carries about the same load. Their
-  animation time runs on: they show fewer frames, never a slower animation, and nothing jumps
-  when an instance changes rate. With `secondaryMaxFps: 'auto'` (default) this starts only when
-  needed: more than 8 shared instances drawing (at most 60 fps, and at most half the refresh
-  rate), or the page missing its frame budget on the main thread or the GPU (about 30, then
-  15 fps; at 60 Hz 30 fps is already the crowd rate, so a budget step goes to 15 fps, and on a
-  30 Hz display the last step is 10 fps), and it eases back once the budget allows. A number caps
-  them at that rate (snapped to a whole divisor of the refresh rate), `0` turns it off.
-- **Lite pipeline.** Inactive shared instances smaller than about 0.15 megapixels, or every
-  inactive one while more than 12 draw, blur bloom and haze inside one glow pass at cell
-  resolution: 2 glow passes instead of 5. This goes by activity only, so the largest instance
-  draws lite too when it is inactive and small enough (it still runs at the full rate). On the
-  test desktop the picture differs from the full pipeline by at most 3 levels of 255 (0.1 to 0.2
-  on average). Instances with a context of their own use it only at the adaptive `low` tier.
-- **Copy cost.** Once the copy cost per megapixel is measured, the copies of a frame may take a
-  quarter of it. Where copying is slow (a software 2D canvas, a weak device), the secondary rate
-  drops further and, past 15 fps, the shared pixel budget comes down (to no less than a quarter
-  of what the instances need).
-
-`getStats().reducers` tells what acts on an instance (`{ lite, frameDivisor }`), and
-`getStats().shared.reducers` the page-wide state: the secondary `frameDivisor` and `level`, the
-`reason` (`'off'`, `'fixed'`, `'crowd'`, `'budget'` or `'copy'`), how many instances are secondary
-and lite, the refresh interval it plans with and the lowered `copyBudget`, if any.
-
-Stress bench, 100 cards of 130×80 px on one screen (Chrome, RTX 5090, 165 Hz; main thread and
-GPU per frame):
-
-| | Before | After |
-| --- | --- | --- |
-| CPU ×1 | 114 fps, p95 12.2 ms, 1.4 ms, GPU 4.2 ms | 165 fps, p95 6.2 ms, 0.6 ms, GPU 1.2 ms |
-| CPU ×4 | 81 fps, p95 18.2 ms, 6.6 ms, GPU 3.6 ms | 163 fps, p95 6.2 ms, 2.1 ms, GPU 0.7 ms |
-| DPR 2, CPU ×4 | 70 fps, p95 18.3 ms, 8.0 ms, GPU 4.3 ms | 164 fps, p95 6.2 ms, 2.3 ms, GPU 0.6 ms |
-
-One or four cards run as before (165 fps), and the card under the pointer stays at 165 fps on
-the full pipeline.
-
-### Identical cards
-
-A list of cards with one config animates a hundred copies of the same picture. With
-`look: 'shared'` (opt-in: it changes how the page looks), cards whose config draws the same picture
-share one: it is rendered once per frame, and each card shows its part of it.
-
-```ts
-new LumiCells(cardEl, { preset: 'orb', look: 'shared' });
-new LumiCells(otherEl, { preset: 'orb', look: 'shared', lookOffset: 0.25 }); // not in sync
-```
-
-In React use `<LumiCells look="shared">`, in HTML `<lumi-cells look="shared" look-offset="0.25">`.
-
-- **Same picture.** Cards share when their configs match apart from `interaction`,
-  `render.pauseOffscreen` and `transition`, which change no frame by themselves. All cards of a
-  group animate in sync; `lookOffset` (0 to 0.5) shifts each card's window by up to that share of
-  its size, in whole cells and seeded per instance, so neighbours do not show the same cells (the
-  group renders that much larger: a large shift shows more of the picture's outskirts). The cells
-  keep the card's own size, with `grid.sizing: 'count'` too.
-- **Crop, never scale.** A card shows the part of the shared picture its own canvas covers, at its
-  own pixel scale: in a group of equal cards each shows exactly what it would draw alone. Cards of
-  different sizes share only when their cells come out the same size (`grid.sizing: 'pitch'`, or
-  `'count'` with the same shorter side). A smaller or shifted card then has its cells where it
-  would draw them alone, but the pattern is laid out for the group's size, and with
-  `render.overflow` its margin shows the group's cells. A group never resizes once it has drawn:
-  a larger card that comes later gets a picture of its own, and a group keeps its size when its
-  largest card leaves, so no card's picture changes when another one comes or goes.
-- **Leaving and rejoining.** A card leaves its group the moment it draws something of its own: a
-  pointer light or hover lift (`interactive`), a click ripple or `pulse()`, an influence or bound
-  element, `lift()`, a modulator, `setEnergy()`, a config change or a debug view. It continues the
-  shared picture in a region of its own with the same clock, cells and lifted cells (the Life
-  automaton reseeds; the pattern of a card smaller than its group, or shifted in it, lays out for
-  the card's own size) and rejoins about 2 seconds after the last of these is gone, its lifted
-  cells changing to the group's then. `setLook('own')` leaves at once. The GPU targets of a card
-  that rejoins are kept for a while for the next card that leaves, so hovering one card after
-  another does not allocate new ones per card.
-- **Renderers and cost.** A shared look needs the shared renderer: with `renderer: 'auto'` the card
-  stays there whatever its size, and `renderer: 'own'` wins over `look`. A group counts once for
-  the atlas, the pixel budget and the lite pipeline, and is drawn in every frame in which one of
-  its cards presents. Each card keeps its own pace from the secondary frame rate: what it still
-  costs is its copy. Parking, context loss (each card keeps its last frame) and stats work per
-  card as before.
-- **Stats and events.** While in a group a card's stats describe what it shows: the group's
-  quality tier and scale, its crop's pixels and cells, the group's lifted cells. A card that joins
-  (or leaves) a group at another tier than it last reported gets a `quality` event with the reason
-  `'look'`. `getStats().look` is `'group'` or `'own'` and `getStats().groupSize` the
-  number of cards sharing the picture; `getStats().shared.groups` counts the pictures and
-  `.draws` the regions drawn in the last frame. The `look` event `{ look, previous, reason,
-  groupSize }` (`lc-look` on the Web Component) reports joins and leaves, with the reason
-  `'join'`, `'layers'`, `'config'`, `'explicit'` or `'renderer'` (parked or moved to a context of
-  its own).
-
-Stress bench, 100 cards of 130×80 px (Chrome, RTX 5090, 165 Hz; main thread and GPU per frame,
-regions drawn per frame):
-
-| | `look: 'own'` | `look: 'shared'` |
-| --- | --- | --- |
-| CPU ×1 | 164 fps, 0.9 ms, GPU 1.0 ms, 34 draws | 165 fps, 0.3 ms, GPU 0.05 ms, 1 draw |
-| CPU ×4 | 161 fps, 2.3 ms, inactive cards at 15 fps | 161 fps, 1.6 ms, inactive cards at 55 fps |
-| DPR 2, CPU ×4 | 160 fps, 2.6 ms, inactive cards at 15 fps | 157 fps, 1.8 ms, inactive cards at 55 fps |
-| CPU ×4, every card every frame | 67 fps, 8.0 ms, GPU 4.2 ms, 100 draws | 109 fps, 2.3 ms, GPU 0.04 ms, 1 draw |
-
-The last row turns the secondary frame rate off (`secondaryMaxFps: 0`): what is left of a shared
-look's cost is one `drawImage` per card and frame, and the browser compositing every canvas that
-changed. The rate of the inactive cards is not set by the shared look but by the frame budget (the
-crowding floor is about 55 fps, the budget can lower it to about 15 fps), so it depends on the load
-of the machine: re-measured under other load, both looks had the inactive cards at 15 fps, with the
-shared look still ahead on frame rate and main-thread time (138 against 108 to 113 fps at CPU ×4).
+Options and methods: [Vanilla TypeScript](docs/vanilla.md).
+
+## Documentation
+
+The [documentation index](docs/README.md) lists every page:
+
+- [Installation](docs/installation.md): building before the npm release, entry points.
+- [React](docs/react.md): the component, props, hooks, SSR.
+- [Web Component](docs/web-component.md): the `<lumi-cells>` tag and `data-lc-*` binding.
+- [Vanilla TypeScript](docs/vanilla.md): the `LumiCells` class, its options and methods.
+- [Config file](docs/config.md): `lumicells.config.json`, JSON Schema, validation.
+- [Presets and animation modes](docs/presets-and-modes.md): presets, modes, glow, palette.
+- [Binding to the page](docs/binding.md): influences, ripples, lifts, modulators.
+- [Events](docs/events.md): instance events and their payloads.
+- [Playground](docs/playground.md): the tuning stand, hotkeys, examples.
+- [Performance](docs/performance.md): frame cost, start-up, adaptive quality, bundle size.
+- [Many instances on one page](docs/many-instances.md): renderers, context budget, cost reducers.
+- [Browser support](docs/browser-support.md): what is tested where, browser differences.
+- [Architecture](docs/architecture.md): source layout, adding a parameter or a mode.
+- [Development](docs/development.md): scripts, end-to-end tests, dev pages.
 
 ## Browser support
 
-Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2, after a
-context loss, before the first frame (the engine's chunk loads meanwhile) and while an instance
-waits for a context or is parked, a static CSS poster in the config colors is shown. With
-float render targets the glow is computed in HDR, otherwise in RGBA8 with compression.
-
-What is tested where:
-
-- The browser end-to-end suite ([Development](#development)) runs in the Chromium, Firefox and
-  WebKit builds of Playwright: in CI on a Linux runner without a GPU (software rendering:
-  SwiftShader in Chromium, Mesa's llvmpipe in Firefox and WebKit), and locally on Windows with
-  the GPU (RTX 5090, 165 Hz). The same invariants hold in all three; where a browser is slower by
-  nature, its timing limits say so, each next to its measurement.
-- Playwright's WebKit is not Safari: on Windows it is WebKit's own Windows port, on Linux
-  WebKitGTK, each with its own GPU process and compositor. Nothing has been measured on Safari,
-  iOS or Android yet.
-
-What differs, as measured on that Windows desktop:
-
-- Firefox compiles the shaders of every new WebGL context anew (no program cache shared between
-  contexts, no `KHR_parallel_shader_compile`): about 1.6 s per context, with the page waiting.
-  Backgrounds with contexts of their own start, and come back from a context loss, one after the
-  other at that pace (four of them: 7-10 s). The shared renderer compiles once for all of its
-  instances.
-- In Firefox a `drawImage()` from a WebGL canvas reads the whole canvas back. The shared renderer
-  then copies through one snapshot of its atlas per frame instead of one readback per card, read
-  with `readPixels` (only the part in use) when that is cheaper, decided by measuring. A hundred
-  cards on one screen still spend 15-25 ms per frame on copies there (about a quarter less than
-  with the snapshot drawn from the WebGL canvas: 41 against 34 fps), against under 1 ms in
-  Chrome, so the cost reducers lower their rate and resolution more.
-- WebKit's Windows port blocks on a new context's first shader warm-up (`fenceSync` waits for
-  its GPU process there) and compiles a restored context's shaders anew. It also shows a
-  canvas's first frame later than the style change that reveals it, so a new or restored canvas
-  appears with its second frame (in every browser: one frame later than before).
-- Firefox logs a warning for every lost WebGL context, the ones the library releases on purpose
-  included. WebKit counts released contexts toward its limit of 16 until they are garbage
-  collected, and logs errors when it recycles one of them.
-- `performance.now()` advances in 1 ms steps in Firefox and WebKit (0.1 ms in Chrome), and of
-  the three only Chromium has a GPU timer and the Long Tasks API: in Firefox and WebKit the
-  adaptive quality, the cost reducers and the copy path choice work from averages over frames.
-
-## Architecture
-
-```
-src/schema      parameter schema: types, defaults, validation, presets, export, JSON Schema (no DOM)
-src/core
-  controller    tweens, modulators, influences, pulses, lifted pixels, adaptive quality (no DOM, no GL)
-  engine        WebGL2: life, field, bloom, stamp, composite and lift passes, GLSL modes
-  dom           canvas and its size, element tracking, pointer
-  runtime       context budget, shared renderer, look groups; live.ts: the GPU side of an instance
-  lumi-cells.ts the LumiCells facade; with shell.ts (config, poster, observers) the eager part,
-                runtime/loader.ts imports the rest (controller, engine, runtime) on demand
-src/react       component and hooks
-src/element     Web Component
-demo            playground and demo scene
-examples        plain HTML pages and dev tools
-```
-
-The schema is the single source of truth. The config type, the paths for `set` and `modulate`,
-defaults, validation, the JSON Schema, the GPU uniform layout (`P_<path>` macros in GLSL) and the
-playground panel are all derived from it.
-
-### Adding a parameter
-
-1. Add the runtime field to `src/schema/schema.ts`, for example
-   `strength: num({ min: 0, max: 2, step: 0.01, default: 0.5, gpu: true })`.
-2. Add its English label and description to `src/schema/meta.ts` under the same dotted path, for
-   example `'glow.halo.strength': { label: 'Strength', description: '...' }`.
-3. Add the Russian text to `src/schema/locales/ru.ts` under the same path.
-4. Use it in a shader as `P_<path_with_underscores>`, for example `P_glow_halo_strength`.
-
-Types, validation, the playground, the JSON Schema and export pick it up automatically. Tests fail
-if a path has no English or Russian text. UI texts live outside the runtime schema, so an app that
-only renders a background does not ship them.
-
-### Adding an animation mode
-
-1. Add the mode group to `modes` in the schema and its id to `MODE_IDS`.
-2. Write `vec3 mode_<id>(ModeIn m)` in `src/core/engine/glsl/modes/<id>.ts` and register it in
-   `modes/index.ts`. The function returns brightness, envelope and accent.
-3. If the mode needs its own animated phase, add it to `src/core/controller/clock.ts` and the
-   frame block.
-
-## Development
-
-```bash
-npm ci
-npm run dev   # http://localhost:5173/
-```
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Playground and examples |
-| `npm run build` | Type check and build the playground into `dist-demo` |
-| `npm run build:lib` | Build the package into `dist/lib` and types into `dist/types` |
-| `npm run check:types` | Type check the built package as a consumer would |
-| `npm test` | Unit tests (Vitest) |
-| `npm run typecheck` | Type check |
-| `npm run lint` | Biome |
-| `npm run test:e2e` | Browser end-to-end tests (Playwright: Chromium, Firefox, WebKit) |
-| `npm run size` | Consumer bundle sizes against the budget (after `npm run build:lib`) |
-
-Run `npx playwright install chromium firefox webkit` once before the first e2e run. Every spec
-runs in all three browsers; `npm run test:e2e -- --project=firefox` runs one. The GPU, port and
-server switches are described in `tests/e2e/support/env.ts`: CI renders in software (one job per
-browser: SwiftShader in Chromium, Mesa's llvmpipe in Firefox and WebKit), local runs use the
-hardware GPU. The e2e suite checks hard invariants in every browser (no lost contexts, the
-context budget, every visible card live, no leaks after 20 mount/destroy cycles, recovery from
-context loss, pixel parity pages) and records timings in `test-results/e2e-perf.json`. The JS
-heap after those cycles is checked in Chromium only (it needs CDP). Console messages a browser
-prints about its own behavior are listed with the reason in `tests/e2e/support/known-issues.ts`;
-timing limits of a browser other than Chromium sit next to their measurement in the specs.
-
-Dev pages: `/` (playground), `/examples/web-component.html`, `/examples/core-basic.html`,
-`/examples/engine-harness.html` (passes one by one, frame timing),
-`/examples/tune.html` (deterministic time for screenshot comparisons),
-`/examples/scene-preview.html` and `/examples/ui-kit.html`.
+Needs WebGL2: current Chrome, Edge, Firefox, and Safari 15 or newer. Without WebGL2 a static CSS
+poster in the config colors is shown. The test suite runs in the Chromium, Firefox and WebKit
+builds of Playwright; nothing has been measured on Safari, iOS or Android yet. See
+[Browser support](docs/browser-support.md).
 
 ## Roadmap
 
