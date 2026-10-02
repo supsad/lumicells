@@ -44,7 +44,10 @@ As measured on that Windows desktop:
   appears with its second frame (in every browser: one frame later than before).
 - Firefox logs a warning for every lost WebGL context, the ones the library releases on purpose
   included. WebKit counts released contexts toward its limit of 16 until they are garbage
-  collected, and logs errors when it recycles one of them.
+  collected, and logs errors when it recycles one of them. WebKit also warns about a preloaded
+  script not used within a few seconds of the load event: a bundler such as Vite preloads the
+  engine's chunk for its lazy import, and on a slow machine that check can run just before the
+  chunk is used. The warning is harmless.
 - `performance.now()` advances in 1 ms steps in Firefox and WebKit (0.1 ms in Chrome), and of
   the three only Chromium has a GPU timer and the Long Tasks API: in Firefox and WebKit the
   adaptive quality, the cost reducers and the copy path choice work from averages over frames.

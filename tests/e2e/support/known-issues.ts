@@ -80,6 +80,19 @@ export const CONSOLE_WAIVERS: readonly ConsoleWaiver[] = [
   },
   {
     browser: 'webkit',
+    seen: 'WebKit 26.6 (Playwright webkit-2359, Linux CI runner, software rendering)',
+    text: /^The resource http:\/\/127\.0\.0\.1:\d+\/lumicells\/(dev\/)?assets\/(live|engine)-[\w-]+\.js was preloaded using link preload but not used within a few seconds from the window's load event\. Please make sure it wasn't preloaded for nothing\.$/,
+    note:
+      'The engine is a chunk of its own that the first instance imports (src/core/runtime/' +
+      "loader.ts); the app's bundler (Vite here) turns that import() into <link rel=" +
+      'modulepreload> hints for the chunk and its dependencies, then the import. WebKit checks ' +
+      'its preloads once, a few seconds after the load event, and names those not used yet: on ' +
+      'the CI runner that check can land between the hints and the import that uses them. The ' +
+      'chunk is used right after: every visible card going live is a hard check of the same ' +
+      'specs, and a chunk that failed to load reports a fallback the page counts.',
+  },
+  {
+    browser: 'webkit',
     seen: 'WebKit 26.6 (Playwright webkit-2359, Windows)',
     text: /^WebGL: INVALID_OPERATION: loseContext: context already lost$/,
     note:
