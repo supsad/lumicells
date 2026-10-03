@@ -125,6 +125,19 @@ describe('sitemap.xml', () => {
   });
 });
 
+describe('site verification files', () => {
+  // Search Console and Yandex Webmaster check them again from time to time: removing one drops
+  // the verified ownership of the site.
+  it('keep the Google file in the form Google issued it', () => {
+    const name = 'google7827d15eed9bcadc.html';
+    expect(read(`public/${name}`)).toBe(`google-site-verification: ${name}`);
+  });
+
+  it('keep the Yandex file with its code', () => {
+    expect(read('public/yandex_c82866d1df3af1ef.html')).toContain('Verification: c82866d1df3af1ef');
+  });
+});
+
 describe('IndexNow key file', () => {
   it('is the only one and contains exactly its own name', () => {
     const keys = readdirSync(resolve(root, 'public')).filter((f) => /^[0-9a-f]{32}\.txt$/.test(f));
